@@ -2504,7 +2504,11 @@ impl AssembledParts {
                 fe.map_contributions(&mut *f);
             }
         }
-        for (_, e) in self.initialization_faqs.iter_mut().chain(self.field_ics.iter_mut()) {
+        for (_, e) in self
+            .initialization_faqs
+            .iter_mut()
+            .chain(self.field_ics.iter_mut())
+        {
             *e = f(e);
         }
         fn affects(a: &mut [AffectEquation], f: &mut dyn FnMut(&Expr) -> Expr) {
@@ -2993,10 +2997,13 @@ fn resolve_rhs_time_derivatives(
     let with_registry = !registry.is_empty();
     let placed = {
         let Some(mut st) = DtState::build(
-            parts
-                .equations
-                .iter()
-                .map(|fe| (&fe.eq.lhs, &fe.eq.rhs, lifted_lhs_target(&fe.eq.lhs, fe.lifted))),
+            parts.equations.iter().map(|fe| {
+                (
+                    &fe.eq.lhs,
+                    &fe.eq.rhs,
+                    lifted_lhs_target(&fe.eq.lhs, fe.lifted),
+                )
+            }),
             time_invariant,
             registry,
         ) else {
@@ -3415,8 +3422,7 @@ fn build_model_block(
     // A `{ "ref": … }` entry is not a subsystem to lower: reference resolution
     // runs before flattening, so one still unresolved contributes nothing.
     for (sub_name, sub_model) in model.inline_subsystems() {
-        let sub_block =
-            build_model_block(&format!("{system_name}.{sub_name}"), sub_model, refs)?;
+        let sub_block = build_model_block(&format!("{system_name}.{sub_name}"), sub_model, refs)?;
         block.state_vars.extend(sub_block.state_vars);
         block.parameters.extend(sub_block.parameters);
         block.observed_vars.extend(sub_block.observed_vars);
@@ -5726,7 +5732,10 @@ fn index_arg_loop(
             let (x, fr) = refs.denoted_root(node, frame)?;
             index_arg_loop(&x, refs, &fr)
         }
-        Expr::Operator(node) => node.args.iter().find_map(|a| index_arg_loop(a, refs, frame)),
+        Expr::Operator(node) => node
+            .args
+            .iter()
+            .find_map(|a| index_arg_loop(a, refs, frame)),
         _ => None,
     }
 }
@@ -5888,27 +5897,31 @@ fn lift_axis_names(
     // makearray makes, so a gather under `filter`, `lower`, `upper`, … names
     // its dimension too.
     for (ma, frame) in mas {
-        refs.walk_through(&Expr::Operator(std::sync::Arc::clone(ma)), frame, &mut |node, fr| {
-            if node.op == "index"
-                && let Some(Expr::Variable(a)) = node.args.first()
-                && let (Expr::Variable(name), _) = fr.leaf(a)
-                && let Some(shape) = var_shapes.get(&name)
-                && shape.len() + 1 == node.args.len()
-            {
-                for (p, axis) in shape.iter().enumerate() {
-                    let Some(loop_name) = index_arg_loop(&node.args[p + 1], refs, fr) else {
-                        continue;
-                    };
-                    let Some(Some(d)) = dim_of.get(loop_name.as_str()) else {
-                        continue;
-                    };
-                    if index_sets.get(axis).and_then(|s| s.size) == Some(extents[*d]) {
-                        evidence[*d].insert(axis.clone());
+        refs.walk_through(
+            &Expr::Operator(std::sync::Arc::clone(ma)),
+            frame,
+            &mut |node, fr| {
+                if node.op == "index"
+                    && let Some(Expr::Variable(a)) = node.args.first()
+                    && let (Expr::Variable(name), _) = fr.leaf(a)
+                    && let Some(shape) = var_shapes.get(&name)
+                    && shape.len() + 1 == node.args.len()
+                {
+                    for (p, axis) in shape.iter().enumerate() {
+                        let Some(loop_name) = index_arg_loop(&node.args[p + 1], refs, fr) else {
+                            continue;
+                        };
+                        let Some(Some(d)) = dim_of.get(loop_name.as_str()) else {
+                            continue;
+                        };
+                        if index_sets.get(axis).and_then(|s| s.size) == Some(extents[*d]) {
+                            evidence[*d].insert(axis.clone());
+                        }
                     }
                 }
-            }
-            true
-        });
+                true
+            },
+        );
     }
     evidence
         .into_iter()
@@ -7142,7 +7155,13 @@ mod tests {
         };
         let mut read_shapes = lift.read_shapes.clone();
         read_shapes.extend(lifted.axes.iter().map(|(k, v)| (k.clone(), v.clone())));
-        rewrite_lifted_equations(equations, &lifted, &read_shapes, &refs, &mut IndexMap::new())
+        rewrite_lifted_equations(
+            equations,
+            &lifted,
+            &read_shapes,
+            &refs,
+            &mut IndexMap::new(),
+        )
     }
 
     fn interval(size: i64) -> IndexSet {
@@ -7199,10 +7218,7 @@ mod tests {
         index_sets.insert("x".to_string(), interval(3));
         // A second size-3 set, so the size fallback could not pick `x` alone.
         index_sets.insert("y".to_string(), interval(3));
-        let mas = [(
-            std::sync::Arc::new(ma),
-            crate::operator_refs::Frame::root(),
-        )];
+        let mas = [(std::sync::Arc::new(ma), crate::operator_refs::Frame::root())];
         let named = lift_axis_names(
             &mas,
             &["i".to_string()],

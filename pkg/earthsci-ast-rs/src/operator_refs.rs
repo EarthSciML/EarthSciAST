@@ -106,7 +106,8 @@ impl Definition {
                     .collect()
             })
             .unwrap_or_default();
-        let parse = |v: Option<&Value>| v.and_then(|b| serde_json::from_value::<Expr>(b.clone()).ok());
+        let parse =
+            |v: Option<&Value>| v.and_then(|b| serde_json::from_value::<Expr>(b.clone()).ok());
         Definition {
             name: name.to_string(),
             params,
@@ -188,9 +189,16 @@ fn body_facts(e: &Expr, params: &HashSet<&str>, bound: &HashSet<String>, f: &mut
             f.roles.entry(s.to_string()).or_default().literal = true;
         }
     };
-    for s in [&node.wrt, &node.dim, &node.int_var, &node.reduce, &node.semiring, &node.broadcast_fn]
-        .into_iter()
-        .flatten()
+    for s in [
+        &node.wrt,
+        &node.dim,
+        &node.int_var,
+        &node.reduce,
+        &node.semiring,
+        &node.broadcast_fn,
+    ]
+    .into_iter()
+    .flatten()
     {
         literal(s);
     }
@@ -661,7 +669,8 @@ mod tests {
         assert!(sum.body_binders().contains("k"));
         assert_eq!(sum.free_names().iter().collect::<Vec<_>>(), ["v"]);
         let e: Expr = serde_json::from_value(json!({"op": "+", "args": [
-            {"op": "apply_operator", "args": [], "name": "twice", "bindings": {"x": "y"}}, 1]})).unwrap();
+            {"op": "apply_operator", "args": [], "name": "twice", "bindings": {"x": "y"}}, 1]}))
+        .unwrap();
         let reached: Vec<_> = r.reachable([&e]).into_iter().collect();
         assert_eq!(reached, ["twice", "lap"]);
         assert!(has_reference(&e));

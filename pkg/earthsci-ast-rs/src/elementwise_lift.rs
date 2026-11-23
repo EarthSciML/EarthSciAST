@@ -499,7 +499,11 @@ impl<'r> EwContext<'r> {
                 *a = r;
             }
         }
-        if changed { Expr::operator(out) } else { e.clone() }
+        if changed {
+            Expr::operator(out)
+        } else {
+            e.clone()
+        }
     }
 }
 
@@ -638,11 +642,7 @@ fn reads_of(ctx: &mut EwContext<'_>, expr: &Expr) -> Vec<(String, bool)> {
 /// `array_shape_mismatch` when a reference in `rhs` reads an anonymous array
 /// in a value position: it has no index sets, so nothing says which element
 /// each cell reads (esm-spec §9.6.11).
-fn refuse_anonymous_arrays(
-    ctx: &mut EwContext<'_>,
-    rhs: &Expr,
-    lhs: &Expr,
-) -> Result<(), String> {
+fn refuse_anonymous_arrays(ctx: &mut EwContext<'_>, rhs: &Expr, lhs: &Expr) -> Result<(), String> {
     let mut found: Option<String> = None;
     walk(
         ctx,
@@ -1060,20 +1060,13 @@ impl<'c, 'r, 'a> Lift<'c, 'r, 'a> {
     fn reads_shaped(&mut self, v: &Expr, bound: &BTreeSet<String>) -> bool {
         let mut found = false;
         let shapes = self.shapes;
-        walk(
-            self.ctx,
-            v,
-            bound,
-            true,
-            &mut HashSet::new(),
-            &mut |seen| {
-                if let Seen::Read { name, .. } = seen
-                    && shapes.get(&name).is_some_and(|s| !s.is_empty())
-                {
-                    found = true;
-                }
-            },
-        );
+        walk(self.ctx, v, bound, true, &mut HashSet::new(), &mut |seen| {
+            if let Seen::Read { name, .. } = seen
+                && shapes.get(&name).is_some_and(|s| !s.is_empty())
+            {
+                found = true;
+            }
+        });
         found
     }
 
@@ -1264,9 +1257,7 @@ fn final_of(
 /// the end of `reg`, in name order, each followed by the entries derived from
 /// it; every body in `reg` is renamed. Mirrors the Julia reference
 /// `_name_cellwise_variants!`.
-pub(crate) fn name_cellwise_variants(
-    reg: &mut IndexMap<String, Value>,
-) -> HashMap<String, String> {
+pub(crate) fn name_cellwise_variants(reg: &mut IndexMap<String, Value>) -> HashMap<String, String> {
     let names: Vec<String> = reg.keys().cloned().collect();
     let mut member_base: HashMap<String, String> = HashMap::new();
     for k in &names {
@@ -1359,9 +1350,9 @@ pub(crate) fn name_cellwise_variants(
                     m.clone(),
                     (
                         crate::lower_expression_templates::canonical_compact_value(&body),
-                        crate::lower_expression_templates::canonical_compact_value(
-                            &Value::Object(nd),
-                        ),
+                        crate::lower_expression_templates::canonical_compact_value(&Value::Object(
+                            nd,
+                        )),
                     ),
                 );
             }
@@ -1480,9 +1471,8 @@ mod tests {
         };
         // A reference reads `lev` where its body reads a scalar: the
         // application is elementwise.
-        let r = parse(
-            r#"{"op":"apply_operator","args":[],"name":"count","bindings":{"lev":"lev"}}"#,
-        );
+        let r =
+            parse(r#"{"op":"apply_operator","args":[],"name":"count","bindings":{"lev":"lev"}}"#);
         assert_eq!(
             shaped(reads_of(&mut ctx, &r)),
             vec![("lev".to_string(), true)]
@@ -1522,8 +1512,7 @@ mod tests {
             r#"{"op":"apply_operator","args":[],"name":"count",
                 "bindings":{"lev":{"op":"const","args":[],"value":[1.0,2.0]}}}"#,
         );
-        let err =
-            refuse_anonymous_arrays(&mut ctx, &rhs, &Expr::Variable("y".into())).unwrap_err();
+        let err = refuse_anonymous_arrays(&mut ctx, &rhs, &Expr::Variable("y".into())).unwrap_err();
         assert!(err.starts_with("array_shape_mismatch: 'y'"), "{err}");
     }
 
@@ -1574,8 +1563,10 @@ mod tests {
         };
         let t = json!({"params": ["p", "q"], "body": {"op": "+", "args": ["p", "q"]}});
         let u = json!({"params": ["a"], "body": r("T", json!({"p": "a", "q": "a"}))});
-        let vq = json!({"params": ["p", "q", "q_cell"], "body": {"op": "+", "args": ["p", "q_cell"]}});
-        let vp = json!({"params": ["p", "q", "p_cell"], "body": {"op": "+", "args": ["p_cell", "q"]}});
+        let vq =
+            json!({"params": ["p", "q", "q_cell"], "body": {"op": "+", "args": ["p", "q_cell"]}});
+        let vp =
+            json!({"params": ["p", "q", "p_cell"], "body": {"op": "+", "args": ["p_cell", "q"]}});
         let vu = json!({"params": ["a", "a_cell"],
             "body": r(&ph("T", &["p"]), json!({"p": "a", "q": "a", "p_cell": "a_cell"}))});
         let variants = vec![
@@ -1608,10 +1599,7 @@ mod tests {
         assert_eq!(ren1[&ph("T", &["q"])], "T.cellwise1");
         assert_eq!(ren1[&ph("T", &["p"])], "T.cellwise2");
         assert_eq!(ren1[&ph("U", &["a"])], "U.cellwise1");
-        assert_eq!(
-            ren1[&format!("{}.ddt", ph("T", &["q"]))],
-            "T.cellwise1.ddt"
-        );
+        assert_eq!(ren1[&format!("{}.ddt", ph("T", &["q"]))], "T.cellwise1.ddt");
         assert_eq!(reg1["U.cellwise1"]["body"]["name"], "T.cellwise2");
         assert!(reg1.contains_key("T.cellwise1.ddt"));
         assert!(!reg1.keys().any(|k| k.contains('\x1f')));
