@@ -480,11 +480,13 @@ carries `schema_errors`, `structural_errors`, `unit_warnings`, and `is_valid`.
 Total: it reports, it does not raise.
 
 **Today:** all five export it, all five take only a **typed (loaded)
-document**, all five return the four-field result, and none raises on an
+document**, all five return the canonical fields, and none raises on an
 invalid document. JSON text goes through the separate `validate_text`, which
 also reports a load failure (malformed JSON, a schema violation, an
 unresolvable mount) as a `ValidationResult` instead of raising. Julia and
-Python also have `validate_path` for a file (§8 item 13).
+Python also have `validate_path` for a file (§8 item 13). Rust's extension
+field `warnings` carries advisory `ValidationWarning` records with a code,
+path and message, including a low `solver.reltol` for Float32 integration.
 
 | Binding | `validate` | `validate_text` | `validate_path` |
 |---|---|---|---|
@@ -1255,7 +1257,12 @@ out-of-range slot index to `replace` is `SlotIndex`, and lane inputs whose last
 gather failed, or that were never gathered, are `NotGathered`. Build-time calls (`rhs_program`, `select`,
 `halo`, `tile`, `lanes`, `parameter_vector`) keep `SimulateError`.
 
-**Rust RHS precision.** `RhsProgram::precision()` reports the document
+**Rust simulation precision extensions.** `SolutionMetadata.integrator_precision`
+reports an `IntegratorPrecision` value with the state, clock, norm, and linear
+algebra types. The sealed trait `StateScalar` supplies the scalar types for a
+public RHS call.
+
+`RhsProgram::precision()` reports the document
 precision. `RhsProgram::state_precisions()` reports each slot's precision in
 `u` order. `round_state(&mut [f64])` rounds a caller's accepted state in this
 order. `eval_into<T: StateScalar>` accepts both `f32` and `f64` state and
