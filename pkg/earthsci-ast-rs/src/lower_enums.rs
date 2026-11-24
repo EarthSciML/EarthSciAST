@@ -309,12 +309,16 @@ pub fn lower_enums(file: &crate::EsmFile) -> Result<crate::EsmFile, EnumLowering
         )
     })?;
     lower_enums_raw(&mut value)?;
-    serde_json::from_value(value).map_err(|e| {
+    let mut out: crate::EsmFile = serde_json::from_value(value).map_err(|e| {
         err(
             codes::ENUM_LOWERING_RESIDUAL,
             format!("lowered document did not deserialize back into an EsmFile: {e}"),
         )
-    })
+    })?;
+    // The JSON form leaves out what is not on the wire; the component
+    // registries the kept references resolve against are among it.
+    out.carry_non_wire_fields(file);
+    Ok(out)
 }
 
 /// [`lower_enums`], applied in place. The `_mut` spelling API_SPEC.md §8 item
@@ -666,5 +670,31 @@ mod tests {
         .expect("typed document");
         let e: EnumLoweringError = lower_enums(&file).unwrap_err();
         assert_eq!(e.code, codes::UNKNOWN_ENUM_SYMBOL);
+    }
+
+    /// The typed pass keeps what the document carries off the wire: the
+    /// component registries the references it keeps resolve against.
+    #[test]
+    fn typed_lower_enums_keeps_the_component_registries() {
+        let doc = json!({
+            "esm": "2.0.0",
+            "metadata": {"name": "enum_refs"},
+            "enums": {"season": {"winter": 1, "summer": 3}},
+            "models": {"M": {
+                "variables": {"s": {"type": "unknown"}, "p": {"type": "parameter", "default": 2.0}},
+                "equations": [{"lhs": "s", "rhs": {"op": "+", "args": [
+                    {"op": "enum", "args": ["season", "summer"]},
+                    {"op": "apply_operator", "args": [], "name": "dbl", "bindings": {"v": "p"}}]}}],
+                "operators": {"dbl": {"params": ["v"], "body": {"op": "*", "args": [2, "v"]}}}
+            }}
+        });
+        let file = crate::load_string(&doc.to_string()).expect("loads");
+        assert!(file.component_operators("models.M").get("dbl").is_some());
+        let lowered = lower_enums(&file).expect("lowers");
+        assert_eq!(lowered.component_templates, file.component_templates);
+        assert_eq!(lowered.document_base, file.document_base);
+        let mut mutated = file.clone();
+        lower_enums_mut(&mut mutated).expect("lowers in place");
+        assert!(mutated.component_operators("models.M").get("dbl").is_some());
     }
 }
