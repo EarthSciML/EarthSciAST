@@ -364,16 +364,24 @@ fn body_facts(e: &Expr, params: &HashSet<&str>, bound: &HashSet<String>, f: &mut
         {
             f.callees.push(n.clone());
         }
+        // A parameter bound as a bare name is forwarded: the callee's body
+        // decides how it is read, so it is not an operand here. Any other
+        // binding is an expression read where the callee reads its
+        // parameter, walked as one.
+        for a in &node.args {
+            body_facts(a, params, bound, f);
+        }
         if let Some(b) = &node.bindings {
             for v in b.values() {
-                if let Expr::Variable(s) = v
-                    && params.contains(s.as_str())
-                    && !bound.contains(s)
-                {
-                    f.roles.entry(s.clone()).or_default().forwarded = true;
+                match v {
+                    Expr::Variable(s) if params.contains(s.as_str()) && !bound.contains(s) => {
+                        f.roles.entry(s.clone()).or_default().forwarded = true;
+                    }
+                    _ => body_facts(v, params, bound, f),
                 }
             }
         }
+        return;
     }
     let here = node.binders(Binders::SCOPE);
     f.binders.extend(here.iter().map(|s| s.to_string()));
@@ -531,9 +539,13 @@ fn specialize(e: &Expr, lits: &InstanceLiterals, bound: &mut Vec<String>) -> Exp
             lits.get(s).cloned()
         }
     };
+    // The children are read inside the node's own loop symbols; its scalar
+    // fields and `ranges` bounds (the loop symbols' names among them) are
+    // read in the enclosing scope.
     let depth = bound.len();
     node.for_each_binder(Binders::SCOPE, |n| bound.push(n.to_string()));
     let mut out = node.map_children(&mut |c| specialize(c, lits, bound));
+    bound.truncate(depth);
     for f in [
         &mut out.wrt,
         &mut out.dim,
@@ -588,7 +600,6 @@ fn specialize(e: &Expr, lits: &InstanceLiterals, bound: &mut Vec<String>) -> Exp
             }
         }
     }
-    bound.truncate(depth);
     Expr::operator(out)
 }
 
@@ -1454,6 +1465,9 @@ pub struct Frame(Option<Rc<FrameInner>>);
 
 #[derive(Debug)]
 struct FrameInner {
+    /// This frame's identity ([`Frame::id`]): unique for the life of the
+    /// process, so a frame entered after another is gone never shares it.
+    id: usize,
     bindings: HashMap<String, (Expr, Frame)>,
 }
 
@@ -1471,7 +1485,9 @@ impl Frame {
             .iter()
             .filter_map(|p| r.binding(p).map(|b| (p.clone(), (b.clone(), self.clone()))))
             .collect();
-        Frame(Some(Rc::new(FrameInner { bindings })))
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Frame(Some(Rc::new(FrameInner { id, bindings })))
     }
 
     /// The variable leaf `name` read in this frame: a parameter reads as its
@@ -1499,9 +1515,11 @@ impl Frame {
         }
     }
 
-    /// An identity for this frame, for memo keys (`0` for the root).
+    /// An identity for this frame, for memo and visited-set keys (`0` for
+    /// the root). Clones share it; no other frame ever has it, even one
+    /// entered after this one is dropped.
     pub fn id(&self) -> usize {
-        self.0.as_ref().map_or(0, |f| Rc::as_ptr(f) as usize)
+        self.0.as_ref().map_or(0, |f| f.id)
     }
 }
 
@@ -1755,5 +1773,103 @@ mod tests {
         assert_eq!(nested.binding("v"), Some(&Expr::Variable("w".into())));
         let reached = inst.reachable([&a]).unwrap();
         assert_eq!(reached.len(), 2);
+    }
+
+    /// Two references to one definition with different bindings are two
+    /// frames: the walk visits the body once in each, even when the first
+    /// frame is gone before the second is entered.
+    #[test]
+    fn walk_through_visits_a_body_once_per_reference() {
+        let r = reg(json!({
+            "st": {"params": ["u"], "body": {"op": "index", "args": ["u", "i"]}}
+        }));
+        let e: Expr = serde_json::from_value(json!({"op": "+", "args": [
+            {"op": "apply_operator", "args": [], "name": "st", "bindings": {"u": "a"}},
+            {"op": "apply_operator", "args": [], "name": "st", "bindings": {"u": "b"}}]}))
+        .unwrap();
+        let mut bases = Vec::new();
+        r.walk_through(&e, &Frame::root(), &mut |n, fr| {
+            if n.op == "index"
+                && let Some(Expr::Variable(a)) = n.args.first()
+                && let (Expr::Variable(name), _) = fr.leaf(a)
+            {
+                bases.push(name);
+            }
+            true
+        });
+        assert_eq!(bases, ["a", "b"]);
+    }
+
+    /// A parameter passed on only as a bare-name binding of a nested
+    /// reference is forwarded, not read as an operand of the body.
+    #[test]
+    fn a_forwarded_parameter_is_not_an_operand() {
+        let r = reg(json!({
+            "D1": {"params": ["u", "d"], "body": {"op": "D", "args": ["u"], "wrt": "d"}},
+            "grad2": {"params": ["f", "dim"], "body": {"op": "apply_operator", "args": [],
+                "name": "D1", "bindings": {"u": "f", "d": "dim"}}},
+            "mixed": {"params": ["f", "g"], "body": {"op": "apply_operator", "args": [],
+                "name": "D1", "bindings": {"u": {"op": "*", "args": ["f", "g"]}, "d": "x"}}}
+        }));
+        let roles = r.get("grad2").unwrap().param_roles();
+        assert!(roles["dim"].forwarded && !roles["dim"].operand);
+        assert!(roles["f"].forwarded && !roles["f"].operand);
+        // A binding that is an expression is read where the callee reads it.
+        let roles = r.get("mixed").unwrap().param_roles();
+        assert!(roles["f"].operand && roles["g"].operand);
+        assert!(!roles["f"].forwarded);
+        assert_eq!(
+            r.get("mixed")
+                .unwrap()
+                .free_names()
+                .iter()
+                .collect::<Vec<_>>(),
+            ["x"]
+        );
+    }
+
+    /// An `enum` whose symbol is a definition parameter is lowered, once per
+    /// instance, against the document's `enums`: the instance a reference
+    /// binding the parameter to a symbol names evaluates.
+    #[test]
+    fn an_enum_spelled_with_a_parameter_is_lowered_per_instance() {
+        let doc = json!({
+            "esm": "2.0.0",
+            "metadata": {"name": "enum_param"},
+            "enums": {"color": {"red": 1, "blue": 2}},
+            "models": {"M": {
+                "variables": {"s": {"type": "unknown"}},
+                "equations": [{"lhs": "s", "rhs": {"op": "+", "args": [
+                    {"op": "apply_operator", "args": [], "name": "pick", "bindings": {"c": "red"}},
+                    {"op": "apply_operator", "args": [], "name": "pick", "bindings": {"c": "blue"}},
+                    {"op": "apply_operator", "args": [], "name": "blue", "bindings": {}}]}}],
+                "operators": {
+                    "pick": {"params": ["c"], "body": {"op": "enum", "args": ["color", "c"]}},
+                    "blue": {"params": [], "body": {"op": "enum", "args": ["color", "blue"]}}
+                }
+            }}
+        });
+        let file = crate::load_string(&doc.to_string()).expect("loads");
+        let ops = file.component_operators("models.M");
+        let rhs = &file.models.as_ref().unwrap()["M"].equations[0].rhs;
+        assert_eq!(
+            crate::evaluate_with_operators(rhs, &HashMap::new(), &ops),
+            Ok(5.0)
+        );
+    }
+
+    /// A node's own scalar fields are read in the enclosing scope: an
+    /// `integral` whose `var` names a literal parameter takes its literal.
+    #[test]
+    fn instance_body_substitutes_a_binders_own_scalar_field() {
+        let r = reg(json!({
+            "integ": {"params": ["f", "x"], "body": {"op": "integral", "args": ["f"],
+                "var": "x", "lower": 0, "upper": 1}}
+        }));
+        let d = r.get("integ").unwrap();
+        assert!(d.is_literal_param("x"));
+        let lits: InstanceLiterals = [("x".to_string(), "z".to_string())].into();
+        let body = serde_json::to_value(d.instance_body(&lits).unwrap()).unwrap();
+        assert_eq!(body["var"], "z");
     }
 }

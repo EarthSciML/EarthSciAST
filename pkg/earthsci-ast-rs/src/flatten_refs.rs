@@ -364,3 +364,27 @@ pub(crate) fn own_transform_refs(file: &EsmFile, reg: &FlatRegistry) -> Option<E
         f
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A parameter a body only forwards to a callee's field parameter (a
+    /// `wrt`) is a field parameter of the body too.
+    #[test]
+    fn a_forwarded_field_parameter_is_a_field_parameter() {
+        let reg = crate::operator_refs::OperatorRegistry::from_json(
+            json!({
+                "D1": {"params": ["u", "d"], "body": {"op": "D", "args": ["u"], "wrt": "d"}},
+                "grad2": {"params": ["f", "dim"], "body": {"op": "apply_operator", "args": [],
+                    "name": "D1", "bindings": {"u": "f", "d": "dim"}}}
+            })
+            .as_object()
+            .unwrap(),
+        );
+        let fp = field_params(&reg);
+        assert_eq!(fp["D1"], HashSet::from(["d".to_string()]));
+        assert_eq!(fp["grad2"], HashSet::from(["dim".to_string()]));
+    }
+}
