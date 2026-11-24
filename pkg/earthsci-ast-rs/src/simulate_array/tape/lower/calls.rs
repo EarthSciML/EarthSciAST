@@ -125,11 +125,38 @@ fn fingerprint(prog: &TapeProgram) -> u128 {
     use std::fmt::Write as _;
     use std::hash::Hasher;
     let mut h = H(Default::default(), Default::default());
+    let t = &prog.tables;
     let _ = write!(
         h,
-        "{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{}",
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
         prog.instrs,
-        prog.tables,
+        t.slots,
+        t.plans,
+        t.regions,
+        t.assemblies,
+        t.index_gathers,
+        t.gather_tables,
+        t.seg_tables,
+        t.faults,
+        t.fault_order,
+        t.fault_scans,
+        t.sweeps,
+        t.scalar_reads,
+        t.data_gathers,
+        t.dy_writes,
+        t.calls,
+    );
+    // Constant payloads by their bits (formatting them is the slow part).
+    for d in &t.const_data {
+        let _ = write!(h, "|{:?}:", d.shape);
+        for v in d.values.iter() {
+            h.0.write_u64(v.to_bits());
+            h.1.write_u64(v.to_bits() ^ 0x5bd1_e995);
+        }
+    }
+    let _ = write!(
+        h,
+        "|{:?}|{}|{:?}|{:?}|{}|{}",
         prog.state_vars
             .iter()
             .map(|sv| (&sv.shape, &sv.origin))
