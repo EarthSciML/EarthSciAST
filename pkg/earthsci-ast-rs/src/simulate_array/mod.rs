@@ -1125,6 +1125,15 @@ impl ConstArrayScope {
         self
     }
 
+    /// This scope with `alias` a const array too, with no declared policy (an
+    /// inline `const` literal's): how a called function reads an inline
+    /// constant it is passed by reference (esm-spec §9.6.4 rule 2).
+    pub(crate) fn with_alias(&self, alias: &str) -> ConstArrayScope {
+        let mut out = self.clone();
+        out.names.insert(alias.to_string());
+        out
+    }
+
     /// Is this scope empty (nothing is a const array)?
     pub fn is_empty(&self) -> bool {
         self.names.is_empty()

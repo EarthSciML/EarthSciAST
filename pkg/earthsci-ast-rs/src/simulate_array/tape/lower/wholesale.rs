@@ -1026,7 +1026,11 @@ impl<'m> TapeBuilder<'m> {
                 .map(|v| v[start as usize..(start + n) as usize].to_vec()),
             _ => None,
         };
+        // A constant array a called function is passed by reference, known at
+        // the call to be non-decreasing ([`TapeBuilder::sorted_states`]).
+        let known_sorted = matches!(&axis, LV::State(ix) if self.sorted_states.contains(ix));
         let (axis, start, count_n, sorted) = match window {
+            _ if known_sorted => (axis, start, n, true),
             Some(w) if non_decreasing(w.len(), |j| w[j]) => (axis, start, n, true),
             Some(w) => {
                 let mut keys: Vec<f64> = w.into_iter().filter(|v| !v.is_nan()).collect();

@@ -51,6 +51,10 @@ enum ArgKind {
     Known(DimU, DimI, usize),
     /// An argument the function cannot take yet: the call declines.
     Unsupported,
+    /// An inline `const` array literal, passed by reference like any array
+    /// and read in the function as a constant array (its out-of-range reads
+    /// fault as the literal's do). Its box.
+    ConstLit(DimU, DimI, bool),
     /// A binding that reads a loop symbol the body binds, compiled into the
     /// instance (its wire text): the body reads it where it reads the
     /// parameter, inside its own loops, as Julia's build does. The names it
@@ -238,8 +242,23 @@ impl<'m> TapeBuilder<'m> {
             if let Expr::Operator(c) = b
                 && c.op == "const"
             {
-                let text = serde_json::to_string(b).unwrap_or_default();
-                params.push((p.clone(), ArgKind::Inline(text)));
+                match eval_const(c) {
+                    Value::Array(a) => {
+                        let lv = self.const_literal_array(c, &a, None)?;
+                        let LV::Arr(slot) = lv else {
+                            bail_tape!("operator reference `{name}`: a constant array argument");
+                        };
+                        let (shape, origin) = self.lv_box(&lv).expect("an array slot has a box");
+                        arrays.push(SrcRef::Slot(slot));
+                        arr_lvs.push(lv);
+                        let vals: Vec<f64> = a.iter().copied().collect();
+                        let sorted = non_decreasing(vals.len(), |j| vals[j]);
+                        params.push((p.clone(), ArgKind::ConstLit(shape, origin, sorted)));
+                    }
+                    Value::Scalar(x) => {
+                        params.push((p.clone(), ArgKind::Lit(crate::precision::round(x).to_bits())));
+                    }
+                }
                 continue;
             }
             // The names the binding reads free: a loop symbol a node of the
@@ -490,26 +509,14 @@ impl<'m> TapeBuilder<'m> {
             }
             LV::Arr(s) => {
                 let (shape, origin) = self.lv_box(&lv).expect("an array slot has a box");
-                let known = match self.known.get(&s) {
-                    Some(Known::Data(d)) => {
-                        Some(Arc::clone(&self.tables.const_data[*d as usize].values))
-                    }
-                    Some(Known::Vals(v)) | Some(Known::Deferred { vals: v, .. }) => {
-                        Some(Arc::clone(v))
-                    }
-                    None => None,
-                };
                 if origin.iter().any(|&o| o != 1) {
                     // A function's state variable is a whole array from 1;
                     // a value over a box that starts elsewhere has no
                     // argument form yet.
                     return ArgKind::Unsupported;
                 }
-                if let Some(vals) = known {
-                    let id = Arc::as_ptr(&vals) as usize;
-                    self.funcs.borrow_mut().known_vals.insert(id, vals);
-                    return ArgKind::Known(shape, origin, id);
-                }
+                // A payload the build knows is passed by reference like any
+                // array: the instance is not specialized on its values.
                 arrays.push(SrcRef::Slot(s));
                 arr_lvs.push(lv);
                 ArgKind::Array(shape, origin)
@@ -542,6 +549,8 @@ impl<'m> TapeBuilder<'m> {
         // parameter is an argument of the call.
         let mut fixed: FxHashMap<String, Expr> = FxHashMap::default();
         let mut known: Vec<(String, DimU, DimI, Arc<Vec<f64>>)> = Vec::new();
+        let mut const_aliases: Vec<String> = Vec::new();
+        let mut sorted_names: Vec<String> = Vec::new();
         for (p0, kind) in &key.params {
             // A runtime argument named like the time would read as the time
             // (the lowering resolves `t` first): it is renamed in the body.
@@ -576,6 +585,20 @@ impl<'m> TapeBuilder<'m> {
                 }
                 ArgKind::Scalar => param_names.push(p.clone()),
                 ArgKind::Unsupported => unreachable!("declined at the call"),
+                ArgKind::ConstLit(shape, origin, sorted) => {
+                    if *sorted {
+                        sorted_names.push(p.clone());
+                    }
+                    var_shapes.insert(
+                        p.clone(),
+                        VarShape {
+                            shape: shape.to_vec(),
+                            origin: origin.to_vec(),
+                            flat_offset: 0,
+                        },
+                    );
+                    const_aliases.push(p.clone());
+                }
                 ArgKind::Known(shape, origin, id) => {
                     let vals = Arc::clone(&self.funcs.borrow().known_vals[id]);
                     known.push((p.clone(), shape.clone(), origin.clone(), vals));
@@ -592,14 +615,30 @@ impl<'m> TapeBuilder<'m> {
             unsized_: HashSet::new(),
             discrete: self.discrete_forcing,
         };
+        let scope;
+        let const_scope: &ConstArrayScope = if const_aliases.is_empty() {
+            self.const_arrays
+        } else {
+            let mut sc = self.const_arrays.clone();
+            for p in &const_aliases {
+                sc = sc.with_alias(p);
+            }
+            scope = sc;
+            &scope
+        };
         let mut f = TapeBuilder::new(
             &var_shapes,
             &param_names,
             FxHashMap::default(),
-            self.const_arrays,
+            const_scope,
             &no_forcing,
         );
         f.ops = self.ops;
+        for n in &sorted_names {
+            if let Some(&ix) = f.state_ix.get(n.as_str()) {
+                f.sorted_states.insert(ix as u32);
+            }
+        }
         f.funcs = Rc::clone(&self.funcs);
         f.count_fold = self.count_fold;
         f.is_function = true;

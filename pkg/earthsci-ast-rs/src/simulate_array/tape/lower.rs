@@ -1147,6 +1147,10 @@ pub(crate) struct TapeBuilder<'m> {
     /// This builder lowers an operator definition's body: its state
     /// variables and parameters are the call's arguments.
     is_function: bool,
+    /// In a function builder: the state variables (array arguments) that are
+    /// constant arrays known at the call to be non-decreasing, so a count
+    /// over a window of one bisects it as the caller's would.
+    sorted_states: HashSet<u32>,
 
     // Diagnostics ------------------------------------------------------------
     vn_scope_hits: usize,
@@ -1452,6 +1456,7 @@ impl<'m> TapeBuilder<'m> {
             ops: None,
             funcs: Default::default(),
             is_function: false,
+            sorted_states: HashSet::new(),
             vn_scope_hits: 0,
             vn_hoist_hits: 0,
         }

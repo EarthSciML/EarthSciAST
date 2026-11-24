@@ -1850,12 +1850,16 @@ fn check_expr_free_vars(
             // position (an axis, an index set) names that thing; it reads no
             // variable.
             if let Some(r) = crate::operator_refs::reference_node(node) {
+                // A binding of a parameter the body never reads is not
+                // evaluated by its expansion: it reads nothing either.
                 let literal_only = |p: &str| {
-                    operators.instance_params(r.name).iter().any(|q| q == p)
-                        && !operators
-                            .get(r.name)
-                            .and_then(|d| d.param_roles().get(p).copied())
-                            .is_some_and(|role| role.operand || role.forwarded)
+                    let role = operators
+                        .get(r.name)
+                        .and_then(|d| d.param_roles().get(p).copied());
+                    let unread = operators.get(r.name).is_some() && role.is_none();
+                    unread
+                        || (operators.instance_params(r.name).iter().any(|q| q == p)
+                            && !role.is_some_and(|role| role.operand || role.forwarded))
                 };
                 let mut keys: Vec<&String> = r.bindings.keys().collect();
                 keys.sort();
