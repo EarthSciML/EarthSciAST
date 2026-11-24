@@ -1322,6 +1322,54 @@ impl Instances {
         self
     }
 
+    /// These instances with `extra` definitions added to the registry, each
+    /// `(name, params, body)`, its body an instance body already through every
+    /// build pass (a definition restricted to a box by a range restriction):
+    /// each is one instance, taken as given, never specialized or rewritten
+    /// again. A name the registry already holds is refused.
+    pub fn with_definitions(
+        &self,
+        extra: impl IntoIterator<Item = (String, Vec<String>, Expr)>,
+    ) -> Result<Instances, String> {
+        let mut entries: IndexMap<String, Arc<Definition>> = (*self.registry.entries).clone();
+        let mut made = Vec::new();
+        for (name, params, body) in extra {
+            if entries.contains_key(&name) {
+                return Err(format!("operator `{name}` is already defined"));
+            }
+            let raw = serde_json::json!({ "params": params, "body": body });
+            let d = Arc::new(Definition::from_json(&name, &raw));
+            entries.insert(name.clone(), Arc::clone(&d));
+            made.push((name, d, body));
+        }
+        let registry = OperatorRegistry {
+            entries: Arc::new(entries),
+            ..Default::default()
+        };
+        let mut by_key = HashMap::new();
+        for (name, d, body) in made {
+            if !registry.instance_params(&name).is_empty() {
+                return Err(format!(
+                    "operator `{name}`: a body given as an instance spells a parameter in a \
+                     literal position"
+                ));
+            }
+            let inst = Arc::new(CallInstance {
+                definition: d,
+                body,
+                instance_params: Vec::new(),
+                binders: OnceLock::new(),
+            });
+            by_key.insert((name, Vec::new()), inst);
+        }
+        Ok(Instances {
+            registry,
+            by_key: std::sync::Mutex::new(by_key),
+            by_node: Default::default(),
+            rewrites: self.rewrites.clone(),
+        })
+    }
+
     /// The instance reference `r` names.
     pub fn instance(&self, r: &Reference<'_>) -> Result<Arc<CallInstance>, InstanceError> {
         let d = self
