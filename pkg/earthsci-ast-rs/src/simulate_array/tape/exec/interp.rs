@@ -57,6 +57,7 @@ pub(super) fn run_range(
         lscratch,
         exports_active,
         simd,
+        frame_off,
         #[cfg(not(target_arch = "wasm32"))]
         chain_scratch,
         ..
@@ -72,7 +73,7 @@ pub(super) fn run_range(
     let simd = *simd;
     let prog = env.prog;
     let slot_off: &[usize] = slot_off;
-    let slab = Slab::new(slab_vec, slot_off, &prog.tables.slots);
+    let slab = Slab::new(&mut slab_vec[*frame_off..], slot_off, &prog.tables.slots);
     pending.clear();
 
     // The open recurrence sweep, if any: the `Sweep` instruction's position
@@ -310,10 +311,14 @@ pub(super) fn run_range(
                     pc += *n_true as usize; // skip straight to the false region
                 }
             }
-            Instr::Call { call, out } => {
-                // SAFETY: as for the instruction loop: this thread alone runs
-                // the call now.
-                unsafe { exec_call(env, slab, *call, *out, &mut scratch.funcs) };
+            Instr::Call { .. } => {
+                // One call, or a batch of calls of one function run as one
+                // execution. SAFETY: as for the instruction loop: this thread
+                // alone runs the calls now.
+                let n = calls_at(prog, pc).min(range.end - pc);
+                unsafe { exec_calls(env, slab, pc, n, &mut scratch.funcs) };
+                pc += n;
+                continue;
             }
             Instr::Export { slot, export } => {
                 // Step 4 export demotion: no explicit request ⇒ nothing can
@@ -1191,56 +1196,423 @@ pub(super) struct Cx<'a> {
     pub(super) dy_len: usize,
 }
 
+/// The number of calls that run as one execution from `pc`: the batch's
+/// length when one starts there ([`TapeProgram::call_batches`]), else 1.
+pub(super) fn calls_at(prog: &TapeProgram, pc: usize) -> usize {
+    prog.call_batches
+        .get(pc)
+        .map_or(1, |&n| (n as usize).max(1))
+}
+
+/// Run the calls `pc..pc + n` of `env.prog` (one [`Instr::Call`], or a batch
+/// of calls of one function, [`TapeProgram::call_batches`]) as one execution
+/// of their function with this thread's function contexts `funcs`: resolve
+/// each call's arguments to its caller's views and values, run the function
+/// over them, and copy each call's result into its `out`.
+///
+/// # Safety
+/// As for [`exec_straight`]: nothing another thread runs meanwhile writes
+/// the calls' `out` slots or their arguments.
+pub(super) unsafe fn exec_calls(
+    env: &Env,
+    slab: Slab,
+    pc: usize,
+    n: usize,
+    funcs: &mut Vec<Option<Box<super::FuncFrames>>>,
+) {
+    let prog = env.prog;
+    let calls = &prog.instrs[pc..pc + n];
+    let mut ff = take_frames(prog, pc, funcs);
+    ff.args.clear();
+    for ins in calls {
+        let target = slab.slot(out_of(ins));
+        ff.args
+            .push(&prog.tables.calls[call_of(ins) as usize], env, slab, target);
+    }
+    if unsafe { run_frames(&mut ff, env.t, env.forcing, env.declared) } {
+        funcs[func_of(prog, pc)] = Some(ff);
+        return;
+    }
+    for (k, ins) in calls.iter().enumerate() {
+        let out = out_of(ins);
+        let len = prog.tables.slots[out as usize].elems().max(1);
+        // SAFETY: the result is the function's slot of the same box, in the
+        // frame's own slab; `out` is this program's slot, written by this
+        // call alone.
+        unsafe { std::ptr::copy_nonoverlapping(ff.result(k), slab.slot(out), len) };
+    }
+    funcs[func_of(prog, pc)] = Some(ff);
+}
+
+fn call_of(ins: &Instr) -> u32 {
+    match ins {
+        Instr::Call { call, .. } => *call,
+        _ => unreachable!("a call batch holds calls"),
+    }
+}
+
+fn out_of(ins: &Instr) -> SlotId {
+    match ins {
+        Instr::Call { out, .. } => *out,
+        _ => unreachable!("a call batch holds calls"),
+    }
+}
+
+fn func_of(prog: &TapeProgram, pc: usize) -> usize {
+    prog.tables.calls[call_of(&prog.instrs[pc]) as usize].func as usize
+}
+
+/// The context of the function the call at `pc` runs, taken out of `funcs`
+/// (made on first use); the caller puts it back.
+fn take_frames(
+    prog: &TapeProgram,
+    pc: usize,
+    funcs: &mut Vec<Option<Box<super::FuncFrames>>>,
+) -> Box<super::FuncFrames> {
+    let f = func_of(prog, pc);
+    if funcs.len() <= f {
+        funcs.resize_with(prog.funcs.len().max(f + 1), || None);
+    }
+    funcs[f]
+        .take()
+        .unwrap_or_else(|| Box::new(super::FuncFrames::new(&prog.funcs[f])))
+}
+
+impl super::FrameArgs {
+    pub(super) fn clear(&mut self) {
+        self.arrays.clear();
+        self.scalars.clear();
+        self.targets.clear();
+        self.n = 0;
+    }
+
+    /// Append one frame: `spec`'s arguments resolved in its caller's
+    /// `env` and `slab` (an array argument is where its source starts), and
+    /// `target`, the caller's slot for its result.
+    fn push(&mut self, spec: &CallSpec, env: &Env, slab: Slab, target: *mut f64) {
+        for s in &spec.arrays {
+            self.arrays.push(src_base(s, env, slab).0);
+        }
+        for o in &spec.scalars {
+            self.scalars.push(resolve_scalar(o, env, slab));
+        }
+        self.targets.push(target);
+        self.n += 1;
+    }
+}
+
+/// Run the function of `ff` once over the `ff.args.n` frames `ff.args` holds
+/// (see [`super::FuncFrames`]): frame `k`'s state variables read its array
+/// arguments in place and its parameters are its scalar arguments. Each
+/// frame computes exactly what a lone call with its arguments computes, with
+/// the same kernels in the same order; the frames share the dispatch of
+/// every instruction, and a call inside the body runs as one execution over
+/// all the frames. A body with a branch region, a recurrence or its own
+/// precision runs frame by frame instead; so, once more, does a body that
+/// latched a fault, so that the fault latched first is the one lone calls of
+/// the frames, in order, latch. Returns `true` when the body wrote
+/// each frame's result straight into its target
+/// ([`super::FuncFrames::direct`]); otherwise [`super::FuncFrames::result`] is
+/// each frame's result, for the caller to copy.
+///
+/// # Safety
+/// The array arguments must stay live and unwritten while it runs, and the
+/// targets must be the callers' result slots, which nothing reads meanwhile.
+pub(super) unsafe fn run_frames(
+    ff: &mut super::FuncFrames,
+    t: f64,
+    forcing: super::ForcingView,
+    declared: &HashSet<String>,
+) -> bool {
+    let super::FuncFrames {
+        ctx,
+        frame_len,
+        cap,
+        primed,
+        args,
+        by_instr,
+        can_fault,
+        no_mirror,
+        fused_frames,
+        fx,
+        direct,
+    } = ff;
+    let super::TapeCtx {
+        prog: fprog, exec, ..
+    } = &mut **ctx;
+    let prog: &TapeProgram = fprog;
+    let prep = prog.prepared();
+    let n = args.n;
+    let l = *frame_len;
+    let (na, ns) = (prog.state_vars.len(), prog.params_len);
+    let env_of = |k: usize| Env {
+        prog,
+        prep,
+        forcing,
+        state: &[],
+        state_rm: &[],
+        mirror: no_mirror,
+        params: &args.scalars[k * ns..(k + 1) * ns],
+        t,
+        declared,
+        arrays: &args.arrays[k * na..(k + 1) * na],
+    };
+    let prime_end = (prog.n_const + prog.n_segment) as usize;
+    let end = prog.instrs.len();
+    let mut no_dy: [f64; 0] = [];
+    if !*primed {
+        exec.frame_off = 0;
+        run_range(&env_of(0), 0..prime_end, exec, &mut no_dy);
+        super::refill_primed(prog, exec);
+        *primed = true;
+    }
+    if *cap < n {
+        // New frames start as frame 0: its CONST values are theirs.
+        exec.slab.resize(n * l, 0.0);
+        for k in *cap..n {
+            exec.slab.copy_within(0..l, k * l);
+        }
+        *cap = n;
+    }
+    if !*by_instr || (n == 1 && direct.is_none()) {
+        for k in 0..n {
+            exec.frame_off = k * l;
+            run_range(&env_of(k), prime_end..end, exec, &mut no_dy);
+        }
+        exec.frame_off = 0;
+        return false;
+    }
+    let envs: SmallVec<[Env; 8]> = (0..n).map(env_of).collect();
+    // What the frames latch, apart from the caller's latch: run one
+    // instruction at a time across the frames, a later frame can fault
+    // before an earlier one, so on a fault the frames run again one by one.
+    let faults = (*can_fault && n > 1).then(crate::simulate_array::eval::FaultScope::enter);
+    let slots = &prog.tables.slots;
+    // The decoded scalar code serves every frame: they share one layout.
+    exec.scalar.ensure(prog, &exec.slot_off, exec.layout);
+    let dy_home: &[usize] = &prep.dy.home_quiet;
+    let mut pc = prime_end;
+    while pc < end {
+        if let Entry::Block(b) = exec.scalar.at[pc] {
+            let b = exec.scalar.blocks[b as usize];
+            let mut faulted: SmallVec<[usize; 4]> = SmallVec::new();
+            {
+                let super::TapeExec {
+                    slab,
+                    slot_off,
+                    scalar,
+                    ..
+                } = &mut *exec;
+                for (k, env) in envs.iter().enumerate() {
+                    let fs = frame_slab(slab, l, k, slot_off, slots);
+                    // SAFETY: decoded against every frame's layout, the
+                    // instructions before it have run in this frame, and
+                    // this thread alone runs the frames.
+                    if unsafe { b.run(scalar, env, fs, &mut no_dy) }.is_none() {
+                        faulted.push(k);
+                    }
+                }
+            }
+            // A gather faulted, the block having stored nothing: the general
+            // path latches it.
+            for k in faulted {
+                exec.frame_off = k * l;
+                run_range(&envs[k], pc..b.end, exec, &mut no_dy);
+            }
+            exec.frame_off = 0;
+            pc = b.end;
+            continue;
+        }
+        match &prog.instrs[pc] {
+            Instr::Call { .. } => {
+                let len = calls_at(prog, pc);
+                let super::TapeExec {
+                    slab,
+                    slot_off,
+                    scratch,
+                    ..
+                } = &mut *exec;
+                let frames = Frames {
+                    slab,
+                    l,
+                    slot_off,
+                    slots,
+                };
+                unsafe { exec_calls_frames(prog, pc, len, &envs, frames, &mut scratch.funcs) };
+                pc += len;
+                continue;
+            }
+            // A function's result is read from its slot; nothing publishes.
+            Instr::Export { .. } => {}
+            Instr::Fused { spec } if fused_frames[*spec as usize] => {
+                let super::TapeExec {
+                    slab,
+                    slot_off,
+                    simd,
+                    ..
+                } = &mut *exec;
+                // The group that defines the result writes it into the
+                // callers' slots.
+                let to = direct
+                    .filter(|&(at, _)| at == pc)
+                    .map(|(_, o)| (o, &args.targets[..]));
+                let mut slab_of = |k: usize| {
+                    // SAFETY: the frames are disjoint windows of the slab;
+                    // the group reads and writes them through the handles
+                    // one frame's operands at a time.
+                    let p = unsafe { slab.as_mut_ptr().add(k * l) };
+                    Slab::new(
+                        unsafe { std::slice::from_raw_parts_mut(p, l) },
+                        slot_off,
+                        slots,
+                    )
+                };
+                // SAFETY: every instruction before it has run in every
+                // frame, and this thread alone runs the frames.
+                unsafe {
+                    super::fused::exec_fused_frames(
+                        *spec as usize,
+                        prog,
+                        &envs,
+                        &mut slab_of,
+                        dy_home,
+                        *simd,
+                        fx,
+                        to,
+                    )
+                };
+            }
+            ins if ins.may_run_on_worker() => {
+                let super::TapeExec {
+                    slab,
+                    slot_off,
+                    idx_tables,
+                    simd,
+                    scratch,
+                    ..
+                } = &mut *exec;
+                for (k, env) in envs.iter().enumerate() {
+                    let cx = Cx {
+                        env,
+                        slab: frame_slab(slab, l, k, slot_off, slots),
+                        idx_tables,
+                        simd: *simd,
+                        dy_home,
+                        dy: no_dy.as_mut_ptr(),
+                        dy_len: 0,
+                    };
+                    // SAFETY: every instruction before it has run in this
+                    // frame, and this thread alone runs the frames.
+                    unsafe { exec_straight(&cx, ins, scratch, 1) };
+                }
+            }
+            // An instruction the calling thread orders (a fault, a forcing
+            // load, a run-time subscript): the instruction loop, frame by
+            // frame.
+            _ => {
+                for (k, env) in envs.iter().enumerate() {
+                    exec.frame_off = k * l;
+                    run_range(env, pc..pc + 1, exec, &mut no_dy);
+                }
+                exec.frame_off = 0;
+            }
+        }
+        pc += 1;
+    }
+    if let Some(faults) = faults
+        && faults.take().is_some()
+    {
+        // Back to the caller's latch, then each frame whole, in order, as
+        // the calls run without batching: the same values, and the first
+        // fault latched is theirs.
+        drop(faults);
+        for (k, env) in envs.iter().enumerate() {
+            exec.frame_off = k * l;
+            run_range(env, prime_end..end, exec, &mut no_dy);
+        }
+        exec.frame_off = 0;
+        return false;
+    }
+    direct.is_some()
+}
+
+/// Frame `k`'s window of a function context's slab (`l` elements a frame).
+fn frame_slab<'a>(
+    slab: &'a mut [f64],
+    l: usize,
+    k: usize,
+    slot_off: &'a [usize],
+    slots: &[SlotDesc],
+) -> Slab<'a> {
+    Slab::new(&mut slab[k * l..(k + 1) * l], slot_off, slots)
+}
+
+/// The frames of a batched execution's slab, for the calls its body makes.
+struct Frames<'a> {
+    slab: &'a mut Vec<f64>,
+    l: usize,
+    slot_off: &'a [usize],
+    slots: &'a [SlotDesc],
+}
+
+impl Frames<'_> {
+    fn get(&mut self, k: usize) -> Slab<'_> {
+        frame_slab(self.slab, self.l, k, self.slot_off, self.slots)
+    }
+}
+
+/// [`exec_calls`] inside a batched execution: the calls `pc..pc + len` of
+/// function program `prog`, each in every frame of `envs` (frame `k`'s slab
+/// in `frames`), as one execution of their function over `len × frames`
+/// frames.
+///
+/// # Safety
+/// As for [`run_frames`].
+unsafe fn exec_calls_frames(
+    prog: &TapeProgram,
+    pc: usize,
+    len: usize,
+    envs: &[Env],
+    mut frames: Frames,
+    funcs: &mut Vec<Option<Box<super::FuncFrames>>>,
+) {
+    let calls = &prog.instrs[pc..pc + len];
+    let mut ff = take_frames(prog, pc, funcs);
+    ff.args.clear();
+    for ins in calls {
+        let spec = &prog.tables.calls[call_of(ins) as usize];
+        let out = out_of(ins);
+        for (k, env) in envs.iter().enumerate() {
+            let slab = frames.get(k);
+            let target = slab.slot(out);
+            ff.args.push(spec, env, slab, target);
+        }
+    }
+    let env0 = &envs[0];
+    if unsafe { run_frames(&mut ff, env0.t, env0.forcing, env0.declared) } {
+        funcs[func_of(prog, pc)] = Some(ff);
+        return;
+    }
+    let n = envs.len();
+    for (m, ins) in calls.iter().enumerate() {
+        let out = out_of(ins);
+        let elems = prog.tables.slots[out as usize].elems().max(1);
+        for k in 0..n {
+            // SAFETY: as in `exec_calls`.
+            unsafe {
+                std::ptr::copy_nonoverlapping(ff.result(m * n + k), frames.get(k).slot(out), elems)
+            };
+        }
+    }
+    funcs[func_of(prog, pc)] = Some(ff);
+}
+
 /// Execute one straight-line instruction (see [`Instr::may_run_on_worker`]) with this
 /// thread's `scratch`, splitting it under width `call_split`.
 ///
 /// # Safety
 /// `cx` must describe the current call, and every instruction this one
 /// depends on must have run.
-/// Run [`Instr::Call`] `call` into `out` with this thread's function
-/// contexts `funcs`: resolve the arguments to the caller's views and values,
-/// run the function, and copy its result into `out`.
-///
-/// # Safety
-/// As for [`exec_straight`]: nothing another thread runs meanwhile writes
-/// `out` or the arguments.
-pub(super) unsafe fn exec_call(
-    env: &Env,
-    slab: Slab,
-    call: u32,
-    out: SlotId,
-    funcs: &mut Vec<Option<Box<super::TapeCtx>>>,
-) {
-    let prog = env.prog;
-    let spec = &prog.tables.calls[call as usize];
-    let arrays: SmallVec<[*const f64; 8]> = spec
-        .arrays
-        .iter()
-        .map(|s| src_base(s, env, slab).0)
-        .collect();
-    let scalars: SmallVec<[f64; 8]> = spec
-        .scalars
-        .iter()
-        .map(|o| resolve_scalar(o, env, slab))
-        .collect();
-    let f = spec.func as usize;
-    if funcs.len() <= f {
-        funcs.resize_with(prog.funcs.len().max(f + 1), || None);
-    }
-    let fctx = funcs[f].get_or_insert_with(|| {
-        // A function runs whole on the thread that calls it: independent
-        // calls are what a call plan runs side by side.
-        let mut c = super::TapeCtx::new(std::sync::Arc::clone(&prog.funcs[f]));
-        c.set_serial();
-        Box::new(c)
-    });
-    let res = super::run_function(fctx, &arrays, &scalars, env.t, env.forcing, env.declared);
-    let n = prog.tables.slots[out as usize].elems().max(1);
-    // SAFETY: the result is the function's slot of the same box, in its own
-    // slab; `out` is this program's slot, written by this instruction alone.
-    unsafe { std::ptr::copy_nonoverlapping(res, slab.slot(out), n) };
-}
-
 pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, call_split: usize) {
     // SAFETY (every slab, state and `dy` access below): each pointer comes
     // from the call's slab handle, its state or its `dy` at a slot,
@@ -1795,10 +2167,10 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                 }
             }
         }
-        // SAFETY: the caller's contract.
-        Instr::Call { call, out } => unsafe {
-            exec_call(env, slab, *call, *out, &mut scratch.funcs)
-        },
+        // One call or a batch: its position decides which (`calls_at`), so
+        // the instruction loop and the call plan run it through
+        // `exec_calls`.
+        Instr::Call { .. } => unreachable!("a call runs through `exec_calls`"),
         _ => unreachable!("not a straight-line instruction: {}", ins.opcode()),
     }
 }

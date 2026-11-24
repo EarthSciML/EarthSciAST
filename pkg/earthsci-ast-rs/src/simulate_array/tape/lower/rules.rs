@@ -150,6 +150,8 @@ impl<'m> TapeBuilder<'m> {
         // A rolled-back slot's id is handed out again: its bounds go with it.
         self.ranges.retain(|s, _| *s < n_slots);
         self.range_defs.retain(|s| *s < n_slots);
+        self.call_memo
+            .retain(|k, v| v.0 < n_slots && super::calls::call_key_live(k, n_slots));
         for s in 0..3 {
             let stream = &mut self.streams[s];
             stream.truncate(txn.stream_lens[s]);
@@ -215,6 +217,8 @@ impl<'m> TapeBuilder<'m> {
         // A rolled-back slot's id is handed out again: its bounds go with it.
         self.ranges.retain(|s, _| *s < n_slots);
         self.range_defs.retain(|s| *s < n_slots);
+        self.call_memo
+            .retain(|k, v| v.0 < n_slots && super::calls::call_key_live(k, n_slots));
         // The attempt's value numbers in the frame it ran in: one naming a
         // rolled-back slot goes (a value it shadowed is simply recomputed).
         if let Some(frame) = self.rule.scope_frames.last_mut() {
@@ -777,8 +781,14 @@ impl<'m> TapeBuilder<'m> {
         // A function is laid out like its caller: a caller with a function
         // that has no axis-reversed form stays row-major.
         let align_layout = align_layout && funcs.borrow().all_reversible();
+        let funcs_fault = funcs.borrow().can_fault();
         let mut prog = self.assemble(exports);
-        super::calls::finish_program(&mut prog, super::calls::Layout::Chosen(align_layout), fuse)?;
+        super::calls::finish_program(
+            &mut prog,
+            super::calls::Layout::Chosen(align_layout),
+            fuse,
+            &funcs_fault,
+        )?;
         prog.funcs = funcs.borrow_mut().finish(prog.col_major, fuse)?;
         Ok(prog)
     }
@@ -840,6 +850,7 @@ impl<'m> TapeBuilder<'m> {
             prepared: Default::default(),
             funcs: Vec::new(),
             is_function: self.is_function,
+            call_batches: Vec::new(),
         }
     }
 

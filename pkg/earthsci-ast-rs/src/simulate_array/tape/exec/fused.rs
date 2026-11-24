@@ -1882,77 +1882,7 @@ unsafe fn exec_fused_runs(
                     } => {
                         let (av, bv, cv) = (msrc(a), msrc(b), msrc(c3));
                         let dst = dst_of(mi, *out);
-                        // Under `element_type: "Float32"` the monomorphized
-                        // closures below are hand-copied f64 arithmetic that
-                        // never sees the precision, so compose the SAME two
-                        // kernels in the SAME order out of the shared,
-                        // precision-aware table instead. Float64 falls through
-                        // to the untouched match.
-                        if crate::precision::is_f32() {
-                            let f1 = binary_kernel_of(*op1);
-                            let f2 = binary_kernel_of(*op2);
-                            if *swap {
-                                unsafe { fch3(dst, c, av, bv, cv, |x, y, z| f2(z, f1(x, y))) };
-                            } else {
-                                unsafe { fch3(dst, c, av, bv, cv, |x, y, z| f2(f1(x, y), z)) };
-                            }
-                            continue;
-                        }
-                        use BinCode::{Add, Div, Ge, Gt, Le, Lt, Max, Min, Mul, Sub};
-                        // Monomorphized composition of the same two kernel
-                        // bodies, applied in the same order (t = op1(a, b);
-                        // out = swap ? op2(c, t) : op2(t, c)).
-                        macro_rules! b2 {
-                            ($f1:expr, $f2:expr) => {
-                                if *swap {
-                                    unsafe { fch3(dst, c, av, bv, cv, |x, y, z| $f2(z, $f1(x, y))) }
-                                } else {
-                                    unsafe { fch3(dst, c, av, bv, cv, |x, y, z| $f2($f1(x, y), z)) }
-                                }
-                            };
-                        }
-                        let add = |x: f64, y: f64| x + y;
-                        let sub = |x: f64, y: f64| x - y;
-                        let mul = |x: f64, y: f64| x * y;
-                        let div = |x: f64, y: f64| x / y;
-                        let min = crate::faq::nan_min;
-                        let max = crate::faq::nan_max;
-                        let gt = |x: f64, y: f64| (x > y) as i32 as f64;
-                        let ge = |x: f64, y: f64| (x >= y) as i32 as f64;
-                        let lt = |x: f64, y: f64| (x < y) as i32 as f64;
-                        let le = |x: f64, y: f64| (x <= y) as i32 as f64;
-                        match (op1, op2) {
-                            (Add, Add) => b2!(add, add),
-                            (Add, Sub) => b2!(add, sub),
-                            (Add, Mul) => b2!(add, mul),
-                            (Add, Div) => b2!(add, div),
-                            (Sub, Add) => b2!(sub, add),
-                            (Sub, Sub) => b2!(sub, sub),
-                            (Sub, Mul) => b2!(sub, mul),
-                            (Sub, Div) => b2!(sub, div),
-                            (Mul, Add) => b2!(mul, add),
-                            (Mul, Sub) => b2!(mul, sub),
-                            (Mul, Mul) => b2!(mul, mul),
-                            (Mul, Div) => b2!(mul, div),
-                            (Div, Add) => b2!(div, add),
-                            (Div, Sub) => b2!(div, sub),
-                            (Div, Mul) => b2!(div, mul),
-                            (Div, Div) => b2!(div, div),
-                            // Step 4b extended pairs (`bin2_pair_ok`): the
-                            // multiply-into-mask and min/max clamp idioms the
-                            // adjacency histogram showed material.
-                            (Mul, Gt) => b2!(mul, gt),
-                            (Mul, Ge) => b2!(mul, ge),
-                            (Mul, Lt) => b2!(mul, lt),
-                            (Mul, Le) => b2!(mul, le),
-                            (Min, Max) => b2!(min, max),
-                            (Max, Min) => b2!(max, min),
-                            (Mul, Min) => b2!(mul, min),
-                            (Min, Mul) => b2!(min, mul),
-                            (Mul, Max) => b2!(mul, max),
-                            (Max, Mul) => b2!(max, mul),
-                            other => unreachable!("Bin2 pair not monomorphized ({other:?})"),
-                        }
+                        unsafe { bin2_chunk(dst, c, av, bv, cv, *op1, *op2, *swap) };
                     }
                 }
             }
@@ -2205,6 +2135,94 @@ unsafe fn exec_fused_runs(
     }
 }
 
+/// One chunk of a [`MicroOp::Bin2`] superop:
+/// `t = op1(a, b); dst = swap ? op2(c, t) : op2(t, c)`, the two kernels
+/// applied in that order (never contracted).
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn bin2_chunk(
+    dst: *mut f64,
+    c: usize,
+    av: MSrc,
+    bv: MSrc,
+    cv: MSrc,
+    op1: BinCode,
+    op2: BinCode,
+    swap: bool,
+) {
+    // Under `element_type: "Float32"` the monomorphized
+    // closures below are hand-copied f64 arithmetic that
+    // never sees the precision, so compose the SAME two
+    // kernels in the SAME order out of the shared,
+    // precision-aware table instead. Float64 falls through
+    // to the untouched match.
+    if crate::precision::is_f32() {
+        let f1 = binary_kernel_of(op1);
+        let f2 = binary_kernel_of(op2);
+        if swap {
+            unsafe { fch3(dst, c, av, bv, cv, |x, y, z| f2(z, f1(x, y))) };
+        } else {
+            unsafe { fch3(dst, c, av, bv, cv, |x, y, z| f2(f1(x, y), z)) };
+        }
+        return;
+    }
+    use BinCode::{Add, Div, Ge, Gt, Le, Lt, Max, Min, Mul, Sub};
+    // Monomorphized composition of the same two kernel
+    // bodies, applied in the same order (t = op1(a, b);
+    // out = swap ? op2(c, t) : op2(t, c)).
+    macro_rules! b2 {
+        ($f1:expr, $f2:expr) => {
+            if swap {
+                unsafe { fch3(dst, c, av, bv, cv, |x, y, z| $f2(z, $f1(x, y))) }
+            } else {
+                unsafe { fch3(dst, c, av, bv, cv, |x, y, z| $f2($f1(x, y), z)) }
+            }
+        };
+    }
+    let add = |x: f64, y: f64| x + y;
+    let sub = |x: f64, y: f64| x - y;
+    let mul = |x: f64, y: f64| x * y;
+    let div = |x: f64, y: f64| x / y;
+    let min = crate::faq::nan_min;
+    let max = crate::faq::nan_max;
+    let gt = |x: f64, y: f64| (x > y) as i32 as f64;
+    let ge = |x: f64, y: f64| (x >= y) as i32 as f64;
+    let lt = |x: f64, y: f64| (x < y) as i32 as f64;
+    let le = |x: f64, y: f64| (x <= y) as i32 as f64;
+    match (op1, op2) {
+        (Add, Add) => b2!(add, add),
+        (Add, Sub) => b2!(add, sub),
+        (Add, Mul) => b2!(add, mul),
+        (Add, Div) => b2!(add, div),
+        (Sub, Add) => b2!(sub, add),
+        (Sub, Sub) => b2!(sub, sub),
+        (Sub, Mul) => b2!(sub, mul),
+        (Sub, Div) => b2!(sub, div),
+        (Mul, Add) => b2!(mul, add),
+        (Mul, Sub) => b2!(mul, sub),
+        (Mul, Mul) => b2!(mul, mul),
+        (Mul, Div) => b2!(mul, div),
+        (Div, Add) => b2!(div, add),
+        (Div, Sub) => b2!(div, sub),
+        (Div, Mul) => b2!(div, mul),
+        (Div, Div) => b2!(div, div),
+        // Step 4b extended pairs (`bin2_pair_ok`): the
+        // multiply-into-mask and min/max clamp idioms the
+        // adjacency histogram showed material.
+        (Mul, Gt) => b2!(mul, gt),
+        (Mul, Ge) => b2!(mul, ge),
+        (Mul, Lt) => b2!(mul, lt),
+        (Mul, Le) => b2!(mul, le),
+        (Min, Max) => b2!(min, max),
+        (Max, Min) => b2!(max, min),
+        (Mul, Min) => b2!(mul, min),
+        (Min, Mul) => b2!(min, mul),
+        (Mul, Max) => b2!(mul, max),
+        (Max, Mul) => b2!(max, mul),
+        other => unreachable!("Bin2 pair not monomorphized ({other:?})"),
+    }
+}
+
 /// Baseline-codegen instantiation of the fused chunk loop.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
@@ -2441,6 +2459,413 @@ unsafe fn fch_load(dst: *mut f64, c: usize, at: usize, a: MSrc, src: *const f64,
         j += len * s_inner;
         if j == wrap {
             j = base;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One fused group over the frames of a batched call (`tape::batch`).
+// ---------------------------------------------------------------------------
+
+/// Whether fused group `fs` runs over all the frames of a batched execution
+/// at once ([`exec_fused_frames`]): elementwise micro-ops over aligned,
+/// shifted or whole-read inputs, with no reduction, scan, folded index or
+/// chunk gather. Any other group runs frame by frame.
+pub(super) fn frames_ok(fs: &FusedSpec) -> bool {
+    fs.reduce.is_none()
+        && fs.pre.is_none()
+        && fs.interleave.is_none()
+        && fs.scan_fuse.is_empty()
+        && fs.schedule.n_runs <= FRAMES_MAX_RUNS
+        && fs
+            .inputs
+            .iter()
+            .all(|i| i.index.is_none() && i.gather.as_deref().is_none_or(|g| g.whole))
+        && fs.micro.iter().all(|m| {
+            matches!(
+                m,
+                MicroOp::Bin { .. }
+                    | MicroOp::Un { .. }
+                    | MicroOp::Neg { .. }
+                    | MicroOp::Select { .. }
+                    | MicroOp::Mov { .. }
+                    | MicroOp::Bin2 { .. }
+            )
+        })
+}
+
+/// The most runs a group may have to run over the frames at once (its
+/// schedule is kept expanded).
+const FRAMES_MAX_RUNS: usize = 256;
+
+/// The scratch of [`exec_fused_frames`], kept by a function's context.
+#[derive(Default)]
+pub(in crate::simulate_array::tape) struct FramesScratch {
+    regs: Vec<f64>,
+    /// Frame-major: frame `k`'s scalars, inputs and outputs.
+    svals: Vec<f64>,
+    bases: Vec<*const f64>,
+    outs: Vec<*mut f64>,
+    /// Whole-read gathers, frame by frame.
+    whole: Vec<f64>,
+    /// Per fused group: its schedule's runs, expanded on first use.
+    runs: Vec<Option<Vec<FusedRun>>>,
+}
+
+// SAFETY: the pointers are scratch, written by each group run before it
+// reads them and meaningless between runs, like `FusedScratch`'s.
+unsafe impl Send for FramesScratch {}
+
+/// Run fused group `spec` of function program `prog` once over the frames
+/// `envs` (frame `k`'s slab `slab_of(k)`), for a group [`frames_ok`]
+/// admits. Each frame's elements are computed by the same kernels in the
+/// same order as [`exec_fused`] computes them for that frame alone; the
+/// frames share every micro-op's dispatch: a chunk holds the same elements
+/// of every frame side by side, each micro-op runs once over all of them,
+/// and each frame's inputs are read from (and outputs written to) its own
+/// storage.
+///
+/// # Safety
+/// As for [`exec_fused`], for every frame.
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn exec_fused_frames<'s>(
+    spec: usize,
+    prog: &TapeProgram,
+    envs: &[super::Env],
+    slab_of: &mut dyn FnMut(usize) -> Slab<'s>,
+    dy_home: &[usize],
+    simd: SimdLevel,
+    fx: &mut FramesScratch,
+    to: Option<(usize, &[*mut f64])>,
+) {
+    let fs = &prog.fused[spec];
+    let nk = envs.len();
+    let ni = fs.inputs.len();
+    let n_el = fs.n_elems();
+    let n_whole = fs
+        .inputs
+        .iter()
+        .filter(|i| i.gather.as_deref().is_some_and(|g| g.whole))
+        .count();
+    let FramesScratch {
+        regs,
+        svals,
+        bases,
+        outs,
+        whole,
+        runs,
+    } = fx;
+    svals.clear();
+    bases.clear();
+    outs.clear();
+    if whole.len() < nk * n_whole * n_el {
+        whole.resize(nk * n_whole * n_el, 0.0);
+    }
+    for (k, env) in envs.iter().enumerate() {
+        let slab = slab_of(k);
+        for op in &fs.scalars {
+            svals.push(resolve_scalar(op, env, slab));
+        }
+        let mut w = 0usize;
+        for inp in &fs.inputs {
+            let p: *const f64 = match &inp.src {
+                SrcRef::Slot(s) => slab.slot(*s) as *const f64,
+                SrcRef::State(ix) => super::resolve::state_ptr(env, *ix),
+            };
+            match inp.gather.as_deref() {
+                Some(g) if g.whole => {
+                    let dst = whole[(k * n_whole + w) * n_el..].as_mut_ptr();
+                    // SAFETY: the source is the input's live box; `dst`
+                    // holds `n_el` elements.
+                    unsafe { g.fill(p, 0, n_el, dst) };
+                    bases.push(dst as *const f64);
+                    w += 1;
+                }
+                _ => bases.push(p),
+            }
+        }
+        for (o, &(_, slot)) in fs.outputs.iter().enumerate() {
+            outs.push(match (to, dy_home.get(slot as usize)) {
+                // The function's result, written into the caller's slot.
+                (Some((t, targets)), _) if t == o => targets[k],
+                (_, Some(&super::UNSTORED)) => std::ptr::null_mut(),
+                _ => slab.slot(slot),
+            });
+        }
+    }
+    if runs.len() <= spec {
+        runs.resize_with(spec + 1, || None);
+    }
+    let runs = runs[spec].get_or_insert_with(|| fs.schedule.expanded());
+    let n_regs = fs.n_regs as usize + ni;
+    if regs.len() < n_regs * FCHUNK {
+        regs.resize(n_regs * FCHUNK, 0.0);
+    }
+    let w = FramesWork {
+        fs,
+        nk,
+        svals,
+        bases,
+        outs,
+        runs,
+    };
+    match simd {
+        SimdLevel::Generic => unsafe { fused_frames_generic(&w, regs) },
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx2 => unsafe { fused_frames_avx2(&w, regs) },
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx512 => unsafe { fused_frames_avx512(&w, regs) },
+    }
+}
+
+/// What [`fused_frames`] runs: one group, its frames' resolved operands.
+struct FramesWork<'a> {
+    fs: &'a FusedSpec,
+    nk: usize,
+    svals: &'a [f64],
+    bases: &'a [*const f64],
+    outs: &'a [*mut f64],
+    runs: &'a [FusedRun],
+}
+
+#[inline(never)]
+unsafe fn fused_frames_generic(w: &FramesWork, regs: &mut [f64]) {
+    unsafe { fused_frames(w, regs) }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn fused_frames_avx2(w: &FramesWork, regs: &mut [f64]) {
+    unsafe { fused_frames(w, regs) }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(
+    enable = "avx512f",
+    enable = "avx512vl",
+    enable = "avx512dq",
+    enable = "avx512bw"
+)]
+unsafe fn fused_frames_avx512(w: &FramesWork, regs: &mut [f64]) {
+    unsafe { fused_frames(w, regs) }
+}
+
+/// The chunk loop of [`exec_fused_frames`]. Each run of the schedule is cut
+/// into chunks of at most [`FCHUNK`] elements; each micro-op is dispatched
+/// once per chunk and applied to every frame's part of it in turn, its
+/// operands read in place: a register holds frame `k`'s part at `k * cc`, an
+/// input is read from frame `k`'s own source, a scalar is frame `k`'s value,
+/// and an output the micro-op writes last (`FusedSpec::direct`) is written
+/// straight into frame `k`'s storage.
+#[inline(always)]
+unsafe fn fused_frames(w: &FramesWork, regs: &mut [f64]) {
+    let FramesWork {
+        fs,
+        nk,
+        svals,
+        bases,
+        outs,
+        runs,
+    } = *w;
+    let (ni, nsc, no) = (fs.inputs.len(), fs.scalars.len(), fs.outputs.len());
+    let cs = FCHUNK;
+    let rp = regs.as_mut_ptr();
+    // Frames per pass: a register holds one chunk of every frame of a pass.
+    let per = nk.min(cs);
+    let mut g0 = 0usize;
+    while g0 < nk {
+        let fk = (nk - g0).min(per);
+        let cw = (cs / fk).max(1);
+        let base = |k: usize, i: usize| bases[(g0 + k) * ni + i];
+        for run in runs {
+            let len = run.len as usize;
+            let mut done = 0usize;
+            while done < len {
+                let cc = (len - done).min(cw);
+                let at = run.out_off as usize + done;
+                // A strided input is pre-loaded into its own register, frame
+                // by frame.
+                for (i, inp) in fs.inputs.iter().enumerate() {
+                    let Some(sx) = inp.shifted_ix else { continue };
+                    let o = run.in_off[sx as usize];
+                    let st = inp.elem_stride as isize;
+                    if o == GHOST_OFF || st == 0 || st == 1 {
+                        continue;
+                    }
+                    let d = unsafe { rp.add((fs.n_regs as usize + i) * cs) };
+                    for k in 0..fk {
+                        // SAFETY: the run's source offsets lie in the input's
+                        // box (the schedule's contract).
+                        unsafe {
+                            let src = base(k, i).offset(o as isize + done as isize * st);
+                            let d = d.add(k * cc);
+                            for e in 0..cc {
+                                *d.add(e) = *src.offset(e as isize * st);
+                            }
+                        }
+                    }
+                }
+                // Operand `m` for frame `k`.
+                let msrc = |m: &MRef, k: usize| -> MSrc {
+                    match *m {
+                        MRef::Reg(r) => MSrc::P(unsafe { rp.add(r as usize * cs + k * cc) }),
+                        MRef::Scal(i) => MSrc::C(svals[(g0 + k) * nsc + i as usize]),
+                        MRef::In(i) => {
+                            let i = i as usize;
+                            let inp = &fs.inputs[i];
+                            match inp.shifted_ix {
+                                // SAFETY: an aligned input is read at the
+                                // output's flat offset in its own box.
+                                None => MSrc::P(unsafe { base(k, i).add(at) }),
+                                Some(sx) => {
+                                    let o = run.in_off[sx as usize];
+                                    if o == GHOST_OFF {
+                                        MSrc::C(0.0)
+                                    } else {
+                                        match inp.elem_stride {
+                                            // Constant along the run.
+                                            0 => MSrc::C(unsafe { *base(k, i).offset(o as isize) }),
+                                            1 => MSrc::P(unsafe {
+                                                base(k, i).offset(o as isize + done as isize)
+                                            }),
+                                            _ => MSrc::P(unsafe {
+                                                rp.add((fs.n_regs as usize + i) * cs + k * cc)
+                                            }),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+                // Where micro-op `mi` writes frame `k`'s part: its register,
+                // or the output it is the last writer of.
+                let direct_of = |mi: usize| -> Option<usize> {
+                    fs.direct
+                        .iter()
+                        .find(|&&(m, _)| m as usize == mi)
+                        .map(|&(_, o)| o as usize)
+                };
+                for (mi, op) in fs.micro.iter().enumerate() {
+                    let out_reg = match op {
+                        MicroOp::Bin { out, .. }
+                        | MicroOp::Un { out, .. }
+                        | MicroOp::Neg { out, .. }
+                        | MicroOp::Select { out, .. }
+                        | MicroOp::Mov { out, .. }
+                        | MicroOp::Bin2 { out, .. } => *out as usize,
+                        MicroOp::Load { .. } | MicroOp::Scan { .. } => {
+                            unreachable!("`frames_ok` admits no load or scan")
+                        }
+                    };
+                    let direct = direct_of(mi);
+                    let dst = |k: usize| -> *mut f64 {
+                        if let Some(o) = direct {
+                            let p = outs[(g0 + k) * no + o];
+                            if !p.is_null() {
+                                return unsafe { p.add(at) };
+                            }
+                        }
+                        unsafe { rp.add(out_reg * cs + k * cc) }
+                    };
+                    match op {
+                        MicroOp::Bin { op, a, b, .. } => {
+                            macro_rules! chunk {
+                                ($f:expr) => {{
+                                    let f = $f;
+                                    for k in 0..fk {
+                                        unsafe { fch2(dst(k), cc, msrc(a, k), msrc(b, k), f) }
+                                    }
+                                }};
+                            }
+                            dispatch_bin_kernel!(op, chunk);
+                        }
+                        MicroOp::Un { op, a, .. } => {
+                            macro_rules! chunk {
+                                ($f:expr) => {{
+                                    let f = $f;
+                                    for k in 0..fk {
+                                        unsafe { fch1(dst(k), cc, msrc(a, k), f) }
+                                    }
+                                }};
+                            }
+                            dispatch_un_kernel!(op, chunk);
+                        }
+                        MicroOp::Neg { a, .. } => {
+                            for k in 0..fk {
+                                unsafe { fch1(dst(k), cc, msrc(a, k), |x| -x) };
+                            }
+                        }
+                        MicroOp::Select { cond, a, b, .. } => {
+                            for k in 0..fk {
+                                unsafe {
+                                    fch_sel(dst(k), cc, msrc(cond, k), msrc(a, k), msrc(b, k))
+                                };
+                            }
+                        }
+                        MicroOp::Mov { a, .. } => {
+                            for k in 0..fk {
+                                unsafe { fch1(dst(k), cc, msrc(a, k), |x| x) };
+                            }
+                        }
+                        MicroOp::Bin2 {
+                            op1,
+                            a,
+                            b,
+                            op2,
+                            c,
+                            swap,
+                            ..
+                        } => {
+                            for k in 0..fk {
+                                unsafe {
+                                    bin2_chunk(
+                                        dst(k),
+                                        cc,
+                                        msrc(a, k),
+                                        msrc(b, k),
+                                        msrc(c, k),
+                                        *op1,
+                                        *op2,
+                                        *swap,
+                                    )
+                                };
+                            }
+                        }
+                        MicroOp::Load { .. } | MicroOp::Scan { .. } => unreachable!(),
+                    }
+                }
+                for (o, &(r, _)) in fs.outputs.iter().enumerate() {
+                    if fs.direct.iter().any(|&(_, d)| d as usize == o) {
+                        continue;
+                    }
+                    for k in 0..fk {
+                        let optr = outs[(g0 + k) * no + o];
+                        if optr.is_null() {
+                            continue;
+                        }
+                        // SAFETY: the output's box holds the chunk's
+                        // positions; its storage is the frame's own.
+                        unsafe { copy_short(rp.add(r as usize * cs + k * cc), optr.add(at), cc) };
+                    }
+                }
+                done += cc;
+            }
+        }
+        g0 += fk;
+    }
+}
+
+/// Copy `n` values: a short copy inline, a long one through `memcpy`.
+#[inline(always)]
+unsafe fn copy_short(src: *const f64, dst: *mut f64, n: usize) {
+    unsafe {
+        if n <= 64 {
+            for e in 0..n {
+                *dst.add(e) = *src.add(e);
+            }
+        } else {
+            std::ptr::copy_nonoverlapping(src, dst, n);
         }
     }
 }
