@@ -1223,9 +1223,13 @@ pub(super) unsafe fn exec_calls(
     let mut ff = take_frames(prog, pc, funcs);
     ff.args.clear();
     for ins in calls {
-        ff.args.push(&prog.tables.calls[call_of(ins) as usize], env, slab);
+        let target = slab.slot(out_of(ins));
+        ff.args.push(&prog.tables.calls[call_of(ins) as usize], env, slab, target);
     }
-    unsafe { run_frames(&mut ff, env.t, env.forcing, env.declared) };
+    if unsafe { run_frames(&mut ff, env.t, env.forcing, env.declared) } {
+        funcs[func_of(prog, pc)] = Some(ff);
+        return;
+    }
     for (k, ins) in calls.iter().enumerate() {
         let out = out_of(ins);
         let len = prog.tables.slots[out as usize].elems().max(1);
@@ -1275,16 +1279,21 @@ impl super::FrameArgs {
     pub(super) fn clear(&mut self) {
         self.arrays.clear();
         self.scalars.clear();
+        self.targets.clear();
         self.n = 0;
     }
 
     /// Append one frame: `spec`'s arguments resolved in its caller's
-    /// `env` and `slab` (an array argument is where its source starts).
-    fn push(&mut self, spec: &CallSpec, env: &Env, slab: Slab) {
-        self.arrays
-            .extend(spec.arrays.iter().map(|s| src_base(s, env, slab).0));
-        self.scalars
-            .extend(spec.scalars.iter().map(|o| resolve_scalar(o, env, slab)));
+    /// `env` and `slab` (an array argument is where its source starts), and
+    /// `target`, the caller's slot for its result.
+    fn push(&mut self, spec: &CallSpec, env: &Env, slab: Slab, target: *mut f64) {
+        for s in &spec.arrays {
+            self.arrays.push(src_base(s, env, slab).0);
+        }
+        for o in &spec.scalars {
+            self.scalars.push(resolve_scalar(o, env, slab));
+        }
+        self.targets.push(target);
         self.n += 1;
     }
 }
@@ -1296,17 +1305,20 @@ impl super::FrameArgs {
 /// the same kernels in the same order; the frames share the dispatch of
 /// every instruction, and a call inside the body runs as one execution over
 /// all the frames. A body with a branch region, a recurrence or its own
-/// precision runs frame by frame instead. Afterwards
-/// [`super::FuncFrames::result`] is each frame's result.
+/// precision runs frame by frame instead. Returns `true` when the body wrote
+/// each frame's result straight into its target
+/// ([`super::FuncFrames::direct`]); otherwise [`super::FuncFrames::result`] is
+/// each frame's result, for the caller to copy.
 ///
 /// # Safety
-/// The array arguments must stay live and unwritten while it runs.
+/// The array arguments must stay live and unwritten while it runs, and the
+/// targets must be the callers' result slots, which nothing reads meanwhile.
 pub(super) unsafe fn run_frames(
     ff: &mut super::FuncFrames,
     t: f64,
     forcing: super::ForcingView,
     declared: &HashSet<String>,
-) {
+) -> bool {
     let super::FuncFrames {
         ctx,
         frame_len,
@@ -1317,11 +1329,13 @@ pub(super) unsafe fn run_frames(
         no_mirror,
         fused_frames,
         fx,
+        direct,
     } = ff;
-    let fprog = std::sync::Arc::clone(&ctx.prog);
-    let prog: &TapeProgram = &fprog;
+    let super::TapeCtx {
+        prog: fprog, exec, ..
+    } = &mut **ctx;
+    let prog: &TapeProgram = fprog;
     let prep = prog.prepared();
-    let exec = &mut ctx.exec;
     let n = args.n;
     let l = *frame_len;
     let (na, ns) = (prog.state_vars.len(), prog.params_len);
@@ -1354,13 +1368,13 @@ pub(super) unsafe fn run_frames(
         }
         *cap = n;
     }
-    if n == 1 || !*by_instr {
+    if !*by_instr || (n == 1 && direct.is_none()) {
         for k in 0..n {
             exec.frame_off = k * l;
             run_range(&env_of(k), prime_end..end, exec, &mut no_dy);
         }
         exec.frame_off = 0;
-        return;
+        return false;
     }
     let envs: SmallVec<[Env; 8]> = (0..n).map(env_of).collect();
     let slots = &prog.tables.slots;
@@ -1422,6 +1436,11 @@ pub(super) unsafe fn run_frames(
             Instr::Export { .. } => {}
             Instr::Fused { spec } if fused_frames[*spec as usize] => {
                 let super::TapeExec { slab, slot_off, simd, .. } = &mut *exec;
+                // The group that defines the result writes it into the
+                // callers' slots.
+                let to = direct
+                    .filter(|&(at, _)| at == pc)
+                    .map(|(_, o)| (o, &args.targets[..]));
                 let mut slab_of = |k: usize| {
                     // SAFETY: the frames are disjoint windows of the slab;
                     // the group reads and writes them through the handles
@@ -1440,6 +1459,7 @@ pub(super) unsafe fn run_frames(
                         dy_home,
                         *simd,
                         fx,
+                        to,
                     )
                 };
             }
@@ -1480,6 +1500,7 @@ pub(super) unsafe fn run_frames(
         }
         pc += 1;
     }
+    direct.is_some()
 }
 
 /// Frame `k`'s window of a function context's slab (`l` elements a frame).
@@ -1527,12 +1548,18 @@ unsafe fn exec_calls_frames(
     ff.args.clear();
     for ins in calls {
         let spec = &prog.tables.calls[call_of(ins) as usize];
+        let out = out_of(ins);
         for (k, env) in envs.iter().enumerate() {
-            ff.args.push(spec, env, frames.get(k));
+            let slab = frames.get(k);
+            let target = slab.slot(out);
+            ff.args.push(spec, env, slab, target);
         }
     }
     let env0 = &envs[0];
-    unsafe { run_frames(&mut ff, env0.t, env0.forcing, env0.declared) };
+    if unsafe { run_frames(&mut ff, env0.t, env0.forcing, env0.declared) } {
+        funcs[func_of(prog, pc)] = Some(ff);
+        return;
+    }
     let n = envs.len();
     for (m, ins) in calls.iter().enumerate() {
         let out = out_of(ins);

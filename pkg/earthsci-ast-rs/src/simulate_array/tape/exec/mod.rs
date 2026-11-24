@@ -321,6 +321,49 @@ pub(super) struct FuncFrames {
     pub(super) fused_frames: Vec<bool>,
     /// The scratch of a fused group run over the frames.
     pub(super) fx: fused::FramesScratch,
+    /// `(pc, output)`: the fused group that defines the function's result,
+    /// as that output, when it is the result's only definition and nothing
+    /// after it reads the result: it writes each frame's result straight
+    /// into the caller's slot ([`FrameArgs::targets`]).
+    pub(super) direct: Option<(usize, usize)>,
+}
+
+/// `(pc, output)` of the fused group that may write function `prog`'s
+/// result straight into its caller's slot (see [`FuncFrames::direct`]).
+fn direct_result(prog: &TapeProgram) -> Option<(usize, usize)> {
+    let (_, result) = *prog.exports.first()?;
+    let tables = prog.slot_tables();
+    let mut writer = None;
+    let mut n_defs = 0usize;
+    for (pc, ins) in prog.instrs.iter().enumerate() {
+        ins.for_each_def(&tables, |s| {
+            if s == result {
+                n_defs += 1;
+                writer = Some(pc);
+            }
+        });
+    }
+    let pc = writer?;
+    let prime_end = (prog.n_const + prog.n_segment) as usize;
+    let Instr::Fused { spec } = prog.instrs[pc] else {
+        return None;
+    };
+    let fs = &prog.fused[spec as usize];
+    if n_defs != 1 || pc < prime_end || !fused::frames_ok(fs) {
+        return None;
+    }
+    let mut read_after = false;
+    for ins in &prog.instrs[pc + 1..] {
+        if matches!(ins, Instr::Export { .. }) {
+            continue;
+        }
+        ins.for_each_read(&tables, |s| read_after |= s == result);
+    }
+    if read_after {
+        return None;
+    }
+    let o = fs.outputs.iter().position(|&(_, s)| s == result)?;
+    Some((pc, o))
 }
 
 /// The resolved arguments of the frames of one batched execution: frame
@@ -331,8 +374,14 @@ pub(super) struct FuncFrames {
 pub(super) struct FrameArgs {
     pub(super) arrays: Vec<*const f64>,
     pub(super) scalars: Vec<f64>,
+    /// Per frame: the caller's slot its result is copied into.
+    pub(super) targets: Vec<*mut f64>,
     pub(super) n: usize,
 }
+
+// SAFETY: the argument pointers are scratch, written by each batched
+// execution before it reads them and meaningless between executions.
+unsafe impl Send for FrameArgs {}
 
 impl FuncFrames {
     pub(super) fn new(prog: &Arc<TapeProgram>) -> Self {
@@ -358,10 +407,12 @@ impl FuncFrames {
             no_mirror: vec![false; prog.state_vars.len()],
             fused_frames: prog.fused.iter().map(fused::frames_ok).collect(),
             fx: Default::default(),
+            direct: if by_instr { direct_result(prog) } else { None },
         }
     }
 
-    /// Where frame `k`'s result (the function's one export) starts.
+    /// Where frame `k`'s result (the function's one export) starts in the
+    /// context's slab.
     pub(super) fn result(&self, k: usize) -> *const f64 {
         let (_, result) = self.ctx.prog.exports[0];
         let exec = &self.ctx.exec;

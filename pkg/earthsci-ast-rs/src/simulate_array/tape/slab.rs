@@ -61,6 +61,22 @@ pub(super) fn color_slab(prog: &mut TapeProgram) {
         }
     }
 
+    // A batch of calls runs as one execution (`super::batch`): every
+    // call's arguments stay live until the last call of the batch, so no
+    // call's result takes the storage of an argument another call of the
+    // batch still reads.
+    for (pc, &n) in prog.call_batches.iter().enumerate() {
+        if n < 2 {
+            continue;
+        }
+        let last = pc + n as usize - 1;
+        for j in pc..=last {
+            prog.instrs[j].for_each_read(&tables, |s| {
+                last_use[s as usize] = last_use[s as usize].max(last);
+            });
+        }
+    }
+
     // Persistence: read from a later section than the defining one.
     let mut dedicated: Vec<bool> = vec![false; n_slots];
     for s in 0..n_slots {
