@@ -59,9 +59,12 @@
 #[cfg(test)]
 mod array_tests;
 #[cfg(test)]
+mod batch_tests;
+#[cfg(test)]
 mod closed_template_tests;
 #[cfg(test)]
 mod data_gather_tests;
+mod batch;
 mod dedup;
 mod exec;
 #[cfg(test)]
@@ -168,6 +171,11 @@ pub struct TapeBuildReport {
     pub n_function_instrs: usize,
     /// Instructions inside the function programs before fusion.
     pub n_function_instrs_unfused: usize,
+    /// Batches of calls of one function that run as one execution
+    /// (`TapeProgram::call_batches`), in the program and in every function.
+    pub n_call_batches: usize,
+    /// The calls those batches hold.
+    pub n_batched_calls: usize,
 }
 
 impl fmt::Display for TapeBuildReport {
@@ -225,6 +233,11 @@ impl fmt::Display for TapeBuildReport {
                 self.n_function_instrs,
                 self.n_function_instrs_unfused,
                 self.n_calls
+            )?;
+            writeln!(
+                f,
+                "  call batches: {} holding {} calls (program and function bodies)",
+                self.n_call_batches, self.n_batched_calls
             )?;
         }
         if self.fuse.n_groups > 0 {
@@ -318,6 +331,14 @@ pub(crate) fn make_report(prog: &TapeProgram, vn_hits: (usize, usize)) -> TapeBu
                     f.instrs.len()
                 }
             })
+            .sum(),
+        n_call_batches: std::iter::once(prog)
+            .chain(prog.funcs.iter().map(|f| &**f))
+            .map(|p| p.call_batches.iter().filter(|&&n| n > 1).count())
+            .sum(),
+        n_batched_calls: std::iter::once(prog)
+            .chain(prog.funcs.iter().map(|f| &**f))
+            .map(|p| p.call_batches.iter().map(|&n| n as usize).sum::<usize>())
             .sum(),
     }
 }
@@ -682,12 +703,51 @@ impl ArrayCompiled {
                 })
                 .unwrap_or_default();
             let _ = writeln!(out, "{pc:4} {:?} {ins:?}{boxed}", prog.section_of(pc));
+            if let Instr::Call { call, .. } = ins {
+                let batch = prog.call_batches.get(pc).copied().unwrap_or(0);
+                let _ = writeln!(
+                    out,
+                    "       {:?}{}",
+                    prog.tables.calls[*call as usize],
+                    if batch > 1 { format!(" batch of {batch}") } else { String::new() }
+                );
+            }
         }
-        // Each function the program calls, compiled once.
+        // Each function the program calls, compiled once, with the boxes its
+        // instructions define and the calls it makes.
         for (f, fp) in prog.funcs.iter().enumerate() {
-            let _ = writeln!(out, "function {f}: {:?}", fp.rules.first().map(|r| &r.name));
+            let _ = writeln!(
+                out,
+                "function {f}: {:?} state {:?} params {} fused groups {}",
+                fp.rules.first().map(|r| &r.name),
+                fp.state_vars.iter().map(|sv| &sv.shape[..]).collect::<Vec<_>>(),
+                fp.params_len,
+                fp.fused.len()
+            );
             for (pc, ins) in fp.instrs.iter().enumerate() {
-                let _ = writeln!(out, "  {pc:4} {:?} {ins:?}", fp.section_of(pc));
+                let boxed = ins
+                    .out()
+                    .map(|o| format!(" -> {:?}", &fp.tables.slots[o as usize].shape[..]))
+                    .unwrap_or_default();
+                let _ = writeln!(out, "  {pc:4} {:?} {ins:?}{boxed}", fp.section_of(pc));
+                if let Instr::Call { call, .. } = ins {
+                    let batch = fp.call_batches.get(pc).copied().unwrap_or(0);
+                    let _ = writeln!(
+                        out,
+                        "         {:?}{}",
+                        fp.tables.calls[*call as usize],
+                        if batch > 1 { format!(" batch of {batch}") } else { String::new() }
+                    );
+                }
+            }
+            for (i, fs) in fp.fused.iter().enumerate() {
+                let _ = writeln!(
+                    out,
+                    "  fused {i}: box {:?}, {} micro-ops, {} inputs",
+                    &fs.shape[..],
+                    fs.micro.len(),
+                    fs.inputs.len(),
+                );
             }
         }
         for (i, fs) in prog.fused.iter().enumerate() {

@@ -26,7 +26,7 @@
 //! one dispatch), a lane program, an instruction with its own precision, and
 //! any instruction that would split but cannot run share by share.
 
-use super::interp::{Cx, exec_share, exec_straight, shares};
+use super::interp::{Cx, exec_calls, exec_share, exec_straight, shares};
 use super::resolve::Slab;
 use super::*;
 
@@ -62,6 +62,9 @@ struct Task {
     ways: u16,
     /// The thread that runs it whole.
     thread: u16,
+    /// For a call: how many calls from `pc` it runs as one execution (a
+    /// batch, [`TapeProgram::call_batches`]); 1 otherwise.
+    calls: u16,
 }
 
 #[derive(Debug)]
@@ -302,6 +305,12 @@ impl CallPlan {
                 Place::Task(w) => w,
             };
             let ins = &prog.instrs[pc];
+            // A batch of calls is one task: every call of it at once.
+            let calls = if matches!(ins, Instr::Call { .. }) {
+                super::interp::calls_at(prog, pc).min(range.end - pc)
+            } else {
+                1
+            };
             // A `DyWrite` whose group stored the slot into `dy` does nothing.
             if matches!(ins, Instr::DyWrite { write }
                 if dy_home[prog.tables.dy_writes[*write as usize].slot as usize] != usize::MAX)
@@ -313,7 +322,9 @@ impl CallPlan {
             writes.clear();
             wslots.clear();
             dys.clear();
-            ins.for_each_read(&tables, |s| reads.extend(store_of(&moved, s)));
+            for member in &prog.instrs[pc..pc + calls] {
+                member.for_each_read(&tables, |s| reads.extend(store_of(&moved, s)));
+            }
             match ins {
                 Instr::Fused { spec } => {
                     let fs = &prog.fused[*spec as usize];
@@ -326,7 +337,11 @@ impl CallPlan {
                         dys.extend(dy);
                     }
                 }
-                _ => ins.for_each_def(&tables, |s| wslots.push(s)),
+                _ => {
+                    for member in &prog.instrs[pc..pc + calls] {
+                        member.for_each_def(&tables, |s| wslots.push(s));
+                    }
+                }
             }
             dys.extend(dy_written(prog, ins, dy_home));
             let mut phase = 0usize;
@@ -388,11 +403,12 @@ impl CallPlan {
                     pc: pc as u32,
                     ways: split,
                     thread: 0,
+                    calls: calls as u16,
                 },
                 phase,
-                task_cost(prog, ins),
+                task_cost(prog, ins) * calls,
             ));
-            pc += 1;
+            pc += calls;
         }
         flush(&mut seg, &mut steps, &mut tasks);
         Some(CallPlan {
@@ -446,9 +462,24 @@ impl PhaseJob<'_> {
                     unsafe { exec_share(&self.cx, ins, scratch, w, t.ways as usize) };
                 }
             } else if t.thread as usize == w {
-                unsafe { exec_straight(&self.cx, ins, scratch, 1) };
+                unsafe { run_task(&self.cx, t, scratch, 1) };
             }
         }
+    }
+}
+
+/// Run whole task `t` on this thread: a call or batch of calls through
+/// [`exec_calls`], any other instruction through [`exec_straight`].
+///
+/// # Safety
+/// As for [`exec_straight`].
+unsafe fn run_task(cx: &Cx, t: &Task, scratch: &mut Scratch, call_split: usize) {
+    let pc = t.pc as usize;
+    let ins = &cx.env.prog.instrs[pc];
+    if matches!(ins, Instr::Call { .. }) {
+        unsafe { exec_calls(cx.env, cx.slab, pc, t.calls as usize, &mut scratch.funcs) };
+    } else {
+        unsafe { exec_straight(cx, ins, scratch, call_split) };
     }
 }
 
@@ -495,7 +526,7 @@ pub(super) fn run_plan(plan: &CallPlan, env: &Env, exec: &mut TapeExec, dy: &mut
             // instruction loop would run them.
             let call = scratch.fscratch.workers.call_ways;
             for t in tasks {
-                unsafe { exec_straight(&cx, &prog.instrs[t.pc as usize], scratch, call) };
+                unsafe { run_task(&cx, t, scratch, call) };
             }
             continue;
         }

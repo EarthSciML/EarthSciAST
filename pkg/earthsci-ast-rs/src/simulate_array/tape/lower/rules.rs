@@ -840,6 +840,7 @@ impl<'m> TapeBuilder<'m> {
             prepared: Default::default(),
             funcs: Vec::new(),
             is_function: self.is_function,
+            call_batches: Vec::new(),
         }
     }
 

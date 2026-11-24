@@ -244,6 +244,7 @@ pub(super) fn finish_program(
         // A function's result is its export: every instruction runs.
         prog.n_rhs = prog.section_range(Cadence::Continuous).len() as u32;
     }
+    super::super::batch::batch_calls(prog);
     super::super::slab::color_slab(prog);
     Ok(())
 }

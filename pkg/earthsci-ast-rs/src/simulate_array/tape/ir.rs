@@ -3422,6 +3422,11 @@ pub(crate) struct TapeProgram {
     /// and parameters are the arguments of the running call, not the
     /// model's, so the executor reads them through the call's frame.
     pub is_function: bool,
+    /// Per instruction: at the first of a run of [`Instr::Call`]s of one
+    /// function that are independent of each other, the run's length; they
+    /// execute as one batched call ([`super::batch`]). 0 elsewhere; empty
+    /// when the program has no batch.
+    pub call_batches: Vec<u16>,
 }
 
 impl TapeProgram {
@@ -3502,6 +3507,8 @@ impl TapeProgram {
         &mut self,
         edits: impl IntoIterator<Item = (std::ops::Range<usize>, Vec<(Instr, usize)>)>,
     ) {
+        // Positions move: a batch table made before is void.
+        self.call_batches.clear();
         let old = std::mem::take(&mut self.instrs);
         let old_prov = std::mem::take(&mut self.provenance);
         let old_prec = std::mem::take(&mut self.precision);
