@@ -576,6 +576,11 @@ impl Rewriter<'_> {
                 Ok(read)
             }
             Expr::Operator(m) if m.op == "makearray" => self.makearray_read(node, m, sc),
+            Expr::Operator(m)
+                if m.op == "faq" && m.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
+            {
+                self.faq_read(node, m, sc)
+            }
             _ => self.refuse("subscripts an array expression a lane cannot restrict"),
         }
     }
@@ -652,6 +657,76 @@ impl Rewriter<'_> {
             .chain(std::iter::once(Expr::Variable(LANE.to_string())))
             .chain(inner_subs)
             .collect();
+        Ok(Expr::operator(n))
+    }
+}
+
+impl Rewriter<'_> {
+    /// `index(faq{output_idx o, ranges, expr}, s…)` at the lane's own cell:
+    /// the array `faq` read where every subscript `s_d` is a lane symbol of
+    /// a set the output axis `o_d` runs over whole. That is the `faq`'s
+    /// body with each `o_d` bound to the lane's cell along that set, so the
+    /// body is rewritten in a scope that maps `o_d` to its lane set, and any
+    /// other range of the `faq` (a contraction) stays a scalar `faq` over
+    /// it. The planner's whole-array right-hand sides `D(x) = faq{…}`
+    /// arrive here, lowered to `index(faq{…}, loops…)`.
+    fn faq_read(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        f: &Arc<ExpressionNode>,
+        sc: &LScope,
+    ) -> RResult<Expr> {
+        let subs = &node.args[1..];
+        let outs = f.output_idx.as_deref().unwrap_or_default();
+        if subs.len() != outs.len() {
+            return self.refuse("reads an array faq at the wrong rank");
+        }
+        let Some(body) = f.expr.as_deref() else {
+            return self.refuse("reads an array faq with no body");
+        };
+        let ranges = f.ranges.clone().unwrap_or_default();
+        let mut inner = sc.clone();
+        let bound: Vec<&String> = ranges.keys().chain(outs.iter()).collect();
+        inner.lane_syms.retain(|(s, _)| !bound.contains(&s));
+        inner.inner.retain(|s| !bound.contains(&s));
+        for (o, s) in outs.iter().zip(subs) {
+            let Some(set) = (match s {
+                Expr::Variable(x) => sc.lane_set(x).map(str::to_string),
+                _ => None,
+            }) else {
+                return self.refuse("reads an array faq off the lane's own cell");
+            };
+            let n = self.sizes.get(&set).copied().unwrap_or(-1);
+            let whole = match ranges.get(o) {
+                Some(crate::types::RangeSpec::IndexSetRef { from, of: None }) => *from == set,
+                Some(crate::types::RangeSpec::Interval([lo, hi])) => *lo == 1 && *hi == n,
+                _ => false,
+            };
+            if !whole {
+                return self.refuse(format_args!(
+                    "reads an array faq whose axis `{o}` does not run over the whole lane set `{set}`"
+                ));
+            }
+            inner.lane_syms.push((o.clone(), set));
+        }
+        let contracted: std::collections::HashMap<String, crate::types::RangeSpec> = ranges
+            .into_iter()
+            .filter(|(k, _)| !outs.contains(k))
+            .collect();
+        for k in contracted.keys() {
+            inner.inner.push(k.clone());
+        }
+        let new_body = self.expr(body, &inner)?;
+        if contracted.is_empty() && f.filter.is_none() {
+            return Ok(new_body);
+        }
+        let mut n = ExpressionNode::clone(f);
+        n.output_idx = Some(Vec::new());
+        n.ranges = Some(contracted);
+        n.expr = Some(Box::new(new_body));
+        if let Some(flt) = f.filter.as_deref() {
+            n.filter = Some(Box::new(self.expr(flt, &inner)?));
+        }
         Ok(Expr::operator(n))
     }
 }

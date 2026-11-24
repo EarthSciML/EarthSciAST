@@ -1116,3 +1116,81 @@ mod precision_source {
         }
     }
 }
+
+/// A whole-array right-hand side `D(u) = faq{output_idx [i, j], …}` (the
+/// form EarthSciIntegrator's derived documents write, lowered to
+/// `index(faq{…}, loops…)`) builds a lane program, and every lane equals the
+/// whole-domain program bit for bit: a body read at the lane's cell, a
+/// coordinate, the time, and a `faq` that also contracts over `k`.
+#[test]
+fn whole_array_faq_right_hand_sides_build_lanes() {
+    let (nx, ny) = (3, 4);
+    let whole = |expr: serde_json::Value, ranges: serde_json::Value| {
+        json!({"op": "faq", "args": [], "output_idx": ["i", "j"], "ranges": ranges, "expr": expr})
+    };
+    let xy = json!({"i": {"from": "x"}, "j": {"from": "y"}});
+    let xyk = json!({"i": {"from": "x"}, "j": {"from": "y"}, "k": {"from": "z"}});
+    let doc = model(
+        json!({"x": {"kind": "interval", "size": nx},
+               "y": {"kind": "interval", "size": ny},
+               "z": {"kind": "interval", "size": 2}}),
+        json!({
+            "u": {"type": "unknown", "units": "1", "shape": ["x", "y"], "default": 1.0},
+            "v": {"type": "unknown", "units": "1", "shape": ["x", "y"], "default": 2.0},
+            "c": {"type": "parameter", "units": "1", "shape": ["x"], "default": [0.5, 1.5, 2.5]},
+            "w": {"type": "parameter", "units": "1", "shape": ["z"], "default": [0.25, 0.75]}
+        }),
+        json!([
+            {"lhs": d_of(json!("u")),
+             "rhs": whole(json!({"op": "-", "args": [
+                 {"op": "*", "args": [ix("c", vec![json!("i")]), ix("u", vec![json!("i"), json!("j")]), "t"]},
+                 {"op": "*", "args": ["j", ix("v", vec![json!("i"), json!("j")])]}]}), xy)},
+            {"lhs": d_of(json!("v")),
+             "rhs": whole(json!({"op": "*", "args": [ix("w", vec![json!("k")]), ix("u", vec![json!("i"), json!("j")])]}), xyk)}
+        ]),
+    );
+    let prog = program(&doc, Compiler::Native);
+    let lanes = prog
+        .lanes(
+            LaneKind::Cells {
+                sets: vec!["x".to_string(), "y".to_string()],
+            },
+            4,
+        )
+        .expect("a whole-array faq right-hand side builds lanes");
+    let n = (nx * ny) as usize;
+    let gu = varied(2 * n);
+    let p = prog
+        .parameter_vector(&Default::default())
+        .expect("defaults");
+    let fs = prog.default_forcing();
+    let t = 0.75;
+    let mut want = vec![f64::NAN; prog.layout().u_len];
+    let mut ws = prog.new_workspace();
+    prog.eval_into(&gu, &[], &p, t, &fs, &mut want, &mut ws)
+        .expect("whole-domain eval");
+    let lay = lanes.layout().clone();
+    let off = |name: &str| lay.block(name).expect("a lane block").offset;
+    let (ou, ov) = (off("M.u"), off("M.v"));
+    let mut lws = lanes.new_workspace();
+    // Cells in batches of up to 4, the last one short (padded).
+    let cells: Vec<usize> = (0..n).collect();
+    for batch in cells.chunks(4) {
+        let mut u = vec![0.0; lay.u_len];
+        let mut cs = Vec::new();
+        for (l, &c) in batch.iter().enumerate() {
+            u[ou * 4 + l] = gu[c];
+            u[ov * 4 + l] = gu[n + c];
+            cs.push((c % nx as usize) as i32 + 1);
+            cs.push((c / nx as usize) as i32 + 1);
+        }
+        let mut du = vec![f64::NAN; lay.u_len];
+        lanes
+            .eval_into(&u, &[], &p, t, &fs, &cs, batch.len(), &mut du, &mut lws)
+            .expect("lane eval");
+        for (l, &c) in batch.iter().enumerate() {
+            assert_eq!(du[ou * 4 + l].to_bits(), want[c].to_bits(), "u at cell {c}");
+            assert_eq!(du[ov * 4 + l].to_bits(), want[n + c].to_bits(), "v at cell {c}");
+        }
+    }
+}
