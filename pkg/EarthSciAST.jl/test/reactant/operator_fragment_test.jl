@@ -254,6 +254,60 @@ end
         ones_p = ConcreteRArray([1.0])
         run = Reactant.@compile frag(u32, aux32, ones_p, t, ())
         @test Array(run(u32, aux32, ones_p, t, ())) == Float32[1, 1]
+
+        # A declared-binary64 key compared exactly feeds the binary32 group
+        # (esm-spec §11.3.3 P8). Binary32 spaces its integers 256 apart
+        # here, so a comparison rounded to it would match the next id too.
+        declared_key(rhs) = begin
+            doc = witness()
+            doc["models"]["M"]["variables"]["id"] = Dict(
+                "type" => "parameter", "default" => 2260007000, "units" => "1",
+                "element_type" => "Float64"
+            )
+            doc["models"]["M"]["equations"][1]["rhs"]["expr"] = rhs
+            doc
+        end
+        quantity = witness()["models"]["M"]["equations"][1]["rhs"]["expr"]
+        selected = _op("ifelse", _op("==", "id", 2260007000), quantity, 0.0)
+        ir = operator_ir(problem(declared_key(selected)); unspecified_eltype = Float32)
+        @test ir.working_eltype === Float32
+        @test ir.binary64_keys == ["M.id"]
+        frag = emit_fragment(ir)
+        @test parameter_names(ir) == ["M.a", "M.id"]
+        hit, miss = ConcreteRArray([73.5, 2260007000.0]), ConcreteRArray([73.5, 2260007001.0])
+        run = Reactant.@compile frag(u32, aux32, hit, t, ())
+        @test Array(run(u32, aux32, hit, t, ())) == fill(prevfloat(1.0f0), 2)
+        @test Array(run(u32, aux32, miss, t, ())) == Float32[0, 0]
+        # The key reaching binary32 arithmetic is a quantity, and mixes.
+        err = refusal(declared_key(_op("+", selected, "id")))
+        @test err.code == "precision_choice_conflict"
+        @test occursin("M.id declares Float64", sprint(showerror, err))
+        # A key compared with a computed operand cannot be compared in binary64.
+        computed = _op("ifelse", _op("==", "id", _op("*", "a", 2.0)), quantity, 0.0)
+        computed_ir = operator_ir(problem(declared_key(computed)); unspecified_eltype = Float32)
+        computed_frag = emit_fragment(computed_ir)
+        @test_throws EarthSciAST.DirectEmitError Reactant.@compile computed_frag(u32, aux32, hit, t, ())
+
+        # A sum the build evaluates once in binary64 (a table of a
+        # build-time-evaluable subexpression) cannot be rounded per operation
+        # by a binary32 fragment, so the request is refused.
+        table = witness()
+        table["index_sets"]["k"] = Dict("kind" => "interval", "size" => 3)
+        table["models"]["M"]["variables"]["W"] = Dict(
+            "type" => "parameter", "units" => "s", "shape" => ["cells", "k"],
+            "default" => [[1.0e8, 1.0, -1.0e8], [1.0e8, 3.0, -1.0e8]]
+        )
+        neighbours = _op("+", _ix("x", _op("-", "i", 1)), _ix("x", _op("+", "i", 1)))
+        row = merge(
+            _op("faq"), Dict(
+                "expr" => _op("index", "W", "i", "kk"), "reduce" => "+", "output_idx" => [],
+                "ranges" => Dict("kk" => Dict("from" => "k"))
+            )
+        )
+        table["models"]["M"]["equations"][1]["rhs"]["expr"] = _op("+", neighbours, row)
+        err = refusal(table)
+        @test err.code == "float32_unsupported"
+        @test occursin("build-time-evaluable", sprint(showerror, err))
     end
 
     @testset "four stage sites and runtime input changes" begin

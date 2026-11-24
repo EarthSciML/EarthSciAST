@@ -59,7 +59,13 @@ program = Reactant.@compile donated_args = :none frag(u, aux, p, t, ())
   evaluation for a fragment whose variables resolve to Float32 (esm-spec
   §11.3.3). `emit_fragment(ir)` uses the resolved type. Pass Float32 state
   and auxiliary tensors for single-precision evaluation. Time, scalar
-  parameters and floating-point forcing are converted on read.
+  parameters and floating-point forcing are converted on read. A scalar
+  parameter declared Float64 and used only as an `==`/`!=` operand against a
+  parameter or a literal is compared in Float64 (`ir.binary64_keys`). A build
+  that evaluates part of the model once on the host (setup-time arrays,
+  tables of build-time-evaluable subexpressions) is refused with
+  `float32_unsupported`, since those results would not be rounded per
+  operation.
 - Float32 fragments round after each operation and accumulate in expression
   order. For Float64 fragments, `fold = :tree` emits balanced binary folds
   and evaluates constant subtrees on the host with the same grouping.

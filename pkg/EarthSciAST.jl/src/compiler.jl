@@ -922,6 +922,31 @@ _percell_mark() = (r = _percell_counter(); r === nothing ? 0 : r[])
 _percell_restore!(n::Int) = (r = _percell_counter(); r === nothing || (r[] = n); nothing)
 
 # ---------------------------------------------------------------------------
+# Arithmetic a build evaluates on the host
+# ---------------------------------------------------------------------------
+#
+# A build evaluates some of a model's arithmetic once, in binary64, and hands
+# the result to the right-hand side as data: setup-time arrays and the tables
+# of build-time-evaluable subexpressions. A binary32 consumer of the build
+# (`operator_ir(…; unspecified_eltype = Float32)`) would then round each result
+# once instead of rounding every operation, so it records what the build
+# evaluated (`_recording_host_arithmetic`) and refuses. `_note_host_arithmetic!`
+# is a no-op outside a recording.
+const _HOST_ARITHMETIC_KEY = :earthsci_host_arithmetic
+
+function _recording_host_arithmetic(f)
+    sites = String[]
+    v = task_local_storage(f, _HOST_ARITHMETIC_KEY, sites)
+    return v, unique!(sites)
+end
+
+function _note_host_arithmetic!(site::AbstractString)
+    sites = get(task_local_storage(), _HOST_ARITHMETIC_KEY, nothing)
+    sites === nothing || push!(sites, String(site))
+    return nothing
+end
+
+# ---------------------------------------------------------------------------
 # The refusal
 # ---------------------------------------------------------------------------
 

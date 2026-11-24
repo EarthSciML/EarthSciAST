@@ -42,7 +42,8 @@ function _kernel_operator_ir(prob, spec, target; unspecified_eltype)
         base.extra
     end
     return OperatorIR(
-        base.f, layout, base.maps, target, extra, parameter_names(ks.rhs), base.forcing, plan, base.working_eltype
+        base.f, layout, base.maps, target, extra, parameter_names(ks.rhs), base.forcing, plan,
+        base.working_eltype, base.binary64_keys
     )
 end
 

@@ -203,6 +203,8 @@ function _de_batch(
                 return _de_bin(ctx, _hlo.power, base, _de_const(ctx, e.literal))
             end
         end
+        exact = _de_exact_compare(ctx, b)
+        exact === nothing || return exact
         c = _DEVal[_de_batch(ctx, ch, L, cache) for ch in b.children]
         return _de_op(ctx, b.op, c)
     end
