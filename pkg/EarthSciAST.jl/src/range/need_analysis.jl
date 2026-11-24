@@ -301,6 +301,11 @@ function _rule_display(name::AbstractString)
     s = String(name)
     occursin('\0', s) || return s
     parts = split(s, '\0'; keepempty = false)
+    # An array argument computed for a call in its equation (call.jl
+    # `_hoist_array_arguments`); any other lifted name is a nested reduction.
+    m = match(_HOIST_LABEL_RE, s)
+    m !== nothing && m[1] == _ARGARR_KIND &&
+        return string(parts[end], " (an array argument of a call in it, computed before the call)")
     return string(parts[end], " (a nested reduction lifted out of it)")
 end
 

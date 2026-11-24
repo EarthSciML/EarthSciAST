@@ -460,9 +460,10 @@ end
 # A compiler-report rule label with every lifted name replaced by the variable
 # whose equation it was lifted from (the name ends in it, after a NUL) and what
 # was lifted (the letter after the prefix, `_hoist_define!`).
-const _HOIST_LABEL_RE = r"\0hoist\0([gam]?)\d+\0([^\0\[\]]*)"
+const _HOIST_LABEL_RE = r"\0hoist\0(argarr|[gam]?)\d+\0([^\0\[\]]*)"
 const _HOIST_LABEL_KIND = Dict(
     "" => "reduction", "g" => "gather", "a" => "aggregate", "m" => "region term",
+    "argarr" => "array argument",
 )
 _hoist_public_label(label::AbstractString) =
     replace(
