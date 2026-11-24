@@ -243,11 +243,54 @@ pub struct AssertionResult {
 /// refusal. The same kind of expression seeding a model's `ic` is the model's,
 /// and is exercised and gated at construction instead
 /// ([`crate::problem::esm_problem`]).
+///
+/// No operator registry is in scope: an expression holding an operator
+/// reference (`apply_operator`) is refused. Evaluate one with
+/// [`evaluate_cellwise_with_operators`].
 pub fn evaluate_cellwise(
     expr: &Expr,
     cells: &[Vec<i64>],
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
+) -> Result<Vec<f64>, String> {
+    cellwise(
+        expr,
+        cells,
+        index_sets,
+        params,
+        crate::operator_refs::Instances::empty(),
+    )
+}
+
+/// [`evaluate_cellwise`] of an expression whose operator references
+/// (esm-spec §9.6.4) resolve against `operators`: the registry of the
+/// component the expression belongs to
+/// ([`crate::EsmFile::component_operators`]), which is how the runner
+/// evaluates an inline test's analytic `reference`.
+pub fn evaluate_cellwise_with_operators(
+    expr: &Expr,
+    cells: &[Vec<i64>],
+    index_sets: &HashMap<String, IndexSet>,
+    params: &HashMap<String, f64>,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> Result<Vec<f64>, String> {
+    // Each instance body's ranges resolve against `index_sets`, as the
+    // expression's own do.
+    let ops = crate::simulate_array::build_instances(
+        operators.clone(),
+        index_sets,
+        HashMap::new(),
+        &HashMap::new(),
+    );
+    cellwise(expr, cells, index_sets, params, &ops)
+}
+
+fn cellwise(
+    expr: &Expr,
+    cells: &[Vec<i64>],
+    index_sets: &HashMap<String, IndexSet>,
+    params: &HashMap<String, f64>,
+    ops: &crate::operator_refs::Instances,
 ) -> Result<Vec<f64>, String> {
     let value = eval_buildtime_field_routed(
         None,
@@ -256,7 +299,7 @@ pub fn evaluate_cellwise(
         params,
         &HashMap::new(),
         BuildEval::PerCell,
-        crate::operator_refs::Instances::empty(),
+        ops,
     )
     .map_err(|e| e.to_string())?
     .into_value();
@@ -1383,6 +1426,20 @@ fn component_at<'a>(file: &'a EsmFile, path: &str) -> Option<ComponentAt<'a>> {
     }
 }
 
+/// The operator registry of the top-level component a dotted component path
+/// starts with (a model, else a reaction system of that name): the registry
+/// every expression written in that component, at any depth, resolves its
+/// references against.
+fn component_registry(file: &EsmFile, path: &str) -> crate::operator_refs::OperatorRegistry {
+    let top = path.split('.').next().unwrap_or(path);
+    let kind = if file.models.as_ref().is_some_and(|m| m.contains_key(top)) {
+        "models"
+    } else {
+        "reaction_systems"
+    };
+    file.component_operators(&format!("{kind}.{top}"))
+}
+
 /// The MODEL a dotted component path names, or `None` for a reaction system or
 /// a path that names nothing.
 fn model_at<'a>(file: &'a EsmFile, path: &str) -> Option<&'a Model> {
@@ -1440,6 +1497,9 @@ fn eval_assertion(
 ) -> Result<f64, String> {
     let file = view.file;
     let ti = time_index(&sol.time, assertion.time)?;
+    // The asserting component's registry: the references the assertion's
+    // own expressions (an analytic `reference`) make resolve against it.
+    let operators = component_registry(file, model_name);
     // A scoped `variable` reads the component it names (schema
     // `Assertion.variable`); every lookup below runs against that owner.
     let (owner, asserted) = resolve_asserted_name(file, model_name, &assertion.variable);
@@ -1613,7 +1673,13 @@ fn eval_assertion(
             let arrays = array_scope_names(insp.setup_arrays.keys().map(String::as_str));
             let dims = view.field_shape(model_name, variable).unwrap_or_default();
             let bound = bind_dimension_names(expr, &dims, &scope, &arrays)?;
-            Some(evaluate_cellwise(&bound, &cell_tuples, index_sets, &scope)?)
+            Some(evaluate_cellwise_with_operators(
+                &bound,
+                &cell_tuples,
+                index_sets,
+                &scope,
+                &operators,
+            )?)
         }
         Some(AssertionReference::FromFile(ff)) => {
             Some(from_file_reference(ff, base_dir, &cell_tuples)?)
@@ -1922,8 +1988,7 @@ fn unevaluable_time_dependent_assertion(
         }
         let (owner, variable) = resolve_asserted_name(file, model_name, &a.variable);
         let dependent = per_owner.entry(owner.clone()).or_insert_with(|| {
-            let top = owner.split('.').next().unwrap_or(&owner);
-            let operators = file.component_operators(&format!("models.{top}"));
+            let operators = component_registry(file, &owner);
             model_at(file, &owner)
                 .map(|m| time_dependent_observeds(m, &operators))
                 .unwrap_or_default()
@@ -4266,6 +4331,48 @@ mod tests {
         for r in &results {
             assert!(r.passed, "assertion #{}: {}", r.assertion_idx, r.message);
         }
+    }
+
+    /// An analytic `reference` holding an operator reference (a grid-geometry
+    /// definition of the asserting model) is evaluated against that model's
+    /// registry.
+    #[test]
+    fn a_reference_holding_an_operator_reference_evaluates() {
+        let mut doc = decay_doc();
+        doc["models"]["M"]["operators"] =
+            json!({"centers": {"params": [], "body": x_coord_aggregate()}});
+        doc["models"]["M"]["tests"][0]["assertions"] = json!([
+            {"variable": "u", "time": 0.0, "expected": 0.0,
+             "tolerance": {"abs": 1e-12}, "reduce": "L2_error",
+             "reference": {"op": "cos", "args": [{"op": "*", "args": [
+                 std::f64::consts::PI,
+                 {"op": "apply_operator", "args": [], "name": "centers", "bindings": {}}]}]}},
+        ]);
+        let file = load_string(&doc.to_string()).expect("doc loads");
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed, "{}", results[0].message);
+        // Directly: with the model's registry the reference evaluates; with
+        // none it is refused by name.
+        let reference: Expr = serde_json::from_value(json!(
+            {"op": "apply_operator", "args": [], "name": "centers", "bindings": {}}))
+        .unwrap();
+        let index_sets: HashMap<String, IndexSet> = file
+            .index_sets
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        let cells: Vec<Vec<i64>> = (1..=N).map(|i| vec![i]).collect();
+        let no_params = HashMap::new();
+        let ops = file.component_operators("models.M");
+        let got =
+            evaluate_cellwise_with_operators(&reference, &cells, &index_sets, &no_params, &ops)
+                .expect("evaluates");
+        assert!((got[0] - 0.5 / N as f64).abs() < 1e-15, "{got:?}");
+        let err = evaluate_cellwise(&reference, &cells, &index_sets, &no_params)
+            .expect_err("no registry");
+        assert!(err.contains("apply_operator"), "{err}");
     }
 
     /// esm-spec §6.6.5 names what an analytic `reference` may read — the

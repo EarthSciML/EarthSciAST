@@ -391,8 +391,8 @@ pub use compile_error::CompileError;
 #[cfg(feature = "solve")]
 pub use inline_tests::{
     AssertionResult, InlineTestOptions, check_assertion, ephemeral_injected_file,
-    evaluate_cellwise, field_reduce, resolve_tolerance, run_inline_tests, run_inline_tests_paths,
-    run_inline_tests_with_options, state_cells,
+    evaluate_cellwise, evaluate_cellwise_with_operators, field_reduce, resolve_tolerance,
+    run_inline_tests, run_inline_tests_paths, run_inline_tests_with_options, state_cells,
 };
 pub use simulate::{
     Alg, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, Progress, ProgressFn, ReturnCode, SimulateError,
@@ -430,7 +430,8 @@ pub use units::{
     UNIT_FINDING_DIMENSIONAL_MISMATCH, UNIT_FINDING_DIMENSIONLESS_LITERAL,
     UNIT_FINDING_UNPARSEABLE, Unit, UnitError, UnitFinding, UnitParseFailure, UnitSeverity,
     build_unit_env, check_dimensional_consistency, check_equation_dimensions,
-    check_expression_dimensions, convert_units, equation_dimension_verdict, model_unit_env,
+    check_equation_dimensions_with_operators, check_expression_dimensions, convert_units,
+    equation_dimension_verdict, equation_dimension_verdict_with_operators, model_unit_env,
     parse_unit, validate_equation_dimensions,
 };
 
