@@ -1723,6 +1723,16 @@ keep their global 1-based values.
   non-state input, `gather_lane_inputs!` fills them for a `cells` list, and the
   pre-gathered evaluation reads them in place of the gathers. Its results are
   bitwise those of the plain call.
+- **A time per lane.** A call may give one time per lane, `ts` (at least `n`
+  and at most `L` entries; a padding lane takes `ts[1]`): Rust
+  `LaneProgram::eval_times_into` and `eval_gathered_times_into`, Julia `rhs!`
+  with `ts::AbstractVector`. Then `du_L[v, l] == G_k(…, t = ts[l])[v,
+  cells[:, l]]` bitwise, whatever the other lanes' times, and with every
+  `ts[l]` equal to `t` the call equals the one-time call. Every observed that
+  depends on `t` (or on the state) is computed per lane; a pre-gathered read
+  never involves `t`. Rust evaluates a batch at mixed times in one pass; Julia
+  evaluates lanes of equal time together, its 0-d observeds being one value per
+  call.
 - **Capacity.** Julia loops over lanes with a run-time count, so one build
   serves every `L` (`L = size(cells, 2)`). Rust slot boxes are static, so a lane
   program is built per capacity (re-lowering only, no document rebuild) and `L`

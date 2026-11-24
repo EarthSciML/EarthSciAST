@@ -1125,9 +1125,7 @@ mod precision_source {
 #[test]
 fn whole_array_faq_right_hand_sides_build_lanes() {
     let (nx, ny) = (3, 4);
-    let whole = |expr: serde_json::Value, ranges: serde_json::Value| {
-        json!({"op": "faq", "args": [], "output_idx": ["i", "j"], "ranges": ranges, "expr": expr})
-    };
+    let whole = |expr: serde_json::Value, ranges: serde_json::Value| json!({"op": "faq", "args": [], "output_idx": ["i", "j"], "ranges": ranges, "expr": expr});
     let xy = json!({"i": {"from": "x"}, "j": {"from": "y"}});
     let xyk = json!({"i": {"from": "x"}, "j": {"from": "y"}, "k": {"from": "z"}});
     let doc = model(
@@ -1190,7 +1188,123 @@ fn whole_array_faq_right_hand_sides_build_lanes() {
             .expect("lane eval");
         for (l, &c) in batch.iter().enumerate() {
             assert_eq!(du[ou * 4 + l].to_bits(), want[c].to_bits(), "u at cell {c}");
-            assert_eq!(du[ov * 4 + l].to_bits(), want[n + c].to_bits(), "v at cell {c}");
+            assert_eq!(
+                du[ov * 4 + l].to_bits(),
+                want[n + c].to_bits(),
+                "v at cell {c}"
+            );
         }
     }
+}
+
+/// U19: each lane at its own time. `D(u[i]) = -k·u[i] + g[i]·s` with `k`
+/// a scalar observed of `t`, `s` one of `k` and `t`, and an array observed
+/// `g[i] = c[i]·t`: every lane equals the
+/// whole-domain program at its own cell and its own time, bit for bit,
+/// whatever the other lanes' times; and `eval_into` with one time agrees
+/// with `eval_times_into` at that time in every lane.
+#[test]
+fn each_lane_evaluates_at_its_own_time() {
+    let n = 5;
+    let doc = model(
+        json!({"x": {"kind": "interval", "size": n}}),
+        json!({
+            "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+            "c": {"type": "parameter", "units": "1", "shape": ["x"],
+                  "default": [0.5, 1.5, 2.5, 3.5, 4.5]},
+            "k": {"type": "unknown", "units": "1"},
+            "s": {"type": "unknown", "units": "1"},
+            "g": {"type": "unknown", "units": "1", "shape": ["x"]}
+        }),
+        json!([
+            {"lhs": "k", "rhs": {"op": "+", "args": [1.0, {"op": "sin", "args": ["t"]}]}},
+            {"lhs": "s", "rhs": {"op": "*", "args": [3.0, "k", {"op": "cos", "args": ["t"]}]}},
+            faq_eq(ix("g", vec![json!("i")]),
+                   json!({"op": "*", "args": [ix("c", vec![json!("i")]), "t"]}),
+                   json!({"i": {"from": "x"}}), &["i"]),
+            faq_eq(
+                d_of(ix("u", vec![json!("i")])),
+                json!({"op": "+", "args": [
+                    {"op": "*", "args": [-1.0, "k", ix("u", vec![json!("i")])]},
+                    {"op": "*", "args": [ix("g", vec![json!("i")]), "s"]}]}),
+                json!({"i": {"from": "x"}}),
+                &["i"]
+            )
+        ]),
+    );
+    let prog = program(&doc, Compiler::Native);
+    let cap = 4;
+    let lanes = prog
+        .lanes(
+            LaneKind::Cells {
+                sets: vec!["x".to_string()],
+            },
+            cap,
+        )
+        .expect("lanes over a time-dependent program");
+    let gu = varied(n as usize);
+    let p = prog
+        .parameter_vector(&Default::default())
+        .expect("defaults");
+    let fs = prog.default_forcing();
+    let whole_at = |t: f64| {
+        let mut du = vec![f64::NAN; prog.layout().u_len];
+        let mut ws = prog.new_workspace();
+        prog.eval_into(&gu, &[], &p, t, &fs, &mut du, &mut ws)
+            .expect("whole-domain eval");
+        du
+    };
+    let lay = lanes.layout().clone();
+    let mut ws = lanes.new_workspace();
+    // Lanes hold cells 4, 1, 3 (and one padding lane), each at its own time.
+    let cells: Vec<i32> = vec![4, 1, 3, 2];
+    let ts = [0.3, 2.0, 7.25];
+    let mut u = vec![0.0; lay.u_len];
+    for (l, &c) in cells.iter().take(3).enumerate() {
+        u[l] = gu[(c - 1) as usize];
+    }
+    let mut du = vec![f64::NAN; lay.u_len];
+    let r = lanes.eval_times_into(&u, &[], &p, &ts, &fs, &cells, 3, &mut du, &mut ws);
+    match r {
+        Ok(()) => {
+            for (l, &c) in cells.iter().take(3).enumerate() {
+                let want = whole_at(ts[l]);
+                assert_eq!(
+                    du[l].to_bits(),
+                    want[(c - 1) as usize].to_bits(),
+                    "lane {l} at t = {}",
+                    ts[l]
+                );
+            }
+        }
+        Err(e) => panic!("{e}"),
+    }
+    // One time for every lane: eval_into and eval_times_into agree.
+    let mut d1 = vec![f64::NAN; lay.u_len];
+    let mut d2 = vec![f64::NAN; lay.u_len];
+    lanes
+        .eval_into(&u, &[], &p, 2.0, &fs, &cells, 3, &mut d1, &mut ws)
+        .expect("one time");
+    lanes
+        .eval_times_into(
+            &u,
+            &[],
+            &p,
+            &[2.0, 2.0, 2.0],
+            &fs,
+            &cells,
+            3,
+            &mut d2,
+            &mut ws,
+        )
+        .expect("per-lane times");
+    for l in 0..3 {
+        assert_eq!(d1[l].to_bits(), d2[l].to_bits(), "lane {l}");
+    }
+    // Too few times is refused.
+    assert!(
+        lanes
+            .eval_times_into(&u, &[], &p, &[1.0], &fs, &cells, 3, &mut d2, &mut ws)
+            .is_err()
+    );
 }

@@ -1021,3 +1021,59 @@ function rhs!(
     end
     return du
 end
+
+"""
+    rhs!(du, lanes::LaneProgram, ws, u, aux, p, ts::AbstractVector, fs::ForcingSet, cells, n) -> du
+
+Each lane at its own time (U19): lane `l ≤ n` evaluates at `ts[l]`, and its
+value equals the whole-domain program's at `cells[:, l]` and time `ts[l]`,
+bit for bit, whatever the other lanes' times. `ts` holds at least `n` times.
+
+The lanes are evaluated in groups of equal time, each group one call of the
+one-time [`rhs!`](@ref): the Julia lane program computes its 0-d observeds
+once per call, so lanes at different times cannot share a call yet.
+"""
+function rhs!(
+        du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
+        aux::AbstractVector, p, ts::AbstractVector{<:Real}, fs::ForcingSet,
+        cells::AbstractMatrix, n::Integer
+    )
+    L = _lane_check(lp, ws, du, u, aux, p, cells, n)
+    length(ts) >= n || throw(
+        DimensionMismatch("rhs!: $(length(ts)) times for n = $n lanes")
+    )
+    nu, na = lp.layout.n_u, lp.layout.n_aux
+    groups = Dict{UInt64, Vector{Int}}()
+    order = UInt64[]
+    for l in 1:Int(n)
+        k = reinterpret(UInt64, Float64(ts[l]))
+        haskey(groups, k) || push!(order, k)
+        push!(get!(groups, k, Int[]), l)
+    end
+    if length(order) == 1
+        return rhs!(du, lp, ws, u, aux, p, Float64(ts[1]), fs, cells, n)
+    end
+    su, sa, sd = zeros(nu * L), zeros(na * L), zeros(nu * L)
+    sc = similar(cells)
+    for k in order
+        ls = groups[k]
+        m = length(ls)
+        for (j, l) in enumerate(ls)
+            for e in 0:(nu - 1)
+                su[e * L + j] = u[e * L + l]
+            end
+            for e in 0:(na - 1)
+                sa[e * L + j] = aux[e * L + l]
+            end
+            sc[:, j] .= view(cells, :, l)
+        end
+        for j in (m + 1):L
+            sc[:, j] .= view(cells, :, ls[1])
+        end
+        rhs!(sd, lp, ws, su, sa, p, reinterpret(Float64, k), fs, sc, m)
+        for (j, l) in enumerate(ls), e in 0:(nu - 1)
+            du[e * L + l] = sd[e * L + j]
+        end
+    end
+    return du
+end

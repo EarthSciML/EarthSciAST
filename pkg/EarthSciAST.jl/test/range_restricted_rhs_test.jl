@@ -1081,6 +1081,74 @@ end
     end
 end
 
+# U19: lanes each at their own time. Every lane equals the one-time call at
+# its own time, bit for bit, whatever the other lanes' times.
+@testset "lanes at their own times" begin
+    ix(v, i) = Dict("op" => "index", "args" => Any[v, i])
+    doc = Dict(
+        "esm" => "2.0.0",
+        "metadata" => Dict("name" => "lanetime", "authors" => ["test"]),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 5)),
+        "models" => Dict(
+            "M" => Dict(
+                "variables" => Dict(
+                    "u" => Dict("type" => "unknown", "units" => "1", "shape" => ["x"], "default" => 1.0),
+                    "c" => Dict(
+                        "type" => "parameter", "units" => "1", "shape" => ["x"],
+                        "default" => [0.5, 1.5, 2.5, 3.5, 4.5]
+                    ),
+                    "k" => Dict("type" => "unknown", "units" => "1")
+                ),
+                "equations" => Any[
+                    Dict("lhs" => "k", "rhs" => Dict("op" => "+", "args" => Any[1.0, Dict("op" => "sin", "args" => Any["t"])])),
+                    Dict(
+                        "lhs" => Dict(
+                            "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                            "ranges" => Dict("i" => Dict("from" => "x")),
+                            "expr" => Dict("op" => "D", "args" => Any[ix("u", "i")], "wrt" => "t")
+                        ),
+                        "rhs" => Dict(
+                            "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                            "ranges" => Dict("i" => Dict("from" => "x")),
+                            "expr" => Dict(
+                                "op" => "+", "args" => Any[
+                                    Dict("op" => "*", "args" => Any[-1.0, "k", ix("u", "i")]),
+                                    Dict("op" => "*", "args" => Any[ix("c", "i"), "t"]),
+                                ]
+                            )
+                        )
+                    ),
+                ]
+            )
+        )
+    )
+    path = joinpath(mktempdir(), "lanetime.esm")
+    write(path, EarthSciAST.JSON3.write(doc))
+    prob = esm_problem(path, (0.0, 1.0))
+    lp = lanes(rhs_program(prob), :cells, ["x"]; chunk = 4)
+    LL = lane_layout(lp)
+    L = 4
+    cells = Int32[4 1 3 2]
+    u = [0.7, 1.3, 2.1, 0.0]
+    ts = [0.3, 2.0, 7.25]
+    fs = default_forcing_set(lp)
+    ws = rhs_workspace(lp)
+    du = fill(NaN, LL.n_u * L)
+    rhs!(du, lp, ws, u, Float64[], prob.p, ts, fs, cells, 3)
+    for l in 1:3
+        one = fill(NaN, LL.n_u * L)
+        rhs!(one, lp, ws, u, Float64[], prob.p, ts[l], fs, cells, 3)
+        @test reinterpret(UInt64, du[l]) == reinterpret(UInt64, one[l])
+    end
+    # Equal times: the one-time call.
+    du2 = fill(NaN, LL.n_u * L)
+    rhs!(du2, lp, ws, u, Float64[], prob.p, [2.0, 2.0, 2.0], fs, cells, 3)
+    one = fill(NaN, LL.n_u * L)
+    rhs!(one, lp, ws, u, Float64[], prob.p, 2.0, fs, cells, 3)
+    @test reinterpret.(UInt64, du2[1:3]) == reinterpret.(UInt64, one[1:3])
+    @test_throws DimensionMismatch rhs!(du2, lp, ws, u, Float64[], prob.p, [1.0], fs, cells, 3)
+end
+
 # The forms EarthSciIntegrator's derived documents write: a whole-array
 # right-hand side `D(u) = faq{…}` and a `makearray` whose region value is an
 # array `faq` (a Jacobian document's band field). Every lane equals the
