@@ -397,6 +397,10 @@ jobs:
           '
 
       - name: Reactant test suite
+        env:
+          ESM_TEST_REACTANT_REPRO: '1'
+          JULIA_NUM_THREADS: '2'
+          XLA_FLAGS: --xla_cpu_prefer_vector_width=128
         run: julia --project=pkg/EarthSciAST.jl/test/reactant pkg/EarthSciAST.jl/test/reactant/runtests.jl
 
       - name: compiled_rhs harness self-test

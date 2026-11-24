@@ -94,18 +94,18 @@
     }
   },
   "counts": {
-    "symbols": 988,
+    "symbols": 1000,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 358,
+      "julia": 371,
       "typescript": 239,
       "python": 270,
       "rust": 397,
       "go": 457
     },
     "by_tier": {
-      "extension": 679,
-      "stable": 309
+      "extension": 690,
+      "stable": 310
     }
   },
   "planned": [
@@ -3173,6 +3173,14 @@
       }
     },
     {
+      "name": "emit_fragment",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "emit_fragment"
+      }
+    },
+    {
       "name": "emit_reference_preserving",
       "kind": "function",
       "tier": "extension",
@@ -4337,6 +4345,14 @@
       }
     },
     {
+      "name": "forcing_reach",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "forcing_reach"
+      }
+    },
+    {
       "name": "forcing_set",
       "kind": "function",
       "tier": "stable",
@@ -4460,6 +4476,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "gather_lane_inputs!"
+      }
+    },
+    {
+      "name": "gather_lanes",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "gather_lanes"
       }
     },
     {
@@ -4708,6 +4732,14 @@
       }
     },
     {
+      "name": "ir_layout",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "ir_layout"
+      }
+    },
+    {
       "name": "is_coupling_library_doc",
       "kind": "function",
       "tier": "stable",
@@ -4838,6 +4870,14 @@
       }
     },
     {
+      "name": "kernel_outputs",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "KernelOutputs"
+      }
+    },
+    {
       "name": "kernel_set",
       "kind": "type",
       "tier": "stable",
@@ -4942,6 +4982,14 @@
       "bindings": {
         "julia": "lanes",
         "python": "lanes"
+      }
+    },
+    {
+      "name": "lanes",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "Lanes"
       }
     },
     {
@@ -5653,6 +5701,23 @@
         "python": "OperatorComposeRequireMatchError",
         "typescript": "OperatorComposeRequireMatchError"
       }
+    },
+    {
+      "name": "operator_ir",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "operator_ir"
+      }
+    },
+    {
+      "name": "operator_ir",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "OperatorIR"
+      },
+      "notes": "spelling differs from the §2 rule: julia=OperatorIR (expected OperatorIr)"
     },
     {
       "name": "output_error",
@@ -6910,8 +6975,9 @@
     {
       "name": "rhs_selection",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "julia": "RhsSelection",
         "rust": "RhsSelection"
       }
     },
@@ -7070,6 +7136,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "scatter_grid!"
+      }
+    },
+    {
+      "name": "scatter_lanes",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "scatter_lanes"
       }
     },
     {
@@ -7955,6 +8029,14 @@
       }
     },
     {
+      "name": "tile",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "Tile"
+      }
+    },
+    {
       "name": "tile_block",
       "kind": "type",
       "tier": "extension",
@@ -7968,6 +8050,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "TileBox"
+      }
+    },
+    {
+      "name": "tile_classes",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "tile_classes"
       }
     },
     {
@@ -8851,6 +8941,14 @@
       "tier": "extension",
       "bindings": {
         "go": "VertexKindNode"
+      }
+    },
+    {
+      "name": "whole",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "Whole"
       }
     },
     {
