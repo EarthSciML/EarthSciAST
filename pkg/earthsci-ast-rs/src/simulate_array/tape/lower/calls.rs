@@ -20,6 +20,12 @@
 //! * a whole array (a state block, an observed, a constant array, a value the
 //!   caller computed over its box) is an array argument read in place: a
 //!   state variable of the function with the argument's box;
+//! * in a tile build (API_SPEC §5.8), a state over its storage box or an
+//!   observed over its need box is such an argument, and the function is
+//!   built as a tile build over it, so its reads are classified against the
+//!   global domain exactly as the caller's are (the halo walk in
+//!   `range/walk.rs` reads through the call and restricts the body the
+//!   reference names to the call's box);
 //! * a scalar value is a scalar argument: a parameter of the function;
 //! * a contraction index an unrolled contraction binds to its value at this
 //!   term is that literal.
@@ -65,6 +71,12 @@ enum ArgKind {
     Known(DimU, DimI, usize),
     /// An argument the function cannot take yet: the call declines.
     Unsupported,
+    /// A range-restricted source of a tile build (a state over its storage
+    /// box, an observed over its need box), passed by reference like any
+    /// array: box, the per-axis global domain its reads are classified
+    /// against, and the caller's name for it, as a diagnostic gives it. The
+    /// function reads it as the tile reads it (RFC U3 §4 rule 2).
+    Tile(DimU, DimI, Vec<TileAxisDom>, String),
     /// An inline `const` array literal, passed by reference like any array
     /// and read in the function as a constant array (its out-of-range reads
     /// fault as the literal's do). Its box.
@@ -703,6 +715,17 @@ impl<'m> TapeBuilder<'m> {
                 sc_lvs.push(lv);
                 ArgKind::Scalar
             }
+            LV::Arr(_) | LV::State(_) if self.tile_source(&lv).is_some() => {
+                let (name, axes) = self.tile_source(&lv).expect("a tile source");
+                let (shape, origin) = self.lv_box(&lv).expect("a tile source has a box");
+                arrays.push(match lv {
+                    LV::Arr(s) => SrcRef::Slot(s),
+                    LV::State(ix) => SrcRef::State(ix),
+                    _ => unreachable!("matched above"),
+                });
+                arr_lvs.push(lv);
+                ArgKind::Tile(shape, origin, axes, name)
+            }
             LV::Arr(s) => {
                 let (shape, origin) = self.lv_box(&lv).expect("an array slot has a box");
                 if origin.iter().any(|&o| o != 1) {
@@ -747,6 +770,10 @@ impl<'m> TapeBuilder<'m> {
         let mut known: Vec<(String, DimU, DimI, Arc<Vec<f64>>)> = Vec::new();
         let mut const_aliases: Vec<String> = Vec::new();
         let mut sorted_names: Vec<String> = Vec::new();
+        // Each state variable's tile domain and the caller's name for it, in
+        // `var_shapes` order (empty for an argument that is not a tile
+        // source).
+        let mut tile_states: Vec<(String, Vec<TileAxisDom>, String)> = Vec::new();
         for (p0, kind) in &key.params {
             // A runtime argument named like the time would read as the time
             // (the lowering resolves `t` first): it is renamed in the body.
@@ -754,7 +781,7 @@ impl<'m> TapeBuilder<'m> {
             let p = if p0 == "t"
                 && matches!(
                     kind,
-                    ArgKind::Array(..) | ArgKind::Scalar | ArgKind::Known(..)
+                    ArgKind::Array(..) | ArgKind::Tile(..) | ArgKind::Scalar | ArgKind::Known(..)
                 ) {
                 renamed = "\0param_t".to_string();
                 fixed.insert(p0.clone(), Expr::Variable(renamed.clone()));
@@ -778,6 +805,17 @@ impl<'m> TapeBuilder<'m> {
                             flat_offset: 0,
                         },
                     );
+                }
+                ArgKind::Tile(shape, origin, axes, caller) => {
+                    var_shapes.insert(
+                        p.clone(),
+                        VarShape {
+                            shape: shape.to_vec(),
+                            origin: origin.to_vec(),
+                            flat_offset: 0,
+                        },
+                    );
+                    tile_states.push((p.clone(), axes.clone(), caller.clone()));
                 }
                 ArgKind::Scalar => param_names.push(p.clone()),
                 ArgKind::Unsupported => unreachable!("declined at the call"),
@@ -822,6 +860,29 @@ impl<'m> TapeBuilder<'m> {
             scope = sc;
             &scope
         };
+        // A tile source argument is read as the tile reads it: the function
+        // is built as a tile build over its state variables' domains.
+        let tile = (!tile_states.is_empty()).then(|| {
+            let mut states = Vec::with_capacity(var_shapes.len());
+            let mut names = Vec::with_capacity(var_shapes.len());
+            for v in var_shapes.keys() {
+                match tile_states.iter().find(|(p, _, _)| p == v) {
+                    Some((_, axes, caller)) => {
+                        states.push(axes.clone());
+                        names.push(caller.clone());
+                    }
+                    None => {
+                        states.push(Vec::new());
+                        names.push(v.clone());
+                    }
+                }
+            }
+            TileLowering {
+                states,
+                observed: FxHashMap::default(),
+                names,
+            }
+        });
         let mut f = TapeBuilder::new(
             &var_shapes,
             &param_names,
@@ -829,6 +890,7 @@ impl<'m> TapeBuilder<'m> {
             const_scope,
             &no_forcing,
         );
+        f.tile = tile.as_ref();
         f.ops = self.ops;
         for n in &sorted_names {
             if let Some(&ix) = f.state_ix.get(n.as_str()) {
@@ -900,6 +962,7 @@ impl<'m> TapeBuilder<'m> {
         // A fail-closed fault the body can latch is emitted in the function
         // (its `Fault` / `FaultScan`), and latches when a call runs it.
         f.flush_rule_fault()?;
+        f.take_tile_violation()?;
         f.end_rule();
         let state_count = var_shapes.len();
         let result = match lv {
