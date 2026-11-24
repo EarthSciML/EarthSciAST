@@ -143,9 +143,9 @@ fn read_at(at: Value) -> Value {
 /// * `pick(a, x) = 2 a[floor(x) + 4] + a[floor(x - 2) + 4]`: the first read
 ///   faults once `x >= 1`, the second once `x < -1`, so a call's state picks
 ///   which of its two reads faults, and in which cell;
-/// * nested: `pick(a, x) = a[floor(x) + 4]` and `twice(a, x, y) = pick(a, x)
-///   + pick(a, y)`, called with `y = 0 - x`, so a field's first or second
-///   inner call faults.
+/// * nested: `pick(a, x) = a[floor(x) + 4]` and
+///   `twice(a, x, y) = pick(a, x) + pick(a, y)`, called with `y = 0 - x`, so
+///   a field's first or second inner call faults.
 ///
 /// With `between`, a rule whose own read faults the same way (`D(w) =
 /// C[floor(w) + 4]`) sits between the first field's rule and the others'.
