@@ -100,15 +100,33 @@ pub(super) struct FuncTable {
     known_vals: FxHashMap<usize, Arc<Vec<f64>>>,
     /// Each function's program text ([`fingerprint`]): two instances that
     /// compile to the same program are one function.
-    by_program: FxHashMap<String, (u32, FuncResult)>,
+    by_program: FxHashMap<u128, (u32, FuncResult)>,
 }
 
 /// The whole text of an assembled function program: its instructions, its
 /// tables, its state variables, its parameter count, its precision and its
 /// result. Two programs with the same text compute the same function of
 /// their arguments.
-fn fingerprint(prog: &TapeProgram) -> String {
-    format!(
+fn fingerprint(prog: &TapeProgram) -> u128 {
+    // Hashed as it is written: the text is never held.
+    struct H(
+        std::collections::hash_map::DefaultHasher,
+        std::collections::hash_map::DefaultHasher,
+    );
+    impl std::fmt::Write for H {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            use std::hash::Hasher;
+            self.0.write(s.as_bytes());
+            self.1.write_u8(0xa5);
+            self.1.write(s.as_bytes());
+            Ok(())
+        }
+    }
+    use std::fmt::Write as _;
+    use std::hash::Hasher;
+    let mut h = H(Default::default(), Default::default());
+    let _ = write!(
+        h,
         "{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{}",
         prog.instrs,
         prog.tables,
@@ -121,7 +139,8 @@ fn fingerprint(prog: &TapeProgram) -> String {
         prog.exports.iter().map(|(_, s)| *s).collect::<Vec<_>>(),
         prog.n_const,
         prog.n_segment
-    )
+    );
+    (u128::from(h.0.finish()) << 64) | u128::from(h.1.finish())
 }
 
 pub(super) type SharedFuncs = Rc<RefCell<FuncTable>>;

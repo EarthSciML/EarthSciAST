@@ -324,9 +324,8 @@ pub(super) fn run_range(
                     .map(|o| resolve_scalar(o, env, slab))
                     .collect();
                 let fctx = funcs[spec.func as usize].get_or_insert_with(|| {
-                    let mut c =
+                    let c =
                         super::TapeCtx::new(std::sync::Arc::clone(&prog.funcs[spec.func as usize]));
-                    c.set_serial();
                     Box::new(c)
                 });
                 let res =

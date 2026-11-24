@@ -680,6 +680,19 @@ pub(super) fn run_function(
         declared,
         arrays,
     };
+    // A function's array work splits across the process-wide pool as the
+    // caller's does: a call runs on the calling thread, between the caller's
+    // own phases.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (ways, threads) = if exec.serial {
+            (1, 1)
+        } else {
+            (par::call_ways(exec.call_work), par::thread_budget())
+        };
+        exec.scratch.fscratch.workers.call_ways = ways;
+        exec.scratch.fscratch.workers.threads = threads;
+    }
     let prime_end = (prog.n_const + prog.n_segment) as usize;
     let mut no_dy: [f64; 0] = [];
     if exec.primed_param_epoch != param_epoch {
@@ -687,7 +700,7 @@ pub(super) fn run_function(
         interp::run_range(&env, 0..prime_end, exec, &mut no_dy);
         refill_primed(prog, exec);
     }
-    interp::run_range(&env, prime_end..prog.instrs.len(), exec, &mut no_dy);
+    run_continuous(&env, prime_end..prog.instrs.len(), exec, &mut no_dy);
     let (_, result) = prog.exports[0];
     exec.slab
         .as_ptr()
