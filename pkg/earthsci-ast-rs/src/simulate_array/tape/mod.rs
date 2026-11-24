@@ -58,13 +58,13 @@
 
 #[cfg(test)]
 mod array_tests;
+mod batch;
 #[cfg(test)]
 mod batch_tests;
 #[cfg(test)]
 mod closed_template_tests;
 #[cfg(test)]
 mod data_gather_tests;
-mod batch;
 mod dedup;
 mod exec;
 #[cfg(test)]
@@ -709,7 +709,11 @@ impl ArrayCompiled {
                     out,
                     "       {:?}{}",
                     prog.tables.calls[*call as usize],
-                    if batch > 1 { format!(" batch of {batch}") } else { String::new() }
+                    if batch > 1 {
+                        format!(" batch of {batch}")
+                    } else {
+                        String::new()
+                    }
                 );
             }
         }
@@ -720,7 +724,10 @@ impl ArrayCompiled {
                 out,
                 "function {f}: {:?} state {:?} params {} fused groups {}",
                 fp.rules.first().map(|r| &r.name),
-                fp.state_vars.iter().map(|sv| &sv.shape[..]).collect::<Vec<_>>(),
+                fp.state_vars
+                    .iter()
+                    .map(|sv| &sv.shape[..])
+                    .collect::<Vec<_>>(),
                 fp.params_len,
                 fp.fused.len()
             );
@@ -736,7 +743,11 @@ impl ArrayCompiled {
                         out,
                         "         {:?}{}",
                         fp.tables.calls[*call as usize],
-                        if batch > 1 { format!(" batch of {batch}") } else { String::new() }
+                        if batch > 1 {
+                            format!(" batch of {batch}")
+                        } else {
+                            String::new()
+                        }
                     );
                 }
             }
@@ -749,7 +760,10 @@ impl ArrayCompiled {
                     fs.inputs.len(),
                     fs.schedule.n_runs,
                     fs.inputs.iter().filter(|x| x.shifted_ix.is_some()).count(),
-                    fs.inputs.iter().filter(|x| x.gather.is_some() || x.index.is_some()).count(),
+                    fs.inputs
+                        .iter()
+                        .filter(|x| x.gather.is_some() || x.index.is_some())
+                        .count(),
                 );
             }
         }

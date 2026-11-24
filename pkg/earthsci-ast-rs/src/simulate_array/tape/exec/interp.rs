@@ -1199,7 +1199,9 @@ pub(super) struct Cx<'a> {
 /// The number of calls that run as one execution from `pc`: the batch's
 /// length when one starts there ([`TapeProgram::call_batches`]), else 1.
 pub(super) fn calls_at(prog: &TapeProgram, pc: usize) -> usize {
-    prog.call_batches.get(pc).map_or(1, |&n| (n as usize).max(1))
+    prog.call_batches
+        .get(pc)
+        .map_or(1, |&n| (n as usize).max(1))
 }
 
 /// Run the calls `pc..pc + n` of `env.prog` (one [`Instr::Call`], or a batch
@@ -1224,7 +1226,8 @@ pub(super) unsafe fn exec_calls(
     ff.args.clear();
     for ins in calls {
         let target = slab.slot(out_of(ins));
-        ff.args.push(&prog.tables.calls[call_of(ins) as usize], env, slab, target);
+        ff.args
+            .push(&prog.tables.calls[call_of(ins) as usize], env, slab, target);
     }
     if unsafe { run_frames(&mut ff, env.t, env.forcing, env.declared) } {
         funcs[func_of(prog, pc)] = Some(ff);
@@ -1435,7 +1438,12 @@ pub(super) unsafe fn run_frames(
             // A function's result is read from its slot; nothing publishes.
             Instr::Export { .. } => {}
             Instr::Fused { spec } if fused_frames[*spec as usize] => {
-                let super::TapeExec { slab, slot_off, simd, .. } = &mut *exec;
+                let super::TapeExec {
+                    slab,
+                    slot_off,
+                    simd,
+                    ..
+                } = &mut *exec;
                 // The group that defines the result writes it into the
                 // callers' slots.
                 let to = direct
@@ -1446,7 +1454,11 @@ pub(super) unsafe fn run_frames(
                     // the group reads and writes them through the handles
                     // one frame's operands at a time.
                     let p = unsafe { slab.as_mut_ptr().add(k * l) };
-                    Slab::new(unsafe { std::slice::from_raw_parts_mut(p, l) }, slot_off, slots)
+                    Slab::new(
+                        unsafe { std::slice::from_raw_parts_mut(p, l) },
+                        slot_off,
+                        slots,
+                    )
                 };
                 // SAFETY: every instruction before it has run in every
                 // frame, and this thread alone runs the frames.

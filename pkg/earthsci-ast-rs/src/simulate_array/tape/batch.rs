@@ -58,8 +58,11 @@ pub(super) fn batch_calls(prog: &mut TapeProgram) {
     ];
     // Per part: each batch's members (positions, ascending), keyed by its
     // first member's position.
-    let mut edits: Vec<(std::ops::Range<usize>, Vec<(Instr, usize)>, Vec<(usize, usize)>)> =
-        Vec::new();
+    let mut edits: Vec<(
+        std::ops::Range<usize>,
+        Vec<(Instr, usize)>,
+        Vec<(usize, usize)>,
+    )> = Vec::new();
     for part in parts {
         if part.len() < 2 {
             continue;

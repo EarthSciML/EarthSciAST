@@ -52,7 +52,10 @@ fn many_lookups(n: usize, cells: bool, bilinear: bool) -> Value {
     };
     let mut vars = serde_json::Map::new();
     let mut eqs = Vec::new();
-    vars.insert("w".into(), shaped(json!({"type": "unknown", "default": 1.0})));
+    vars.insert(
+        "w".into(),
+        shaped(json!({"type": "unknown", "default": 1.0})),
+    );
     eqs.push(json!({
         "lhs": if cells { d_lhs("w", &["l"], l.clone()) } else { json!({"op": "D", "args": ["w"], "wrt": "t"}) },
         "rhs": per_cell(op("*", vec![json!(-0.05), at("w")]))
@@ -60,11 +63,18 @@ fn many_lookups(n: usize, cells: bool, bilinear: bool) -> Value {
     for k in 1..=n {
         let u = format!("u{k}");
         let c = format!("c{k}");
-        vars.insert(u.clone(), shaped(json!({"type": "unknown", "default": 1.0})));
+        vars.insert(
+            u.clone(),
+            shaped(json!({"type": "unknown", "default": 1.0})),
+        );
         vars.insert(c.clone(), shaped(json!({"type": "unknown"})));
         let call = if bilinear {
             let table: Vec<Vec<f64>> = (0..AXIS.len())
-                .map(|i| (0..AXIS.len()).map(|j| (i * 7 + j * k) as f64 * 0.5).collect())
+                .map(|i| {
+                    (0..AXIS.len())
+                        .map(|j| (i * 7 + j * k) as f64 * 0.5)
+                        .collect()
+                })
                 .collect();
             apply(
                 "bilinear",

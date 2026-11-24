@@ -2846,9 +2846,7 @@ unsafe fn fused_frames(w: &FramesWork, regs: &mut [f64]) {
                         }
                         // SAFETY: the output's box holds the chunk's
                         // positions; its storage is the frame's own.
-                        unsafe {
-                            copy_short(rp.add(r as usize * cs + k * cc), optr.add(at), cc)
-                        };
+                        unsafe { copy_short(rp.add(r as usize * cs + k * cc), optr.add(at), cc) };
                     }
                 }
                 done += cc;
