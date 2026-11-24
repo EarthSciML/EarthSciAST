@@ -740,9 +740,11 @@ fn pass_lower_enums(doc: &mut Doc<'_>) -> Result<(), PassError> {
 /// [`reject_reserved_index_symbols`] for why this is a rejection rather than a
 /// shadowing rule.
 fn pass_reserved_index_symbols(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    // The shared scan exists only for a document without templates, which
+    // has no registry.
     match doc.facts.reserved.take() {
         Some(scan) => scan.finish(),
-        None => reject_reserved_index_symbols(&doc.value),
+        None => reject_reserved_index_symbols(&doc.value, doc.facts.component_templates.as_ref()),
     }
     .map_err(PassError::Structural)
 }
@@ -1221,13 +1223,29 @@ fn compile_branch<'c>(
 /// authored form §4.2 documents, not a shadow of it.
 ///
 /// Runs on the fully-lowered raw JSON (after §9.7 import resolution, the §9.6.3
-/// fixpoint and template expansion), so a binder introduced by a template BODY
-/// is caught alongside an authored one.
+/// fixpoint), with the bodies of every component's registry (`registries`,
+/// keyed `"models.<M>"` / `"reaction_systems.<R>"`), so a binder introduced by
+/// a template BODY is caught alongside an authored one: a reference denotes
+/// its expansion, where the body's loop symbols are bound.
 pub(crate) fn reject_reserved_index_symbols(
     json_value: &Value,
+    registries: Option<&indexmap::IndexMap<String, Value>>,
 ) -> Result<(), crate::diagnostic::DiagnosticError> {
+    use crate::json_visit::{JsonPath, visit_values, visit_values_at};
     let mut scan = ReservedIndexScan::new(json_value);
-    crate::json_visit::visit_values(json_value, &mut |path, value| scan.visit(path, value));
+    visit_values(json_value, &mut |path, value| scan.visit(path, value));
+    for (compkey, block) in registries.into_iter().flatten() {
+        let at = format!("/{}/operators", compkey.replacen('.', "/", 1));
+        let at = JsonPath::Root(&at);
+        for (name, entry) in block.as_object().into_iter().flatten() {
+            if let Some(body) = entry.get("body") {
+                let name = JsonPath::Key(&at, name);
+                visit_values_at(body, &JsonPath::Key(&name, "body"), &mut |path, value| {
+                    scan.visit(path, value)
+                });
+            }
+        }
+    }
     scan.finish()
 }
 
@@ -2522,5 +2540,40 @@ mod tests {
         assert_eq!(models1.len(), models2.len());
         assert!(models1.contains_key("simple"));
         assert!(models2.contains_key("simple"));
+    }
+
+    /// A definition body's loop symbol is checked as an authored one: a
+    /// `ranges` key named `t` in a body a reference names is refused at
+    /// load, as it is where the body is written in place.
+    #[test]
+    fn a_definition_body_binding_the_independent_variable_is_rejected() {
+        let doc = |name: &str| {
+            serde_json::json!({
+                "esm": "2.0.0",
+                "metadata": {"name": "body_binder"},
+                "index_sets": {"x": {"kind": "interval", "size": 3}},
+                "models": {"M": {
+                    "variables": {
+                        "v": {"type": "parameter", "shape": ["x"], "default": 1.0},
+                        "s": {"type": "unknown"}
+                    },
+                    "equations": [{"lhs": "s", "rhs": {"op": "apply_operator", "args": [],
+                        "name": "total", "bindings": {"u": "v"}}}],
+                    "operators": {"total": {"params": ["u"], "body": {
+                        "op": "faq", "args": [], "output_idx": [], "reduce": "+",
+                        "ranges": {name: [1, 3]},
+                        "expr": {"op": "index", "args": ["u", name]}}}}
+                }}
+            })
+            .to_string()
+        };
+        let msg = match load_string(&doc("t")) {
+            Ok(_) => panic!("a body binder named `t` must be rejected"),
+            Err(e) => e.to_string(),
+        };
+        assert!(msg.contains("[reserved_index_symbol]"), "{msg}");
+        assert!(msg.contains("binds 't' as an index symbol"), "{msg}");
+        assert!(msg.contains("/models/M/operators/total/body"), "{msg}");
+        load_string(&doc("k")).expect("the control spelling loads");
     }
 }
