@@ -34,7 +34,13 @@ import {
 } from '../units.js'
 import { forEachComponent } from '../traverse.js'
 import type { EsmFile } from '../types.js'
-import type { ValidationError, ValidationResult, StructuralError } from './types.js'
+import type {
+  ValidationError,
+  ValidationResult,
+  ValidationWarning,
+  StructuralError,
+} from './types.js'
+import { unspecifiedKeys } from '../precision.js'
 import { isInlineModel } from './expr-utils.js'
 import {
   implicitNames,
@@ -528,6 +534,7 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
   const schema_errors: ValidationError[] = []
   const structural_errors: ValidationError[] = []
   const unit_warnings: UnitWarning[] = []
+  const warnings: ValidationWarning[] = []
 
   try {
     let parsedData: object
@@ -559,6 +566,7 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
           ],
           structural_errors: [],
           unit_warnings: [],
+          warnings: [],
         }
       }
     } else {
@@ -582,6 +590,7 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
         ],
         structural_errors: [],
         unit_warnings: [],
+        warnings: [],
       }
     }
 
@@ -672,6 +681,12 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
             location: ROOT_PATH,
           })
         }
+
+        // An unspecified variable used directly as an equality or join key
+        // (esm-spec §11.3.3 P8): advisory.
+        for (const site of unspecifiedKeys(esmFile)) {
+          warnings.push({ code: ERROR_CODES.KEY_PRECISION_UNSPECIFIED, ...site })
+        }
       } catch (e: unknown) {
         const error = e as Error
         structural_errors.push({
@@ -706,6 +721,7 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
       ],
       structural_errors: [],
       unit_warnings: [],
+      warnings: [],
     }
   }
 
@@ -714,5 +730,6 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
     schema_errors,
     structural_errors,
     unit_warnings,
+    warnings,
   }
 }

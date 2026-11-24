@@ -67,13 +67,18 @@
 //! tables. Float64 results are bit-unchanged by construction, not by testing.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+use serde::Serialize;
 use std::sync::Arc;
 
 use crate::compile_error::CompileError;
 
+/// The minimum relative tolerance supported for a Float32 state (esm-spec §11.3.2).
+pub(crate) const FLOAT32_RELTOL_FLOOR: f64 = 2.0 * f32::EPSILON as f64;
+
 /// The evaluator's working floating-point precision.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash, Serialize)]
 pub enum Precision {
     /// IEEE binary64 — the default, and the precision every document that does
     /// not say otherwise evaluates in.
@@ -86,7 +91,7 @@ pub enum Precision {
 impl Precision {
     /// Parse a `domain.element_type` string.
     ///
-    /// `None` (the field absent) is [`Precision::Float64`], the schema default.
+    /// `None` (the field absent) is [`Precision::Float64`], the built-in evaluator default.
     ///
     /// # Errors
     ///
@@ -129,6 +134,162 @@ impl Precision {
             Precision::Float64 => "Float64",
             Precision::Float32 => "Float32",
         }
+    }
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for f32 {}
+    impl Sealed for f64 {}
+}
+
+/// A scalar exchanged with an external integrator by the compiled RHS.
+pub trait StateScalar: sealed::Sealed + Copy + Send + Sync + 'static {
+    const PRECISION: Precision;
+    fn widen(self) -> f64;
+    fn narrow(value: f64) -> Self;
+
+    #[doc(hidden)]
+    fn widen_slice(values: &[Self]) -> std::borrow::Cow<'_, [f64]>;
+    #[doc(hidden)]
+    fn as_f64_mut(values: &mut [Self]) -> Option<&mut [f64]>;
+}
+
+impl StateScalar for f32 {
+    const PRECISION: Precision = Precision::Float32;
+    fn widen(self) -> f64 {
+        f64::from(self)
+    }
+    fn narrow(value: f64) -> Self {
+        value as f32
+    }
+    fn widen_slice(values: &[Self]) -> std::borrow::Cow<'_, [f64]> {
+        values
+            .iter()
+            .copied()
+            .map(Self::widen)
+            .collect::<Vec<_>>()
+            .into()
+    }
+    fn as_f64_mut(_: &mut [Self]) -> Option<&mut [f64]> {
+        None
+    }
+}
+
+impl StateScalar for f64 {
+    const PRECISION: Precision = Precision::Float64;
+    fn widen(self) -> f64 {
+        self
+    }
+    fn narrow(value: f64) -> Self {
+        value
+    }
+    fn widen_slice(values: &[Self]) -> std::borrow::Cow<'_, [f64]> {
+        values.into()
+    }
+    fn as_f64_mut(values: &mut [Self]) -> Option<&mut [f64]> {
+        Some(values)
+    }
+}
+
+/// Whether a variable's evaluation precision is bound by the document.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrecisionSource {
+    /// Working precision fixed by a declaration or by the legacy root default.
+    Declared(Precision),
+    /// Binary64 by default, eligible for an explicit external precision choice.
+    Unspecified,
+}
+
+/// The first esm version at which a root that declares no
+/// `domain.element_type` leaves its precision unspecified (esm-spec §11.3.3).
+/// An older root that omits it declares binary64.
+pub(crate) const UNSPECIFIED_PRECISION_SINCE: (u32, u32, u32) = (2, 4, 0);
+
+pub(crate) fn omitted_element_type(version: Option<&str>) -> &'static str {
+    let parts = version.and_then(crate::diagnostic::parse_semver);
+    if parts.is_some_and(|v| v >= UNSPECIFIED_PRECISION_SINCE) {
+        "unspecified"
+    } else {
+        "Float64"
+    }
+}
+
+/// Return the source of a variable's working precision (esm-spec §11.3.3).
+/// Pass `None` for the document default, including reaction species and parameters.
+pub fn precision_source(
+    document: &crate::types::EsmFile,
+    variable: Option<&crate::types::ModelVariable>,
+) -> Result<PrecisionSource, CompileError> {
+    let declared = variable
+        .and_then(|v| v.element_type.as_deref())
+        .or_else(|| {
+            document
+                .domain
+                .as_ref()
+                .and_then(|d| d.element_type.as_deref())
+        });
+    match declared {
+        Some(p) => Ok(PrecisionSource::Declared(Precision::from_element_type(
+            Some(p),
+        )?)),
+        None if omitted_element_type(Some(&document.esm)) == "unspecified" => {
+            Ok(PrecisionSource::Unspecified)
+        }
+        None => Ok(PrecisionSource::Declared(Precision::Float64)),
+    }
+}
+
+/// Precision of a variable crossing evaluation groups (§11.3.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "precision", rename_all = "snake_case")]
+pub enum VariablePrecisionRecord {
+    /// A variable whose working precision is fixed by the ESM document.
+    Declared { element_type: Precision },
+    /// An unspecified variable with consumer-selected storage.
+    Unspecified { between_groups: Precision },
+}
+
+/// Working and storage precision of one group of equations.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GroupPrecisionRecord {
+    /// The working precision for unspecified variables in this group.
+    pub evaluation: Precision,
+    /// Storage precision of each state held in this group.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub state: BTreeMap<String, Precision>,
+}
+
+/// Precision metadata an external integrator attaches to its results (§11.3.3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PrecisionRecord {
+    esm_precision_record: &'static str,
+    /// Every variable read or written, keyed by flattened name.
+    pub variables: BTreeMap<String, VariablePrecisionRecord>,
+    /// Every evaluation group, keyed by group name.
+    pub groups: BTreeMap<String, GroupPrecisionRecord>,
+    /// Consumer-owned precisions, including algebra and table storage.
+    /// Each entry is a precision spelling or a map from name to spelling.
+    pub integrator: BTreeMap<String, serde_json::Value>,
+}
+
+impl Default for PrecisionRecord {
+    fn default() -> Self {
+        Self {
+            esm_precision_record: "1.0",
+            variables: BTreeMap::new(),
+            groups: BTreeMap::new(),
+            integrator: BTreeMap::new(),
+        }
+    }
+}
+
+impl PrecisionRecord {
+    /// Serialize the versioned precision record as compact, sorted JSON.
+    pub fn canonical_json(&self) -> Result<String, serde_json::Error> {
+        let mut value = serde_json::to_value(self)?;
+        value.sort_all_objects();
+        serde_json::to_string(&value)
     }
 }
 
@@ -233,7 +394,7 @@ impl VarPrecisions {
                 .map(|(path, et)| (path.as_str(), et.as_deref()));
             for (v, et) in m.variables.iter().copied().chain(subs) {
                 // Absent means the document's — NOT `from_element_type(None)`,
-                // which is the schema default Float64.
+                // which is the built-in default Float64.
                 let p = match et {
                     Some(_) => Precision::from_element_type(et)?,
                     None => document,
@@ -484,6 +645,11 @@ impl Env {
         enter_env(self.document, Arc::clone(&self.variables))
     }
 
+    /// The effective precision of a variable in this document.
+    pub fn variable(&self, name: &str) -> Precision {
+        self.variables.get(name).unwrap_or(self.document)
+    }
+
     /// Is the DOCUMENT's declared precision binary32?
     #[inline(always)]
     #[must_use]
@@ -541,6 +707,18 @@ pub fn enter(p: Precision) -> PrecisionGuard {
     PrecisionGuard { prev }
 }
 
+/// Evaluate at `name`'s effective precision until the returned guard is
+/// dropped: the working precision of an equation that stores into `name`
+/// (esm-spec §11.3.1).
+///
+/// `None` — no guard at all — unless the document declares a per-variable
+/// `element_type`; without one every equation runs at the document's
+/// precision, which is already in force.
+#[must_use]
+pub fn enter_variable(name: &str) -> Option<PrecisionGuard> {
+    has_variable_overrides().then(|| enter(of_variable(name)))
+}
+
 /// Largest integer every binary32 value below it represents exactly.
 ///
 /// Index arithmetic shares the value kernels (there is no integer type in the
@@ -569,6 +747,37 @@ pub fn check_index_set_extent(name: &str, size: i64) -> Result<(), CompileError>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_precision_record_serializes_with_sorted_keys() {
+        let mut record = PrecisionRecord::default();
+        record.variables.insert(
+            "Z".into(),
+            VariablePrecisionRecord::Unspecified {
+                between_groups: Precision::Float32,
+            },
+        );
+        record.variables.insert(
+            "A".into(),
+            VariablePrecisionRecord::Declared {
+                element_type: Precision::Float64,
+            },
+        );
+        record.groups.insert(
+            "evaluation".into(),
+            GroupPrecisionRecord {
+                evaluation: Precision::Float32,
+                state: BTreeMap::new(),
+            },
+        );
+        assert_eq!(
+            record.canonical_json().unwrap(),
+            concat!(
+                r#"{"esm_precision_record":"1.0","groups":{"evaluation":{"evaluation":"Float32"}},"integrator":{},"variables":{"A":{"element_type":"Float64","precision":"declared"},"#,
+                r#""Z":{"between_groups":"Float32","precision":"unspecified"}}}"#,
+            )
+        );
+    }
 
     #[test]
     fn default_is_float64_and_round_is_identity() {

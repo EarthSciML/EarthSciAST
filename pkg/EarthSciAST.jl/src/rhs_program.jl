@@ -1032,9 +1032,10 @@ _derived_shared(
 )
 
 # Re-lower a program's recorded front-door product under `spec`.
-function _relower(prog::RhsProgram, spec::_RangeSpec)
+function _relower(prog::RhsProgram, spec::_RangeSpec; form = :inplace)
     file, model_name, recorded = prog.front
     opts = _relower_options(recorded)
+    opts.form = form
     cap = _WsCapture()
     f!, _u0, _p, _ts, var_map = _with_ws_capture(cap) do
         _with_compiler_plan(_plan(prog.compiler)) do
@@ -1210,7 +1211,7 @@ function _whole_program_built(
 end
 
 """
-    rhs_program(prob::EsmProblem) -> RhsProgram
+    rhs_program(prob::EsmProblem; unspecified_eltype = Float64) -> RhsProgram
 
 The Problem's right-hand side as a program value (API_SPEC §5.8): the whole
 model over the whole domain, with `u` every state of the Problem (in the
@@ -1222,8 +1223,18 @@ a [`ForcingSet`](@ref) ([`forcing_slots`](@ref)): every externally fed
 parameter, and under `runtime_array_parameters` every shaped parameter with a
 value, is read from the set, never from build-time data.
 [`default_forcing_set`](@ref) holds the Problem's forcing as it is now.
+An explicit `unspecified_eltype = Float32` is refused with `float32_unsupported`
+because the native RHS evaluates in binary64.
 """
-function rhs_program(prob::EsmProblem)
+function rhs_program(prob::EsmProblem; unspecified_eltype::Type = Float64)
+    unspecified_eltype in (Float32, Float64) ||
+        throw(ArgumentError("unspecified_eltype must be Float32 or Float64"))
+    unspecified_eltype === Float32 && throw(
+        _range_error(
+            ERROR_CODES.FLOAT32_UNSUPPORTED,
+            "binary32 evaluation of unspecified precision (esm-spec §11.3.3)"
+        )
+    )
     b = prob.build
     b.seed === nothing && throw(
         _range_error(

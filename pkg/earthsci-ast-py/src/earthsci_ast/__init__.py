@@ -50,6 +50,8 @@ from .esm_types import (
     SolverTimeSpan,
 )
 
+from .precision import precision_source
+
 # Document-scoped solver hints (esm-spec §2.2): the spec-version gate and the
 # §2.2.2 tolerance resolution order — the two parts of the block that are NOT
 # advisory.
@@ -151,6 +153,7 @@ from .validation import (
     validate_text,
     ValidationResult,
     ValidationError,
+    ValidationWarning,
     UnitWarning,
 )
 
@@ -502,6 +505,7 @@ __all__ = [
     "reject_solver_time_span_pre_v13",
     "resolve_time_span",
     "resolve_tolerances",
+    "precision_source",
     "solver_external_location",
     "time_origin",
     "timestamp_to_seconds",
@@ -568,6 +572,7 @@ __all__ = [
     "EnumLoweringError",
     "ValidationResult",
     "ValidationError",
+    "ValidationWarning",
     "SchemaValidationError",
     "UnsupportedVersionError",
     "CircularReferenceError",

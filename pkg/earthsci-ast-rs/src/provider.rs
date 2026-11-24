@@ -352,6 +352,7 @@ struct Feed {
     /// registry; `None` when it is not known, and then no shape is checked.
     declared: Option<Vec<usize>>,
     cadence: Cadence,
+    precision: crate::precision::Precision,
     provider: Box<dyn DataProvider>,
     /// The provider's `refresh_times()`, sorted and deduplicated, read once
     /// when the feed is bound.
@@ -380,6 +381,7 @@ impl Feed {
             label,
             declared,
             cadence,
+            precision: crate::precision::Precision::Float64,
             provider,
             anchors,
             detached: None,
@@ -387,8 +389,11 @@ impl Feed {
     }
 
     /// `a`, refused when it does not have the declared shape.
-    fn checked(&self, a: ArrayD<f64>) -> Result<ArrayD<f64>, ProviderError> {
+    fn checked(&self, mut a: ArrayD<f64>) -> Result<ArrayD<f64>, ProviderError> {
         check_provider_shape(&self.label, &a, self.declared.as_deref())?;
+        if self.precision.is_f32() {
+            a.mapv_inplace(|value| self.precision.round(value));
+        }
         Ok(a)
     }
 
@@ -605,6 +610,12 @@ impl RefreshExecutor {
             .collect();
         feeds.sort_by(|a, b| a.target.cmp(&b.target));
         Self { feeds }
+    }
+
+    pub(crate) fn set_precision(&mut self, env: &crate::precision::Env) {
+        for feed in &mut self.feeds {
+            feed.precision = env.variable(&feed.target);
+        }
     }
 
     /// What is wired: one binding per provider, naming the variable it feeds

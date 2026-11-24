@@ -2128,39 +2128,6 @@ fn variable_element_types_of(
     Ok(precision::VarPrecisions::default())
 }
 
-/// Reject integrating a Float32 document.
-///
-/// The ODE/DAE solver (diffsol) is instantiated over `f64` — its step-size
-/// control, error norms and Newton iteration are binary64 and have no binary32
-/// form here. Integrating a Float32 document would therefore produce an answer
-/// whose right-hand side was binary32 and whose time-stepping was binary64,
-/// with nothing in the result to say so. Per esm-spec §11.3 that is an error
-/// naming the construct, not a partial honouring of the declaration.
-///
-/// Algebraic, observed and relational evaluation — everything `observed_field`
-/// and the inline `tests` blocks read — is unaffected and runs in binary32.
-fn reject_f32_integration(prob: &EsmProblem) -> Result<(), SimulateError> {
-    // Only a system that actually INTEGRATES is affected. A model whose every
-    // equation is algebraic — the relational / lookup-table shape this mode
-    // exists for — is evaluated entirely by the (binary32) expression
-    // evaluator, and `Rhs::Always` giving it a non-static backend does not
-    // make it dynamic.
-    let integrates = match &*prob.backend {
-        Backend::Static(_) => false,
-        Backend::Array(c) => c.has_differential_equations(),
-    };
-    if prob.precision.is_f32() && integrates {
-        return Err(SimulateError::Compile(
-            crate::compile_error::CompileError::Float32Unsupported {
-                construct: "time integration of a dynamic model".to_string(),
-                reason: "the ODE/DAE solver is instantiated over binary64 (step-size control,                          error norms and the Newton solve), so the trajectory would be                          binary64 even though the right-hand side is binary32"
-                    .to_string(),
-            },
-        ));
-    }
-    Ok(())
-}
-
 /// Arrays and objects nested this deep or less parse from text well inside
 /// `serde_json`'s recursion limit (128).
 const NESTING_WITHOUT_ROUND_TRIP: usize = 64;

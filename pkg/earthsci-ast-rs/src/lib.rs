@@ -130,7 +130,12 @@ pub(crate) mod parse;
 /// per-operation binary32 rounding) is observable, and a host embedding the
 /// evaluator needs to be able to name it.
 pub mod precision;
+pub use precision::StateScalar;
 pub mod precision_infer;
+pub use precision::{
+    GroupPrecisionRecord, PrecisionRecord, PrecisionSource, VariablePrecisionRecord,
+    precision_source,
+};
 pub mod provider;
 pub(crate) mod reactions;
 pub(crate) mod ref_loading;
@@ -341,8 +346,8 @@ pub use types::{
     Tolerance, UnitConversion, UpdateValue, VariableBound, VariableMapTransform, VariableType,
 };
 pub use validate::{
-    SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,
-    validate_text,
+    SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult,
+    ValidationWarning, validate, validate_text,
 };
 // Deprecated alias of `validate_text`, kept for one minor per API_SPEC.md §10
 // (§8 item 13 named the text convenience `validate_text`).
@@ -395,8 +400,8 @@ pub use inline_tests::{
     run_inline_tests, run_inline_tests_paths, run_inline_tests_with_options, state_cells,
 };
 pub use simulate::{
-    Alg, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, Progress, ProgressFn, ReturnCode, SimulateError,
-    Solution, SolutionMetadata, SolveOptions, compile_array,
+    Alg, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, IntegratorPrecision, Progress, ProgressFn,
+    ReturnCode, SimulateError, Solution, SolutionMetadata, SolveOptions, compile_array,
 };
 
 // The EsmProblem / `solve` surface. `simulate` is deleted in all its forms.
@@ -413,8 +418,9 @@ pub use problem::{
 // Range-restricted and operator-restricted right-hand sides (API_SPEC §5.8).
 pub use simulate_array::range::{
     AxisCut, Decomposition, ForcingSet, ForcingSlot, HaloReport, LaneBlock, LaneInputs, LaneKind,
-    LaneLayout, LaneProgram, ParamSlot, RhsError, RhsProgram, RhsSelection, RhsWorkspace, SlotKind,
-    StateBlock, TileBlock, TileBox, TileLayout, TileProgram, forcing_from_sample, rhs_program,
+    LaneLayout, LaneProgram, ParamSlot, RhsError, RhsOptions, RhsProgram, RhsSelection,
+    RhsWorkspace, SlotKind, StateBlock, TileBlock, TileBox, TileLayout, TileProgram,
+    forcing_from_sample, rhs_program, rhs_program_with_options,
 };
 // Strip and expose (API_SPEC §5.8): stripped constructs and standalone kernels.
 pub use problem::stripped;

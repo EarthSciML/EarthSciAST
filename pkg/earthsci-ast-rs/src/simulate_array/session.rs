@@ -17,6 +17,7 @@ use super::driver::{
     fault_first, solution_metadata, xla_not_installed,
 };
 use super::*;
+use crate::precision::{FLOAT32_RELTOL_FLOOR, Precision, StateScalar};
 use crate::simulate::{
     Alg, Flow, Progress, ProgressFn, RawTrajectory, ReturnCode, SimulateError, Solution,
     SolutionMetadata, SolveOptions,
@@ -35,6 +36,7 @@ pub(crate) struct RunSpec<'a> {
     pub(crate) discrete_forcing: &'a HashSet<String>,
     /// The refresh times. Only those strictly inside the span are used.
     pub(crate) boundaries: &'a [f64],
+    pub(crate) reltol_source: &'static str,
 }
 
 /// The forcing refresh a run drives: called once with the start of the run,
@@ -50,6 +52,7 @@ pub(crate) struct SolveSession<'c> {
     /// own output grid.
     opts: SolveOptions,
     tspan: (f64, f64),
+    precision: Option<Precision>,
     /// The refresh boundaries strictly inside `tspan`, ascending.
     boundaries: Vec<f64>,
     /// The first boundary not yet refreshed at.
@@ -84,7 +87,13 @@ impl ArrayCompiled {
         // built on such a fault fails loudly instead of carrying the `NaN` it
         // substituted.
         let faults = FaultScope::enter();
-        let mut session = self.start_session(run, opts.clone(), inspect, refresh)?;
+        let mut session = self.start_session(
+            run,
+            opts.clone(),
+            opts.saveat.as_deref().unwrap_or(&[]),
+            inspect,
+            refresh,
+        )?;
         let (time, state) =
             session.advance_to(run.tspan.1, opts.saveat.as_deref(), &faults, refresh)?;
         session.solution(&faults, time, state)
@@ -97,10 +106,11 @@ impl ArrayCompiled {
         &self,
         run: &RunSpec<'_>,
         opts: SolveOptions,
+        grid: &[f64],
         refresh: &mut Refresh<'_>,
     ) -> Result<SolveSession<'_>, SimulateError> {
         let faults = FaultScope::enter();
-        let session = self.start_session(run, opts, None, refresh)?;
+        let session = self.start_session(run, opts, grid, None, refresh)?;
         match faults.finish() {
             Some(fault) => Err(fault_error(fault)),
             None => Ok(session),
@@ -114,6 +124,7 @@ impl ArrayCompiled {
         &self,
         run: &RunSpec<'_>,
         opts: SolveOptions,
+        grid: &[f64],
         inspect: Option<&mut BuildInspection>,
         refresh: &mut Refresh<'_>,
     ) -> Result<SolveSession<'_>, SimulateError> {
@@ -122,6 +133,29 @@ impl ArrayCompiled {
         // shortcut in `run_one_segment` and the solver path below it are never
         // handed a span they would read differently.
         reject_nonfinite_span(t0, t_end)?;
+        let mut boundaries: Vec<f64> = Vec::new();
+        for &b in run.boundaries {
+            if b > t0 && b < t_end && boundaries.last().is_none_or(|&last| last < b) {
+                boundaries.push(b);
+            }
+        }
+
+        let precision = if t_end > t0 {
+            self.integration_precision()?
+        } else {
+            None
+        };
+        if precision == Some(Precision::Float32) {
+            let reltol = opts.reltol_or_default();
+            if reltol < FLOAT32_RELTOL_FLOOR {
+                return Err(SimulateError::ToleranceBelowWorkingPrecision {
+                    source_name: run.reltol_source,
+                    reltol,
+                    floor: FLOAT32_RELTOL_FLOOR,
+                });
+            }
+            check_float32_clock(t0, t_end, grid, &boundaries)?;
+        }
         let param_vec = self.build_param_vec(run.params)?;
 
         // The forcing at t0 comes first: the static hoist reads it, and the
@@ -138,13 +172,6 @@ impl ArrayCompiled {
                 exclude: &no_exclusions,
             },
         )?;
-
-        let mut boundaries: Vec<f64> = Vec::new();
-        for &b in run.boundaries {
-            if b > t0 && b < t_end && boundaries.last().is_none_or(|&last| last < b) {
-                boundaries.push(b);
-            }
-        }
 
         // The tape is built before the static hoist: under the strict
         // compilers the hoist is served from it.
@@ -173,6 +200,7 @@ impl ArrayCompiled {
                 ..opts
             },
             tspan: run.tspan,
+            precision,
             boundaries,
             next_refresh: 0,
             param_vec,
@@ -217,6 +245,12 @@ impl SolveSession<'_> {
             solver_name,
             &self.stats,
             self.compiled.merged_renames.clone(),
+            self.precision.map(|p| crate::IntegratorPrecision {
+                state: p,
+                time: p,
+                norms: p,
+                linear_algebra: p,
+            }),
         )
     }
 
@@ -283,6 +317,7 @@ impl SolveSession<'_> {
                     &self.setup,
                     &opts,
                     self.program.as_ref(),
+                    self.precision.unwrap_or_default(),
                 )
                 .map_err(|e| fault_first(faults, e))?;
             self.stats += stats;
@@ -351,6 +386,7 @@ impl SolveSession<'_> {
                     &self.setup,
                     &seg_opts,
                     self.program.as_ref(),
+                    self.precision.unwrap_or_default(),
                 )
                 .map_err(|e| fault_first(faults, e))?;
             self.stats += seg_stats;
@@ -383,14 +419,21 @@ impl SolveSession<'_> {
         Ok((time, state))
     }
 
+    pub(crate) fn output_time(&self, time: f64) -> f64 {
+        self.precision.unwrap_or_default().round(time)
+    }
+
     /// The solution over `time` and `state`, with the observed rows appended
     /// ([`ArrayCompiled::assemble_solution`], which drains the fault latch).
     fn solution(
         &self,
         faults: &FaultScope,
-        time: Vec<f64>,
+        mut time: Vec<f64>,
         state: Vec<Vec<f64>>,
     ) -> Result<Solution, SimulateError> {
+        if self.precision == Some(Precision::Float32) && self.tspan.1 > self.tspan.0 {
+            time.iter_mut().for_each(|t| *t = self.output_time(*t));
+        }
         self.compiled.assemble_solution(
             faults,
             time,
@@ -406,6 +449,24 @@ impl SolveSession<'_> {
 }
 
 impl ArrayCompiled {
+    fn integration_precision(&self) -> Result<Option<Precision>, SimulateError> {
+        if !self.has_differential_equations() {
+            return Ok(None);
+        }
+        let mut types = self
+            .var_shapes
+            .keys()
+            .map(|name| self.precision.variable(name));
+        let first = types.next().unwrap_or(self.precision.document);
+        if types.any(|p| p != first) {
+            return Err(float32_unsupported(
+                "time integration of a state mixing Float32 and Float64 variables",
+                "diffsol uses one scalar type for all state slots",
+            ));
+        }
+        Ok(Some(first))
+    }
+
     /// Integrate ONE segment `[t0, t_end]` from initial state `u0`, reading the
     /// live forcing buffer (`self.forcing`), which the session refreshes
     /// between segments. Builds a fresh RHS/Jacobian closure pair (each scratch
@@ -422,6 +483,7 @@ impl ArrayCompiled {
         opts: &SolveOptions,
         // The run's taped program under `native`, kept across segments.
         program: Option<&SolveProgram>,
+        precision: Precision,
     ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode), SimulateError> {
         // A segment that never advances is answered from its own initial state,
         // before any closure, scratch buffer or diffsol problem is built
@@ -436,7 +498,6 @@ impl ArrayCompiled {
         if let Some((time, state, retcode)) = nonadvancing_trajectory(t0, t_end, u0, opts) {
             return Ok((time, state, SolveStats::default(), retcode));
         }
-        let n_states = self.n_states;
         // `xla` (API_SPEC §5.8): the right-hand side is the XLA executable the
         // build installed, and the Jacobian differences it too. A missing
         // executable is a refusal, never the tape answering under the name
@@ -472,116 +533,10 @@ impl ArrayCompiled {
             #[cfg(not(feature = "xla"))]
             RuntimeMode::Xla => return Err(xla_not_installed()),
         };
-        // diffsol's `rhs_implicit` builder demands a Jacobian closure even for
-        // the explicit solver, which never calls it, so its buffers are built
-        // on the first call.
-        let jvp: RefCell<Option<FdJvp>> = RefCell::new(None);
-        let rhs_closure = |y: &diffsol::FaerVec<f64>,
-                           p: &diffsol::FaerVec<f64>,
-                           t: f64,
-                           dy: &mut diffsol::FaerVec<f64>| {
-            evaluator.eval(Use::Rhs, y.as_slice(), p.as_slice(), t, dy.as_mut_slice());
+        let solved = match precision {
+            Precision::Float32 => integrate::<f32>(&evaluator, t0, t_end, u0, param_vec, opts),
+            Precision::Float64 => integrate::<f64>(&evaluator, t0, t_end, u0, param_vec, opts),
         };
-        let jac_closure = |y: &diffsol::FaerVec<f64>,
-                           p: &diffsol::FaerVec<f64>,
-                           t: f64,
-                           v: &diffsol::FaerVec<f64>,
-                           jv: &mut diffsol::FaerVec<f64>| {
-            let mut jvp = jvp.borrow_mut();
-            jvp.get_or_insert_with(|| FdJvp::new(n_states)).apply(
-                y.as_slice(),
-                p.as_slice(),
-                t,
-                v.as_slice(),
-                jv.as_mut_slice(),
-                |state, params, t, out| evaluator.eval(Use::Jacobian, state, params, t, out),
-            );
-        };
-
-        // Concrete values: `solve` has already resolved the esm-spec §2.2.2
-        // chain into `opts`. The fallback covers a direct call that bypasses
-        // `solve` and therefore has no document to consult.
-        let abstol = opts.abstol_or_default();
-        let reltol = opts.reltol_or_default();
-        let ic_for_init = u0.to_vec();
-
-        let builder = OdeBuilder::<FaerMat<f64>>::new()
-            .t0(t0)
-            .rtol(reltol)
-            .atol(vec![abstol; n_states])
-            .p(param_vec.to_vec())
-            .rhs_implicit(rhs_closure, jac_closure)
-            .init(
-                move |_p: &diffsol::FaerVec<f64>, _t: f64, y: &mut diffsol::FaerVec<f64>| {
-                    let y_s = y.as_mut_slice();
-                    for (i, &v) in ic_for_init.iter().enumerate() {
-                        y_s[i] = v;
-                    }
-                },
-                n_states,
-            );
-
-        let problem = builder.build().map_err(|e| SimulateError::DiffsolError {
-            details: e.to_string(),
-        })?;
-
-        // Run the solver, then read the real step/eval counters out of diffsol
-        // before the concrete solver is dropped (see [`SolveStats::from_solver`]).
-        //
-        // Wrapped in an immediately-invoked closure so a solver failure does
-        // not leave the function before the XLA fault channel below is read: a
-        // device that stopped working reaches the solver as a NaN derivative,
-        // and reporting "tolerance not met" for it would name the wrong thing.
-        type SolvedSegment = (Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode);
-        let solved = (|| -> Result<SolvedSegment, SimulateError> {
-            let out = match opts.alg {
-                Alg::Bdf => {
-                    let mut solver: Bdf<'_, _, NewtonNonlinearSolver<_, FaerLU<f64>, _>> = problem
-                        .bdf::<FaerLU<f64>>()
-                        .map_err(|e| SimulateError::DiffsolError {
-                            details: e.to_string(),
-                        })?;
-                    let (time, state, retcode) = run_solver(&mut solver, t_end, opts)?;
-                    let bs = solver.get_statistics();
-                    let stats = SolveStats::from_solver(
-                        &solver,
-                        bs.number_of_steps,
-                        bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
-                    );
-                    (time, state, stats, retcode)
-                }
-                Alg::Sdirk => {
-                    let mut solver: Sdirk<'_, _, FaerLU<f64>> = problem
-                        .tr_bdf2::<FaerLU<f64>>()
-                        .map_err(|e| SimulateError::DiffsolError {
-                            details: e.to_string(),
-                        })?;
-                    let (time, state, retcode) = run_solver(&mut solver, t_end, opts)?;
-                    let bs = solver.get_statistics();
-                    let stats = SolveStats::from_solver(
-                        &solver,
-                        bs.number_of_steps,
-                        bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
-                    );
-                    (time, state, stats, retcode)
-                }
-                Alg::Erk => {
-                    let _seq = SequentialFaer::enter();
-                    let mut solver = problem.tsit45().map_err(|e| SimulateError::DiffsolError {
-                        details: e.to_string(),
-                    })?;
-                    let (time, state, retcode) = run_solver(&mut solver, t_end, opts)?;
-                    let bs = solver.get_statistics();
-                    let stats = SolveStats::from_solver(
-                        &solver,
-                        bs.number_of_steps,
-                        bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
-                    );
-                    (time, state, stats, retcode)
-                }
-            };
-            Ok(out)
-        })();
         // §9.6.6 `compiler_unavailable`: the caller named `xla`, and the XLA
         // runtime stopped being able to provide it mid-solve. It is reported
         // in preference to whatever the solver made of the NaN derivative,
@@ -596,6 +551,178 @@ impl ArrayCompiled {
         }
         solved
     }
+}
+
+type SolvedSegment = (Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode);
+
+fn integrate<T: diffsol::FaerScalar + StateScalar>(
+    evaluator: &SolveRhs<'_>,
+    t0: f64,
+    t_end: f64,
+    u0: &[f64],
+    param_vec: &[f64],
+    opts: &SolveOptions,
+) -> Result<SolvedSegment, SimulateError> {
+    let n_states = u0.len();
+    // diffsol's `rhs_implicit` builder demands a Jacobian closure even for
+    // the explicit solver, which never calls it, so its buffers are built
+    // on the first call.
+    let jvp: RefCell<Option<FdJvp>> = RefCell::new(None);
+    let rhs_output = RefCell::new(Vec::new());
+    let jac_output = RefCell::new(Vec::new());
+    let rhs_closure =
+        |y: &diffsol::FaerVec<T>, _p: &diffsol::FaerVec<T>, t: T, dy: &mut diffsol::FaerVec<T>| {
+            let y = T::widen_slice(y.as_slice());
+            with_wide_output(dy.as_mut_slice(), &rhs_output, |out| {
+                evaluator.eval(Use::Rhs, &y, param_vec, t.widen(), out);
+            });
+        };
+    let jac_closure = |y: &diffsol::FaerVec<T>,
+                       _p: &diffsol::FaerVec<T>,
+                       t: T,
+                       v: &diffsol::FaerVec<T>,
+                       jv: &mut diffsol::FaerVec<T>| {
+        let mut jvp = jvp.borrow_mut();
+        with_wide_output(jv.as_mut_slice(), &jac_output, |out| {
+            jvp.get_or_insert_with(|| FdJvp::with_precision(n_states, T::PRECISION))
+                .apply(
+                    &T::widen_slice(y.as_slice()),
+                    param_vec,
+                    t.widen(),
+                    &T::widen_slice(v.as_slice()),
+                    out,
+                    |state, params, t, out| evaluator.eval(Use::Jacobian, state, params, t, out),
+                );
+        });
+    };
+
+    let builder = OdeBuilder::<FaerMat<T>>::new()
+        .t0(t0)
+        .rtol(opts.reltol_or_default())
+        .atol(vec![opts.abstol_or_default(); n_states])
+        .rhs_implicit(rhs_closure, jac_closure)
+        .init(
+            |_p: &diffsol::FaerVec<T>, _t: T, y: &mut diffsol::FaerVec<T>| {
+                for (target, &value) in y.as_mut_slice().iter_mut().zip(u0) {
+                    *target = T::narrow(value);
+                }
+            },
+            n_states,
+        );
+
+    let problem = builder.build().map_err(|e| SimulateError::DiffsolError {
+        details: e.to_string(),
+    })?;
+
+    let out = match opts.alg {
+        Alg::Bdf => {
+            let mut solver: Bdf<'_, _, NewtonNonlinearSolver<_, FaerLU<T>, _>> = problem
+                .bdf::<FaerLU<T>>()
+                .map_err(|e| SimulateError::DiffsolError {
+                    details: e.to_string(),
+                })?;
+            let (time, state, retcode) = run_solver(&mut solver, t0, t_end, opts)?;
+            let bs = solver.get_statistics();
+            let stats = SolveStats::from_solver(
+                &solver,
+                bs.number_of_steps,
+                bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+            );
+            (time, state, stats, retcode)
+        }
+        Alg::Sdirk => {
+            let mut solver: Sdirk<'_, _, FaerLU<T>> =
+                problem
+                    .tr_bdf2::<FaerLU<T>>()
+                    .map_err(|e| SimulateError::DiffsolError {
+                        details: e.to_string(),
+                    })?;
+            let (time, state, retcode) = run_solver(&mut solver, t0, t_end, opts)?;
+            let bs = solver.get_statistics();
+            let stats = SolveStats::from_solver(
+                &solver,
+                bs.number_of_steps,
+                bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+            );
+            (time, state, stats, retcode)
+        }
+        Alg::Erk => {
+            let _seq = SequentialFaer::enter();
+            let mut solver = problem.tsit45().map_err(|e| SimulateError::DiffsolError {
+                details: e.to_string(),
+            })?;
+            let (time, state, retcode) = run_solver(&mut solver, t0, t_end, opts)?;
+            let bs = solver.get_statistics();
+            let stats = SolveStats::from_solver(
+                &solver,
+                bs.number_of_steps,
+                bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+            );
+            (time, state, stats, retcode)
+        }
+    };
+    Ok(out)
+}
+
+fn with_wide_output<T: StateScalar>(
+    output: &mut [T],
+    scratch: &RefCell<Vec<f64>>,
+    fill: impl FnOnce(&mut [f64]),
+) {
+    if let Some(output) = T::as_f64_mut(output) {
+        fill(output);
+    } else {
+        let mut scratch = scratch.borrow_mut();
+        scratch.resize(output.len(), 0.0);
+        fill(&mut scratch);
+        for (target, &value) in output.iter_mut().zip(scratch.iter()) {
+            *target = T::narrow(value);
+        }
+    }
+}
+
+fn float32_unsupported(construct: &str, reason: &str) -> SimulateError {
+    crate::compile_error::CompileError::Float32Unsupported {
+        construct: construct.to_owned(),
+        reason: reason.to_owned(),
+    }
+    .into()
+}
+
+fn check_float32_clock(
+    start: f64,
+    end: f64,
+    grid: &[f64],
+    boundaries: &[f64],
+) -> Result<(), SimulateError> {
+    // Provider refreshes and requested samples must stay ordered on the
+    // solver clock. An exact shared boundary needs just one clock tick, and
+    // so does an output time requested twice.
+    let mut times: Vec<_> = grid
+        .iter()
+        .copied()
+        .filter(|t| *t >= start && *t <= end)
+        .collect();
+    times.dedup();
+    if times.windows(2).any(|w| w[0] as f32 == w[1] as f32) {
+        return Err(float32_unsupported(
+            "binary32 clock over tspan",
+            "consecutive output times coincide in binary32",
+        ));
+    }
+    times.extend_from_slice(boundaries);
+    times.extend([start, end]);
+    times.sort_by(f64::total_cmp);
+    times.dedup();
+    if times.iter().any(|&t| !(t as f32).is_finite())
+        || times.windows(2).any(|w| w[0] as f32 == w[1] as f32)
+    {
+        return Err(float32_unsupported(
+            "binary32 clock over tspan",
+            "distinct times must remain finite and distinct in binary32",
+        ));
+    }
+    Ok(())
 }
 
 // ============================================================================
@@ -737,7 +864,7 @@ impl SolveStats {
     ) -> Self
     where
         S: OdeSolverMethod<'a, Eqn>,
-        Eqn: diffsol::OdeEquations<T = f64, V = diffsol::FaerVec<f64>> + 'a,
+        Eqn: diffsol::OdeEquations + 'a,
     {
         let op = solver.problem().eqn.rhs().statistics();
         Self {
@@ -810,21 +937,24 @@ impl Drop for SequentialFaer {
 /// moving on, since `interpolate()` is only valid for times within the
 /// solver's current dense output window (calling it backwards on a stiff
 /// solver returns garbage).
-fn run_solver<'a, S, Eqn>(
+fn run_solver<'a, S, Eqn, T>(
     solver: &mut S,
+    t0: f64,
     t_end: f64,
     opts: &SolveOptions,
 ) -> Result<RawTrajectory, SimulateError>
 where
     S: OdeSolverMethod<'a, Eqn>,
-    Eqn: diffsol::OdeEquations<T = f64, V = diffsol::FaerVec<f64>>,
+    T: diffsol::FaerScalar + StateScalar,
+    Eqn: diffsol::OdeEquations<T = T, V = diffsol::FaerVec<T>>,
     Eqn: 'a,
 {
-    use diffsol::OdeSolverStopReason;
+    use diffsol::{DiffsolError, OdeSolverStopReason, error::OdeSolverError};
 
-    let t0 = solver.state().t;
+    let start = solver.state().t;
+    let end = T::narrow(t_end);
     let n_states = solver.state().y.as_slice().len();
-    let initial_state: Vec<f64> = solver.state().y.as_slice().to_vec();
+    let initial_state: Vec<f64> = T::widen_slice(solver.state().y.as_slice()).into_owned();
 
     let mut times: Vec<f64> = Vec::new();
     let mut state_rows: Vec<Vec<f64>> = vec![Vec::new(); n_states];
@@ -879,14 +1009,40 @@ where
         return Ok((times, state_rows, ReturnCode::Terminated));
     }
 
-    solver
-        .set_stop_time(t_end)
-        .map_err(|e| SimulateError::DiffsolError {
+    let clock_error = |reason| float32_unsupported("binary32 clock over tspan", reason);
+    solver.set_stop_time(end).map_err(|e| match e {
+        DiffsolError::OdeSolverError(OdeSolverError::StopTimeAtCurrentTime)
+            if T::PRECISION.is_f32() =>
+        {
+            clock_error("the segment is shorter than diffsol's clock resolution")
+        }
+        _ => SimulateError::DiffsolError {
+            details: e.to_string(),
+        },
+    })?;
+
+    let mut previous_time = start;
+    let mut step = |solver: &mut S| -> Result<(T, bool), SimulateError> {
+        let stop = solver.step().map_err(|e| SimulateError::DiffsolError {
             details: e.to_string(),
         })?;
+        let time = solver.state().t;
+        let at_stop = matches!(stop, OdeSolverStopReason::TstopReached);
+        if T::PRECISION.is_f32() {
+            if time <= previous_time {
+                return Err(clock_error("an accepted step did not advance the clock"));
+            }
+            if at_stop && time < end {
+                return Err(clock_error(
+                    "diffsol stopped before the segment's final clock tick",
+                ));
+            }
+        }
+        previous_time = time;
+        Ok((time, at_stop))
+    };
 
-    let mut step_count: usize = 0;
-
+    let mut step_count = 0;
     if let Some(t_eval) = &opts.saveat {
         // Cursor into the user's evaluation grid. Each step we drain any
         // requested times that now lie inside the solver's [t_prev, t_curr]
@@ -896,7 +1052,7 @@ where
         // Handle requested times at or before t0 directly from the initial
         // state — interpolating at t0 on a solver that has not stepped yet
         // is undefined behaviour for some methods.
-        while next_idx < t_eval.len() && t_eval[next_idx] <= t0 {
+        while next_idx < t_eval.len() && T::narrow(t_eval[next_idx]) <= start {
             push_state(
                 &mut times,
                 &mut state_rows,
@@ -906,7 +1062,6 @@ where
             next_idx += 1;
         }
 
-        let mut t_prev = t0;
         loop {
             if next_idx >= t_eval.len() {
                 break;
@@ -915,36 +1070,36 @@ where
                 retcode = ReturnCode::MaxIters;
                 break;
             }
-            let stop = solver.step().map_err(|e| SimulateError::DiffsolError {
-                details: e.to_string(),
-            })?;
+            let (t_curr, at_stop) = step(solver)?;
             step_count += 1;
-            let t_curr = solver.state().t;
-            let y_now = solver.state().y.as_slice().to_vec();
+            let y_now = T::widen_slice(solver.state().y.as_slice()).into_owned();
             if !y_now.iter().all(|v| v.is_finite()) {
                 retcode = ReturnCode::Unstable;
                 break;
             }
-            if matches!(report(step_count, t_curr, &y_now), Flow::Cancel) {
+            if matches!(report(step_count, t_curr.widen(), &y_now), Flow::Cancel) {
                 retcode = ReturnCode::Terminated;
                 break;
             }
 
             // Drain user grid points inside (t_prev, t_curr].
-            while next_idx < t_eval.len() && t_eval[next_idx] <= t_curr {
+            while next_idx < t_eval.len()
+                && t_eval[next_idx] <= t_end
+                && T::narrow(t_eval[next_idx]) <= t_curr
+            {
                 let t = t_eval[next_idx];
-                let y = solver
-                    .interpolate(t)
-                    .map_err(|e| SimulateError::DiffsolError {
-                        details: e.to_string(),
-                    })?;
-                let y_s = y.as_slice();
-                push_state(&mut times, &mut state_rows, t, y_s);
+                let y =
+                    solver
+                        .interpolate(T::narrow(t))
+                        .map_err(|e| SimulateError::DiffsolError {
+                            details: e.to_string(),
+                        })?;
+                let y_s = T::widen_slice(y.as_slice());
+                push_state(&mut times, &mut state_rows, t, &y_s);
                 next_idx += 1;
             }
 
-            t_prev = t_curr;
-            if matches!(stop, OdeSolverStopReason::TstopReached) {
+            if at_stop {
                 break;
             }
         }
@@ -955,7 +1110,6 @@ where
         // — every method refuses (issue #478) — so such times are left out,
         // as the segmented path in `simulate_array` leaves them out of its
         // per-segment grids.
-        let _ = t_prev;
     } else {
         // Native step grid: record the initial point, then every step.
         push_state(&mut times, &mut state_rows, t0, &initial_state);
@@ -964,22 +1118,39 @@ where
                 retcode = ReturnCode::MaxIters;
                 break;
             }
-            let stop = solver.step().map_err(|e| SimulateError::DiffsolError {
-                details: e.to_string(),
-            })?;
+            let (t_curr, at_stop) = step(solver)?;
             step_count += 1;
-            let t_curr = solver.state().t;
-            let y_owned: Vec<f64> = solver.state().y.as_slice().to_vec();
+            let y_owned: Vec<f64> = T::widen_slice(solver.state().y.as_slice()).into_owned();
             if !y_owned.iter().all(|v| v.is_finite()) {
                 retcode = ReturnCode::Unstable;
                 break;
             }
-            push_state(&mut times, &mut state_rows, t_curr, &y_owned);
-            if matches!(report(step_count, t_curr, &y_owned), Flow::Cancel) {
+            if T::PRECISION.is_f32() && at_stop {
+                // The session uses logical segment boundaries internally.
+                // Round them for callers only after collecting the segments.
+                if t_curr == end {
+                    push_state(&mut times, &mut state_rows, t_end, &y_owned);
+                } else {
+                    let y = solver
+                        .interpolate(end)
+                        .map_err(|e| SimulateError::DiffsolError {
+                            details: e.to_string(),
+                        })?;
+                    push_state(
+                        &mut times,
+                        &mut state_rows,
+                        t_end,
+                        &T::widen_slice(y.as_slice()),
+                    );
+                }
+            } else {
+                push_state(&mut times, &mut state_rows, t_curr.widen(), &y_owned);
+            }
+            if matches!(report(step_count, t_curr.widen(), &y_owned), Flow::Cancel) {
                 retcode = ReturnCode::Terminated;
                 break;
             }
-            if matches!(stop, OdeSolverStopReason::TstopReached) {
+            if at_stop {
                 break;
             }
         }

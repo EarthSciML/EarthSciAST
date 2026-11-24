@@ -645,7 +645,7 @@ pub struct CouplingRole {
 }
 
 /// Spatial/temporal domain specification
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Domain {
     /// Name of the independent (time) variable
     #[serde(skip_serializing_if = "Option::is_none")]

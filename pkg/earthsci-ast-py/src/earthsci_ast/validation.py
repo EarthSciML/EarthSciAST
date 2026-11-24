@@ -47,9 +47,10 @@ from typing import Any
 from jsonschema import ValidationError as JsonSchemaValidationError
 
 from .classification import observed_unknowns, ode_states
-from .error_handling import DEFINITION_UNIT_MISMATCH, ErrorCode
+from .error_handling import DEFINITION_UNIT_MISMATCH, KEY_PRECISION_UNSPECIFIED, ErrorCode
 from .esm_types import EsmFile
 from .parse import SchemaValidationError, SubsystemRefError, load_path, load_string
+from .precision import unspecified_keys
 from .units import (
     UNIT_FINDING_ANALYSIS,
     UNIT_FINDING_DEFINITION_UNIT_MISMATCH,
@@ -122,6 +123,17 @@ class UnitWarning:
 
 
 @dataclass
+class ValidationWarning:
+    """An advisory validation finding that is not about units: a stable
+    diagnostic ``code``, the JSON ``path`` it concerns and a ``message``.
+    It never changes ``is_valid``."""
+
+    code: str
+    path: str
+    message: str
+
+
+@dataclass
 class ValidationResult:
     """Represents the result of validation."""
 
@@ -129,10 +141,14 @@ class ValidationResult:
     schema_errors: list[ValidationError]
     structural_errors: list[ValidationError]
     unit_warnings: list[UnitWarning] = None
+    # Non-unit diagnostics that do not invalidate the document.
+    warnings: list[ValidationWarning] = None
 
     def __post_init__(self):
         if self.unit_warnings is None:
             self.unit_warnings = []
+        if self.warnings is None:
+            self.warnings = []
 
 
 def _json_pointer(parts) -> str:
@@ -240,6 +256,7 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
     schema_errors = []
     structural_errors = []
     unit_warnings = []
+    warnings: list[ValidationWarning] = []
 
     try:
         # Schema validation is assumed to have been done during parsing
@@ -289,6 +306,13 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
         # warnings only at this stage, so validity is untouched.
         _validate_dimensionless_literals(esm_file, unit_warnings)
 
+        # 6. An unspecified variable used directly as an equality or join key
+        # (esm-spec §11.3.3 P8): advisory.
+        warnings.extend(
+            ValidationWarning(code=KEY_PRECISION_UNSPECIFIED, path=path, message=message)
+            for path, message in unspecified_keys(esm_file)
+        )
+
     except Exception as e:
         # Catch-all for unexpected errors
         structural_errors.append(_unexpected_error(e))
@@ -300,6 +324,7 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
         schema_errors=schema_errors,
         structural_errors=structural_errors,
         unit_warnings=unit_warnings,
+        warnings=warnings,
     )
 
 

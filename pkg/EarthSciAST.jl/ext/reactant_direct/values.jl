@@ -72,6 +72,9 @@ end
 
 mutable struct _DECtx
     n_states::Int
+    precision::DataType
+    tree_fold::Bool
+    counters::IdDict{Base.RefValue{Int}, Int}
     p::Any
     t::_DEVal
     ue::_DEMap                              # extended-state slot map (1..n_total)
@@ -86,6 +89,7 @@ mutable struct _DECtx
     bufs::Any
     hostkeys::Vector{Vector{Float64}}
     bufvals::Vector{Union{Nothing, _DEVal}}
+    windows::Union{Nothing, Vector{Union{Nothing, _E._TileForcingWindow}}}
     static::_E._NodeMap{Bool}                # memoized "this subtree is host-computable"
     bstatic::IdDict{Any, Bool}               # the same, for a lane-batched subtree
     opts::DirectEmitOptions
@@ -125,21 +129,27 @@ mutable struct _DECtx
     # kernel, a scan, the output assembly. Purely a tally key for the read
     # attribution below; nothing reads it back and nothing branches on it.
     site::Symbol
+    # A binary32 fragment's declared-binary64 comparison keys
+    # (`_DEExactKeys`, fragment.jl), or `nothing`.
+    keys64::Any
 end
 
 function _DECtx(
-        n_states::Int, n_total::Int, p, t::_DEVal, uval::_DEVal,
+        n_states::Int, n_total::Int, p, t::_DEVal, uval::Union{Nothing, _DEVal},
         bufs, hostkeys::Vector{Vector{Float64}}, names::Dict{Int, String},
-        opts::DirectEmitOptions
+        opts::DirectEmitOptions; precision = Float64, tree_fold = false, windows = nothing,
+        keys64 = nothing
     )
     ue = _DEMap(n_total)
-    for s in 1:n_states
-        ue.m[s] = (uval, s)
+    if uval !== nothing
+        for s in 1:n_states
+            ue.m[s] = (uval, s)
+        end
     end
     return _DECtx(
-        n_states, p, t, ue, Dict{UInt64, _DEVal}(),
+        n_states, precision, tree_fold, IdDict{Base.RefValue{Int}, Int}(), p, t, ue, Dict{UInt64, _DEVal}(),
         Dict{Vector{Float64}, _DEVal}(), bufs, hostkeys,
-        Union{Nothing, _DEVal}[nothing for _ in hostkeys],
+        Union{Nothing, _DEVal}[nothing for _ in hostkeys], windows,
         _E._NodeMap{Bool}(), IdDict{Any, Bool}(),
         opts, names, "the right-hand side", String[],
         Dict{
@@ -150,7 +160,7 @@ function _DECtx(
         Dict{Vector{_MLIR.IR.Value}, _DEVal}(),
         Dict{Tuple{_MLIR.IR.Value, Vector{Int}}, _DEVal}(),
         Dict{Tuple{Int, Vector{Int}}, _MLIR.IR.Value}(),
-        Dict{Symbol, Int}(), Int32(0), :none
+        Dict{Symbol, Int}(), Int32(0), :none, keys64
     )
 end
 
@@ -169,6 +179,7 @@ _de_refuse_at(rule::AbstractString, construct::AbstractString, detail::AbstractS
     throw(_E.DirectEmitError(construct, rule, detail))
 _de_refuse(ctx::_DECtx, construct::AbstractString, detail::AbstractString) =
     _de_refuse_at(ctx.rule, construct, detail)
+_de_refuse(::Nothing, construct, detail) = _de_refuse_at("lane subscript", construct, detail)
 
 # Run `f` with the breadcrumb set to `s`, restoring the previous one after.
 function _de_rule!(f::F, ctx::_DECtx, s::AbstractString) where {F}
@@ -204,7 +215,8 @@ end
 # ---- MLIR plumbing -----------------------------------------------------------
 
 _de_loc() = _MLIR.IR.Location()
-_de_ty(L::Int) = _MLIR.IR.TensorType(Int64[L], _MLIR.IR.Type(Float64))
+_de_ty(L::Int, T::Type = Float64) = _MLIR.IR.TensorType(Int64[L], _MLIR.IR.Type(T))
+_de_ty(ctx::_DECtx, L::Int) = _de_ty(L, ctx.precision)
 _de_ty_i1(L::Int) = _MLIR.IR.TensorType(Int64[L], _MLIR.IR.Type(Bool))
 _de_ty_i64(dims::Vector{Int}) = _MLIR.IR.TensorType(Int64.(dims), _MLIR.IR.Type(Int64))
 _de_ty_i32(dims::Vector{Int}) = _MLIR.IR.TensorType(Int64.(dims), _MLIR.IR.Type(Int32))
@@ -232,10 +244,21 @@ _de_res(op) = _MLIR.IR.result(op)
 # own op builders rather than building the op here: the comparison count
 # (closed.jl) and the long-fold `stablehlo.reduce` (`_de_fold_terms`). Both are
 # O(1) in the grid, so the program stays IR-shaped either way.
-_de_traced(a::_DEVal) = TracedRArray{Float64, 1}((), a.v, (a.len,))
-_de_untraced(x::TracedRArray{Float64, 1}) = _DEVal(x.mlir_data, length(x))
-_de_untraced(x::TracedRNumber{Float64}) =
-    _DEVal(_de_res(_hlo.reshape(x.mlir_data; result_0 = _de_ty(1), location = _de_loc())), 1)
+_de_traced(a::_DEVal, ::Type{T} = Float64) where {T} = TracedRArray{T, 1}((), a.v, (a.len,))
+_de_eltype(::TracedRArray{T}) where {T} = T
+_de_untraced(x::TracedRArray{T, 1}) where {T} = _DEVal(x.mlir_data, length(x))
+_de_untraced(x::TracedRNumber{T}) where {T} =
+    _DEVal(_de_res(_hlo.reshape(x.mlir_data; result_0 = _de_ty(1, T), location = _de_loc())), 1)
+
+function _de_cast(a::_DEVal, from::Type, to::Type)
+    from === to && return a
+    op = _hlo.convert(a.v; result = _de_ty(a.len, to), location = _de_loc())
+    return _DEVal(_de_res(op), a.len)
+end
+
+_de_counter(ctx::_DECtx, r::Base.RefValue{Int}) = get(() -> r[], ctx.counters, r)
+_de_set_counter!(ctx::_DECtx, r::Base.RefValue{Int}, value::Int) = (ctx.counters[r] = value)
+
 
 # ---- constants ---------------------------------------------------------------
 #
@@ -249,8 +272,8 @@ function _de_const(ctx::_DECtx, x::Float64)::_DEVal
     hit === nothing || return hit
     _de_tally!(ctx, :constant_scalar)
     op = _hlo.constant(;
-        output = _de_ty(1),
-        value = _MLIR.IR.DenseElementsAttribute([x]), location = _de_loc()
+        output = _de_ty(ctx, 1),
+        value = _MLIR.IR.DenseElementsAttribute([ctx.precision(x)]), location = _de_loc()
     )
     v = _DEVal(_de_res(op), 1)
     ctx.consts[key] = v
@@ -263,8 +286,8 @@ function _de_arrconst(ctx::_DECtx, xs::Vector{Float64})::_DEVal
     hit === nothing || return hit
     _de_tally!(ctx, :constant_array)
     op = _hlo.constant(;
-        output = _de_ty(length(xs)),
-        value = _MLIR.IR.DenseElementsAttribute(xs), location = _de_loc()
+        output = _de_ty(ctx, length(xs)),
+        value = _MLIR.IR.DenseElementsAttribute(ctx.precision === Float64 ? xs : Float32.(xs)), location = _de_loc()
     )
     v = _DEVal(_de_res(op), length(xs))
     ctx.arrconsts[copy(xs)] = v
@@ -294,7 +317,7 @@ function _de_bcast(ctx::_DECtx, a::_DEVal, L::Int)::_DEVal
     )
     _de_tally!(ctx, :broadcast_in_dim)
     op = _hlo.broadcast_in_dim(
-        a.v; result_0 = _de_ty(L),
+        a.v; result_0 = _de_ty(ctx, L),
         broadcast_dimensions = _MLIR.IR.DenseArrayAttribute(Int64[0]),
         location = _de_loc()
     )
@@ -313,7 +336,7 @@ function _de_slice(
     _de_tally!(ctx, :slice)
     _de_site!(ctx, L == 1 ? :slice1 : :sliceN, why)
     op = _hlo.slice(
-        src.v; result_0 = _de_ty(L),
+        src.v; result_0 = _de_ty(ctx, L),
         start_indices = _MLIR.IR.DenseArrayAttribute(Int64[lo - 1]),
         limit_indices = _MLIR.IR.DenseArrayAttribute(Int64[hi]),
         strides = _MLIR.IR.DenseArrayAttribute(Int64[stride]),
@@ -333,7 +356,7 @@ function _de_concat(ctx::_DECtx, pieces::Vector{_DEVal})::_DEVal
     _de_site!(ctx, :concat, :x)
     L = sum(pc.len for pc in pieces)
     op = _hlo.concatenate(
-        key; result_0 = _de_ty(L),
+        key; result_0 = _de_ty(ctx, L),
         dimension = 0, location = _de_loc()
     )
     out = _DEVal(_de_res(op), L)
@@ -407,7 +430,7 @@ function _de_gather_op(ctx::_DECtx, src::_DEVal, positions::Vector{Int})::_DEVal
         1
     )                   # index_vector_dim
     op = _hlo.gather(
-        src.v, idx; result = _de_ty(L), dimension_numbers = dn,
+        src.v, idx; result = _de_ty(ctx, L), dimension_numbers = dn,
         slice_sizes = _MLIR.IR.DenseArrayAttribute(Int64[1]),
         indices_are_sorted = false, location = _de_loc()
     )
@@ -855,28 +878,9 @@ end
 # So the emitter reads buffers through the ARGUMENT LIST: an identity (`===`)
 # scan over the build's host arrays, in the container's own order, swapping in
 # this call's argument entry. O(#forcing VARIABLES) per read, never O(#cells).
-function _de_buffer(ctx::_DECtx, arr::Vector{Float64})::_DEVal
-    ks = ctx.hostkeys
-    for j in eachindex(ks)
-        if ks[j] === arr
-            hit = ctx.bufvals[j]
-            hit === nothing || return hit
-            x = ctx.bufs[j]
-            x isa TracedRArray{Float64, 1} ||
-                _de_refuse(
-                ctx,
-                "a forcing buffer argument of type $(typeof(x))",
-                "buffer $j of the `buffers` argument is not a traced " *
-                    "rank-1 Float64 array. Pass `map(ConcreteRArray, " *
-                    "forcing_buffers(f))`, the container the explicit-buffers form " *
-                    "expects."
-            )
-            v = _DEVal(x.mlir_data, length(x))
-            ctx.bufvals[j] = v
-            _de_tally!(ctx, :forcing_input)
-            return v
-        end
-    end
+function _de_buffer_index(ctx::_DECtx, arr)
+    j = findfirst(x -> x === arr, ctx.hostkeys)
+    j !== nothing && return j
     return _de_refuse(
         ctx,
         "a live forcing buffer of length $(length(arr))",
@@ -886,4 +890,27 @@ function _de_buffer(ctx::_DECtx, arr::Vector{Float64})::_DEVal
             "find in it would otherwise be baked in as a compile-time constant and " *
             "never see a refresh."
     )
+end
+
+
+function _de_buffer_read(ctx::_DECtx, arr, positions; why = :pgather)
+    j = _de_buffer_index(ctx, arr)
+    val = ctx.bufvals[j]
+    if val === nothing
+        x = ctx.bufs[j]
+        x isa Union{TracedRArray{Float32, 1}, TracedRArray{Float64, 1}} ||
+            _de_refuse(ctx, "forcing buffer $j of type $(typeof(x))", "expected a traced flat floating-point tensor.")
+        val = _de_cast(_de_untraced(x), _de_eltype(x), ctx.precision)
+        ctx.bufvals[j] = val
+        _de_tally!(ctx, :forcing_input)
+    end
+    if val.len != length(arr)
+        window = ctx.windows === nothing ? nothing : ctx.windows[j]
+        window !== nothing && val.len == _E._tile_window_length(window) ||
+            throw(DimensionMismatch("forcing buffer $j has the wrong length"))
+        positions = positions isa Int ? _E._tile_window_position(window, positions) :
+            Int[_E._tile_window_position(window, p) for p in positions]
+    end
+    return positions isa Int ? _de_slice(ctx, val, positions, positions; why) :
+        _de_take(ctx, val, positions)
 end

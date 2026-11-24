@@ -1113,6 +1113,54 @@ end
         @test get(cd_, "log", 0) >= 1
     end
 
+    # A template call's body that reads its argument more than once, nested:
+    # the inlined bodies put one caller node at every read, so a walk that emits
+    # each reference emits the unfolded tree, exponential in the nesting. Each
+    # node is emitted once per kernel run, so the program grows with the depth.
+    @testset "nested template calls: each node emitted once" begin
+        function nested(depth)
+            e = _de_ix("c", "i")
+            for _ in 1:depth
+                e = Dict{String, Any}(
+                    "op" => "apply_operator", "args" => Any[], "name" => "sq",
+                    "bindings" => Dict{String, Any}("w" => e)
+                )
+            end
+            d = _de_doc(
+                "NT", Dict{String, Any}("c" => _de_state(shape = Any["n"])),
+                Any[
+                    Dict{String, Any}(
+                        "lhs" => _de_ao(_de_Dt(_de_ix("c", "i"))),
+                        "rhs" => _de_ao(_de_o("*", 1.0e-3, e)),
+                    ),
+                ];
+                index_sets = _de_nset(6)
+            )
+            d["models"]["M"]["operators"] = Dict{String, Any}(
+                "sq" => Dict{String, Any}(
+                    "params" => Any["w"],
+                    "body" => _de_o(
+                        "ifelse", _de_o(">", "w", 0.0),
+                        _de_o("-", _de_o("*", "w", "w"), _de_o("*", 0.5, "w")),
+                        _de_o("*", 0.25, "w")
+                    ),
+                )
+            )
+            return d
+        end
+        nops = Dict{Int, Int}()
+        for depth in (4, 8)
+            fo, u0, p, _, _ = EarthSciAST.Internal.build(nested(depth); form = :oop)
+            fi!, _, _, _, _ = EarthSciAST.Internal.build(nested(depth))
+            u1 = collect(range(-0.4, 0.9; length = length(u0)))
+            _, cd_ = _de_compare("nested_calls_$depth", fo, fi!, p, [(u1, 0.0)])
+            nops[depth] = sum(values(cd_))
+        end
+        # Unfolded, every level multiplies the program; once per node, four
+        # more levels add a few dozen ops.
+        @test nops[8] < 2 * nops[4]
+    end
+
     # ---- prefix scans over slots the term build does not cover ---------------
     #
     # A STAGGERED strict prefix reduction — `c[i] = ⊕_{j < i} u[j]` with `i` over

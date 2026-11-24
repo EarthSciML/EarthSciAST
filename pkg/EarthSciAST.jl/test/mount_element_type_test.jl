@@ -62,3 +62,75 @@ using EarthSciAST
         end
     end
 end
+
+
+@testset "Declared and unspecified precision sources (§11.3.3)" begin
+    dir = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "mount_element_type")
+    expected = JSON3.read(read(joinpath(dir, "expected.json"), String), Dict{String, Any})
+    # `precision_sources`: the accessor on the loaded document and on its
+    # emit-then-reload; "" is the document default.
+    for (fixture, want) in expected["precision_sources"]
+        @testset "$(fixture)" begin
+            file = load_path(joinpath(dir, fixture))
+            reloaded = load_string(JSON3.write(EarthSciAST.serialize_esm_file(file)))
+            for doc in (file, reloaded), (key, source) in want
+                if isempty(key)
+                    @test precision_source(doc) == source
+                else
+                    model, var = split(key, "."; limit = 2)
+                    @test precision_source(doc, doc.models[model].variables[var]) == source
+                end
+            end
+        end
+    end
+    # `load_error_contains`: the refusal says what is wrong and how to fix it.
+    for (fixture, wants) in expected["load_error_contains"]
+        @testset "$(fixture) names the fix" begin
+            message = try
+                load_path(joinpath(dir, fixture))
+                ""
+            catch e
+                sprint(showerror, e)
+            end
+            for want in wants
+                @test occursin(want, message)
+            end
+            @test !occursin("evaluates in unspecified", message)
+        end
+    end
+end
+
+
+@testset "External native binary32 is refused (§11.3.3)" begin
+    dir = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "precision_source")
+    file = load_path(joinpath(dir, "rounding.esm"))
+    prob = esm_problem(file, (0.0, 1.0))
+    @test rhs_program(prob; unspecified_eltype = Float64) isa EarthSciAST.RhsProgram
+    err = try
+        rhs_program(prob; unspecified_eltype = Float32)
+        nothing
+    catch e
+        e
+    end
+    @test err !== nothing && err.code == "float32_unsupported"
+end
+
+
+@testset "key_precision_unspecified is a non-unit validation warning (§11.3.3 P8)" begin
+    dir = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "precision_source")
+    expected = JSON3.read(read(joinpath(dir, "expected.json"), String), Dict{String, Any})
+    pairs(ws) = sort([(String(w["code"]), String(w["path"])) for w in ws])
+    for (fixture, want) in expected["warnings"]
+        @testset "$(fixture)" begin
+            text = read(joinpath(dir, fixture), String)
+            result = validate(load_string(text))
+            @test result.is_valid
+            @test sort([(w.code, w.path) for w in result.warnings]) == pairs(want)
+            codes = Set(String(w["code"]) for w in want)
+            @test !any(w -> w.code in codes, result.unit_warnings)
+            doc = JSON3.read(text, Dict{String, Any})
+            doc["esm"] = expected["legacy_version"]
+            @test isempty(validate(load_string(JSON3.write(doc))).warnings)
+        end
+    end
+end

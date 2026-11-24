@@ -99,9 +99,10 @@ function _de_skip_rewrite!()
     Reactant.@skip_rewrite_func _de_lookup_place
     Reactant.@skip_rewrite_func _de_options
     Reactant.@skip_rewrite_func _de_emit!
+    Reactant.@skip_rewrite_func _fragment_rhs
+    Reactant.@skip_rewrite_func _fragment_kernel
     return nothing
 end
-_de_skip_rewrite!()
 
 # ---- clients ----------------------------------------------------------------
 

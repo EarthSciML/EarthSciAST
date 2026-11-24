@@ -1,0 +1,34 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "UnspecifiedPrecision",
+    "description": "The RHS is exactly 1 in binary64 and one ulp below 1 in binary32."
+  },
+  "index_sets": { "cells": { "kind": "interval", "size": 2 } },
+  "models": {
+    "M": {
+      "variables": {
+        "a": { "type": "parameter", "default": 73.5, "units": "1" },
+        "x": { "type": "unknown", "default": 0, "units": "s", "shape": ["cells"] }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "cells" } },
+            "expr": {
+              "op": "/",
+              "args": [
+                { "op": "*", "args": [100, { "op": "/", "args": [{ "op": "-", "args": [100, "a"] }, 100] }] },
+                { "op": "-", "args": [100, "a"] }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

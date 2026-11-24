@@ -194,6 +194,120 @@ end
     end
 end
 
+# A per-cell node and a kernel tree are DAGs: a subexpression object is
+# referenced from several places, and the references nest, so a walk that
+# descends into every reference does work, and builds output, in proportion to
+# the UNFOLDED tree, exponential in the nesting. The per-cell merge, round 1's
+# signature and round 1's clone each handle a repeated node once. The chains
+# below double a node 20 to 60 times: a few dozen nodes as a DAG, 2^20 to 2^60
+# as a tree.
+@testset "the kernel merges handle a shared subexpression once" begin
+    st(i) = ESM._mknode(kind = ESM._NK_STATE, idx = i)
+    lit(x) = ESM._mknode(kind = ESM._NK_LITERAL, literal = x)
+    op(o, ch...) = ESM._mknode(kind = ESM._NK_OP, op = o, children = collect(ESM._Node, ch))
+    function doubled(leaf, levels)
+        d = op(:sin, leaf)
+        for _ in 1:levels
+            d = op(:+, d, d)
+        end
+        return d
+    end
+    # distinct node objects reachable from a root
+    function nnodes(root)
+        seen = ESM._NodeMap{Bool}()
+        stack = ESM._Node[root]
+        while !isempty(stack)
+            n = pop!(stack)
+            haskey(seen, n) && continue
+            seen[n] = true
+            append!(stack, n.children)
+        end
+        return length(seen)
+    end
+
+    @testset "the per-cell merge" begin
+        cell(i) = (sh = op(:*, st(i), lit(2.0)); op(:+, sh, op(:sin, sh)))
+        acc = ESM._AccDesc[]
+        spine = ESM._acc_merge_nodes(ESM._Node[cell(1), cell(2), cell(3)], 3, acc)
+        @test spine.children[1] === spine.children[2].children[1]   # built once, still shared
+        @test length(acc) == 1                            # one slot table, not one per reference
+        K = ESM._AccKernel(ESM._outs_cells([1, 2, 3]), spine, acc)
+        du = zeros(3)
+        u = [0.3, 0.7, 1.1]
+        ESM._run_acc_kernel!(du, u, NamedTuple(), 0.0, K)
+        @test du == [2x + sin(2x) for x in u]
+
+        intern = ESM._SigIntern()
+        @test ESM._struct_sig_id(doubled(st(1), 60), intern) ==
+            ESM._struct_sig_id(doubled(st(2), 60), intern)
+        acc40 = ESM._AccDesc[]
+        spine40 = ESM._acc_merge_nodes(
+            ESM._Node[doubled(st(1), 40), doubled(st(2), 40)], 2, acc40
+        )
+        @test length(acc40) == 1
+        @test nnodes(spine40) == nnodes(doubled(st(1), 40))
+    end
+
+    @testset "round 1's clone" begin
+        # two one-lane kernels over the same DAG, reading different state slots
+        kernel(slot) = ESM._AccKernel(
+            ESM._outs_cells([slot]), doubled(ESM._acc(1), 20),
+            ESM._AccDesc[ESM._AccStateFixed(slot)]
+        )
+        kernels = ESM._AccKernel[kernel(1), kernel(2)]
+        plans = ESM._OopAccPlan[ESM._build_oop_acc_plan(K) for K in kernels]
+        @test all(pl -> pl.vectorizable, plans)
+        merged, _, diag = ESM._merge_oop_acc_kernels(kernels, plans)
+        @test diag.n_out == 1 && diag.n_failed == 0
+        @test nnodes(only(merged).spine) == nnodes(kernels[1].spine)
+        # the merged kernel still evaluates to each member's value
+        small = ESM._AccKernel[
+            ESM._AccKernel(
+                ESM._outs_cells([s]), doubled(ESM._acc(1), 3),
+                ESM._AccDesc[ESM._AccStateFixed(s)]
+            ) for s in (1, 2)
+        ]
+        msmall, _, _ = ESM._merge_oop_acc_kernels(
+            small, ESM._OopAccPlan[ESM._build_oop_acc_plan(K) for K in small]
+        )
+        u = [0.3, 0.7]
+        want = zeros(2)
+        foreach(K -> ESM._run_acc_kernel!(want, u, NamedTuple(), 0.0, K), small)
+        got = zeros(2)
+        ESM._run_acc_kernel!(got, u, NamedTuple(), 0.0, only(msmall))
+        @test got == want
+    end
+
+    # Round 1's signature names each node by its CLASS, its own token plus the
+    # classes of its children, instead of writing the unfolded tree as text.
+    @testset "round 1's signature" begin
+        intern = ESM._SigIntern()
+        ksig(K) = ESM._oop_merge_kernel_sig(K, true, intern)
+        kernel(spine, acc = ESM._AccDesc[]) = ESM._AccKernel(ESM._outs_cells([1]), spine, acc)
+        over(slot, f) = kernel(
+            op(:+, doubled(ESM._acc(1), 60), op(f, ESM._acc(1))),
+            ESM._AccDesc[ESM._AccStateFixed(slot)]
+        )
+        s1, s2, s3 = ksig(over(1, :exp)), ksig(over(2, :exp)), ksig(over(3, :cos))
+        @test s1[2] === :ok
+        @test s1[1] == s2[1]                  # which state slot a lane reads is free
+        @test s1[1] != s3[1]                  # another operator is another class
+        @test length(s1[1]) == 3              # 2^60 nodes as a tree: one class per root, two tier marks
+        # a key delimits its children, which concatenated text could not:
+        # f(aT) and f(a, t)
+        par(name) = ESM._mknode(kind = ESM._NK_PARAM, sym = name)
+        tnode = ESM._mknode(kind = ESM._NK_TIME)
+        @test ksig(kernel(op(:f, par(:aT))))[1] != ksig(kernel(op(:f, par(:a), tnode)))[1]
+        # the decline reason is the last one in preorder, whatever the sharing
+        pay = ESM._mknode(kind = ESM._NK_OP, op = :g, payload = Ref(1), children = ESM._Node[lit(1.0)])
+        odd = ESM._mknode(kind = ESM._NK_STATE, idx = 1)
+        @test ksig(kernel(op(:+, pay, odd)))[2] === :node_kind
+        @test ksig(kernel(op(:+, odd, pay)))[2] === :op_payload
+        @test ksig(kernel(op(:+, pay, odd, pay)))[2] === :op_payload
+        @test ESM._oop_merge_kernel_sig(kernel(lit(1.0)), false, intern) == (nothing, :unvectorizable)
+    end
+end
+
 # A ragged loop (`_NK_RAGGED_LOOP`, children `[body, lo, hi]`) is keyed by
 # identity in the merge signature, like the other runtime loops: under the
 # generic op arm it read as an n-ary `+` over three children, so two distinct
@@ -213,4 +327,101 @@ end
     @test sig(r1) != sig(r2)
     @test sig(r1) != sig(plus3)
     @test sig(r1) == sig(r1)
+end
+
+# A const table read at a subscript computed from the state (a linear
+# interpolation) declines the compile-once tiers, so the out-of-place build
+# compiles every cell on its own and groups the cells by structure. The build
+# gives each table one gather payload, so the cells reading one table group
+# into one kernel with a lane per cell, and cells reading different tables stay
+# in separate kernels, each holding its own table.
+function _tbl_interp_doc(N; two_tables = false)
+    op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
+    faq(e) = Dict{String, Any}(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+        "ranges" => Dict("i" => Dict("from" => "cells")), "expr" => e
+    )
+    function interp(var, tab)
+        c = Dict{String, Any}("op" => "const", "args" => Any[], "value" => tab)
+        x = op("min", op("max", op("index", var, "i"), 1.0), length(tab) - 0.5)
+        k = op("floor", x)
+        w = op("-", x, k)
+        return op(
+            "+", op("*", op("-", 1.0, w), op("index", c, k)),
+            op("*", w, op("index", c, op("+", k, 1)))
+        )
+    end
+    tabs = Dict("u" => [sin(0.1j) + 0.01j^1.5 for j in 1:12], "v" => [cos(0.07j) + 0.02j for j in 1:12])
+    vars = Dict{String, Any}()
+    eqs = Any[]
+    for q in (two_tables ? ("u", "v") : ("u",))
+        vars[q] = Dict("type" => "unknown", "units" => "1", "shape" => Any["cells"], "default" => 1.0)
+        dq = merge(op("D", op("index", q, "i")), Dict{String, Any}("wrt" => "t"))
+        push!(eqs, Dict("lhs" => faq(dq), "rhs" => faq(op("-", interp(q, tabs[q]), op("*", 0.1, op("index", q, "i"))))))
+    end
+    doc = Dict(
+        "esm" => ESM.SCHEMA_VERSION, "metadata" => Dict("name" => "tbl_interp"),
+        "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => N)),
+        "models" => Dict("M" => Dict("variables" => vars, "equations" => eqs))
+    )
+    return doc, tabs
+end
+
+function _tbl_payloads(K)
+    out = IdDict{Any, Nothing}()
+    walk(n) = (n.payload isa ESM._ConstGatherArray && (out[n.payload] = nothing); foreach(walk, n.children))
+    walk(K.spine)
+    foreach(walk, K.cse.recipes)
+    foreach(walk, K.cse.inv_recipes)
+    return collect(keys(out))
+end
+
+@testset "cells reading one const table merge into one kernel" begin
+    N = 24
+    for two in (false, true)
+        names = two ? ("u", "v") : ("u",)
+        doc, tabs = _tbl_interp_doc(N; two_tables = two)
+        b = ESM.Internal.build(doc; form = :oop)
+        # Every equation took the per-cell build, and each became one kernel
+        # with a lane per cell.
+        @test b.report.tally[:percell_acc] == length(names)
+        ks = b.report.kernels
+        @test length(ks) == length(names)
+        @test all(K -> ESM._cellset_ncells(K.cells) == N, ks)
+        # Each kernel holds one table payload, its own equation's table.
+        pls = map(_tbl_payloads, ks)
+        @test all(p -> length(p) == 1, pls)
+        @test sort([only(p).flat for p in pls]) == sort([tabs[q] for q in names])
+        two && @test only(pls[1]) !== only(pls[2])
+    end
+end
+
+# The build's one gather payload per const array: the same array under the same
+# name is one object, a different array (equal values or not) or a different
+# name is another, and outside a build every call makes its own.
+@testset "one const gather payload per array per build" begin
+    A = [1.0, 2.0, 3.0]
+    A2 = copy(A)
+    B = [1 2; 3 4]   # not Float64: converted once per build
+    ctx = ESM._new_build_ctx(ESM._compiler_plan(:native), nothing)
+    a = ESM._with_build_ctx(ctx) do
+        a = ESM._const_gather_payload(A, "t")
+        @test ESM._const_gather_payload(A, "t") === a
+        @test a.flat === A
+        @test ESM._const_gather_payload(A2, "t") !== a
+        @test ESM._const_gather_payload(A, "s") !== a
+        b = ESM._const_gather_payload(B, "b")
+        @test ESM._const_gather_payload(B, "b") === b
+        @test b.flat == Float64[1, 3, 2, 4] && b.dims == [2, 2]
+        # A child context (an output-time compile) shares the build's payloads.
+        ESM._with_build_ctx(ESM._child_build_ctx()) do
+            @test ESM._const_gather_payload(A, "t") === a
+        end
+        a
+    end
+    # A new build starts with none of them.
+    ESM._with_build_ctx(ESM._new_build_ctx(ESM._compiler_plan(:native), nothing)) do
+        @test ESM._const_gather_payload(A, "t") !== a
+    end
+    @test ESM._const_gather_payload(A, "t") !== ESM._const_gather_payload(A, "t")
 end

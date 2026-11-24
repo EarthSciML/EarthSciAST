@@ -13,4 +13,9 @@
  */
 
 export { validate, validateText } from './validate/orchestrator.js'
-export type { ValidationError, ValidationResult, StructuralError } from './validate/types.js'
+export type {
+  ValidationError,
+  ValidationResult,
+  ValidationWarning,
+  StructuralError,
+} from './validate/types.js'
