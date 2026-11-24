@@ -2,7 +2,9 @@
 # state and forcing positions, and exact constants. It includes the ordered
 # write sections as well as the equations, so translated members must agree
 # on boundary rules, ghost masks, fill dependencies and output row ownership.
-struct _UnsharedTile <: Exception end
+# Thrown when a tile cannot share its class key; caught by `_tile_class_key`
+# itself, never seen outside it.
+struct _UnsharedTile <: EarthSciASTError end
 
 function _tile_class_key(slots, windows, tile, dec)
     f = tile.f!
