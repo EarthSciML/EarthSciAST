@@ -1441,6 +1441,26 @@ _tpl_array_binding(v::ASTExpr) =
 # buffer holds it and the body is not inlined. The form alone; with the
 # template table `tt`, also an element the build compiles into the instance
 # (`_tpl_inlinable`).
+# A COMPUTED ARRAY bound to an array parameter that is not an elementwise
+# `faq` (above): a `makearray`, a `faq` with output indices whose element is
+# no compiled-in expression, or (with the template table `tt`) a whole-array
+# reference, read as its view. The build evaluates it once in the caller, into a
+# buffer of its own (an internal array observed, call.jl
+# `_hoist_array_arguments`), and passes that buffer as the argument, as it
+# passes a named array. Nothing is expanded: the reference stays a call and the
+# computed array is its argument.
+function _tpl_buffered_array_expr(v::ASTExpr, tt::Union{Nothing, _TplTable} = nothing)
+    v isa OpExpr || return false
+    tt !== nothing && _tpl_is_call(v) && return !_tpl_is_elem(v) &&
+        (_tpl_view_rank(tt, v) > 0 || (_tpl_call_info(tt, v.name) === nothing && _tpl_skel(tt, v.name) !== nothing))
+    v.op == "makearray" && return v.regions !== nothing && v.values !== nothing
+    _is_faq_op(v.op) || return false
+    oi = v.output_idx
+    return oi !== nothing && !isempty(oi) && all(x -> x isa AbstractString, oi) &&
+        v.ranges !== nothing && all(k -> String(k) in oi, keys(v.ranges)) &&
+        v.filter === nothing && v.join === nothing && v.join_gates === nothing
+end
+
 function _tpl_array_expr(v::ASTExpr, tt::Union{Nothing, _TplTable} = nothing)
     (v isa OpExpr && _is_faq_op(v.op)) || return false
     oi = v.output_idx
@@ -1476,7 +1496,7 @@ function _tpl_compiles(tt::_TplTable, call::OpExpr)
         v === nothing && !(s in info.scalars || s in info.arrays || s in info.fixed) && continue
         v === nothing && return false
         if s in info.arrays
-            _tpl_array_binding(v) || _tpl_array_expr(v, tt) || return false
+            _tpl_array_binding(v) || _tpl_array_expr(v, tt) || _tpl_buffered_array_expr(v, tt) || return false
             continue
         end
         if s in info.fixed
@@ -1508,7 +1528,8 @@ function _tpl_compiles(tt::_TplTable, call::OpExpr)
     for s in info.arrays
         startswith(s, _TPL_FREE) || continue
         v = get(b, s, nothing)
-        v === nothing || _tpl_array_binding(v) || _tpl_array_expr(v, tt) || return false
+        v === nothing || _tpl_array_binding(v) || _tpl_array_expr(v, tt) ||
+            _tpl_buffered_array_expr(v, tt) || return false
     end
     return true
 end

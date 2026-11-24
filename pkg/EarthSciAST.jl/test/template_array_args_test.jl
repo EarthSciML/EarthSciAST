@@ -166,3 +166,33 @@ end
         @test du ≈ [1.0] atol = 1.0e-9
     end
 end
+
+# An array parameter bound to a COMPUTED array — a makearray whose region is an
+# array-valued application, or an array-valued application read at other
+# subscripts — is evaluated once in the caller, as the build's own array
+# observed, and passed whole (call.jl `_hoist_array_arguments`); the reference
+# is not expanded. The conformance fixture's tendencies, under both compilers.
+@testset "array parameter bound to a computed array: passed as an argument" begin
+    path = joinpath(
+        TESTUTILS_REPO_ROOT, "tests", "conformance", "array_expression_forms",
+        "fixtures", "computed_array_argument.esm"
+    )
+    for compiler in (:interpreter, :native)
+        u0 = Dict{String, Float64}()
+        for (i, x) in enumerate((1.0, 2.0, 4.0, 8.0))
+            u0["a[$i]"] = x
+            u0["v[$i]"] = 0.0
+            u0["w[$i]"] = 0.0
+        end
+        prob = EarthSciAST.esm_problem(
+            EarthSciAST.load_path(path), (0.0, 1.0); compiler = compiler, u0 = u0
+        )
+        slot(n) = prob.var_map[only(k for k in keys(prob.var_map) if k == n || endswith(k, "." * n))]
+        du = similar(prob.u0)
+        prob.f!(du, prob.u0, prob.p, 0.0)
+        at(n) = du[slot(n)]
+        @test [at("v[$i]") for i in 1:4] == [1.5, 1.5, 3.0, -6.0]
+        @test [at("w[$i]") for i in 1:4] == [48.0, 24.0, 12.0, 6.0]
+        @test all(iszero, (at("a[$i]") for i in 1:4))
+    end
+end

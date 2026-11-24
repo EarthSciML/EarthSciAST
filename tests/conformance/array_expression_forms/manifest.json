@@ -225,6 +225,34 @@
     ]
    },
    "named_exclusions": []
+  },
+  {
+   "id": "computed_array_argument",
+   "path": "fixtures/computed_array_argument.esm",
+   "model": "computed_array_argument",
+   "golden": "golden/computed_array_argument.json",
+   "tags": [
+    "operators",
+    "array-parameter",
+    "makearray",
+    "esm-spec-9.6.11"
+   ],
+   "note": "Authored here: an array parameter bound to a makearray of an array-valued application, and to an array-valued application read at other subscripts.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
   }
  ]
 }

@@ -2166,3 +2166,155 @@ function _tpl_refusal(tt::_TplTable, call::OpExpr)
     end
     return "binding: " * join(bad, " ")
 end
+
+# ---- Computed array arguments ------------------------------------------------------
+# A reference whose array parameter is bound to a computed array (a
+# `makearray`, or a `faq` the build does not read element by element:
+# frames.jl `_tpl_buffered_array_expr`) passes that array the way it passes a
+# named one. The array is an internal array observed of the build's own copy of
+# the model — defined by the binding, evaluated once per call of the
+# right-hand side in the caller, before its reader — and the binding names it.
+# The reference stays a call; neither it nor the array's own references are
+# expanded. This is what the native tapes do with such an argument (EarthSciAST
+# Rust: the argument is lowered in the caller and passed by reference).
+#
+# The internal observed carries the hoisted-name prefix (hoist.jl), so it is
+# kept out of observed listings and outputs, and it is materialized under
+# every compiler (build_pipeline.jl), since a call reads it as an array. Its
+# axes are internal interval index sets of the array's extents; a computed
+# array is anonymous (esm-spec §4.3.4), so it is read only through `index`,
+# positionally. Identical bindings (by their canonical form) share one array.
+const _ARGARR_KIND = "argarr"
+_is_argarr_name(n::AbstractString) = occursin(string(_HOIST_PREFIX, _ARGARR_KIND), n)
+
+# The extents of a computed array, each `[1, n]` (an array index starts at 1),
+# as a list of `n`; `nothing` when one is not a build-time integer.
+function _argarr_extents(v::OpExpr, index_sets)
+    if v.op == "makearray"
+        regs = v.regions::Vector{Vector{Vector{Any}}}
+        isempty(regs) && return nothing
+        nd = length(regs[1])
+        hi = zeros(Int, nd)
+        for r in regs
+            length(r) == nd || return nothing
+            for d in 1:nd
+                b = r[d]
+                (length(b) == 2 && b[1] isa Integer && b[2] isa Integer) || return nothing
+                b[1] >= 1 || return nothing
+                b[2] >= b[1] - 1 || return nothing
+                hi[d] = max(hi[d], b[2])
+            end
+        end
+        return hi
+    end
+    (_is_faq_op(v.op) && v.output_idx !== nothing && v.ranges !== nothing) || return nothing
+    oi = String[String(x) for x in v.output_idx]
+    n = Int[]
+    for o in oi
+        r = get(v.ranges, o, nothing)
+        r === nothing && (r = get(v.ranges, Symbol(o), nothing))
+        if r isa IndexSetRef
+            isempty(r.of) || return nothing
+            is = get(index_sets, r.from, nothing)
+            (is isa IndexSet && is.kind == "interval" && is.size isa Int) || return nothing
+            push!(n, is.size)
+        elseif r isa AbstractVector && length(r) == 2 && r[1] == 1 && r[2] isa Integer
+            push!(n, r[2])
+        else
+            return nothing
+        end
+    end
+    return n
+end
+
+"""
+    _hoist_array_arguments(model, index_sets, tt) -> (model, index_sets)
+
+Every computed array bound to an array parameter of a reference in an
+equation of `model` made an internal array observed, and the binding its name
+(see the section comment above). Returns `model` and `index_sets` unchanged when
+there is none; otherwise new ones (the caller's are not mutated).
+"""
+function _hoist_array_arguments(model::Model, index_sets::AbstractDict, tt::_TplTable)
+    memo = Dict{String, String}()
+    vars = OrderedDict{String, ModelVariable}()
+    eqs_new = Equation[]
+    isets_new = Dict{String, IndexSet}()
+    function hoist(v::OpExpr, owner::String)
+        key = JSON3.write(serialize_expression(v))
+        hit = get(memo, key, nothing)
+        hit === nothing || return VarExpr(hit)
+        # Read as an equation's right-hand side is read after preparation: an
+        # array-valued reference in it through its view (`_tpl_whole_views`).
+        vv = _tpl_whole_views(tt, v)
+        vv isa OpExpr || return nothing
+        ext = _argarr_extents(vv::OpExpr, index_sets)
+        ext === nothing && return nothing
+        k = length(memo) + 1
+        name = string(_HOIST_PREFIX, _ARGARR_KIND, k, '\0', owner)
+        shape = String[]
+        for (d, n) in enumerate(ext)
+            s = string(_HOIST_PREFIX, _ARGARR_KIND, k, '\0', "d", d)
+            isets_new[s] = IndexSet("interval"; size = n)
+            push!(shape, s)
+        end
+        vars[name] = ModelVariable(UnknownVariable; shape = shape)
+        # The array's own expression may bind computed arrays too.
+        push!(eqs_new, Equation(VarExpr(name), walk(vv, owner)))
+        memo[key] = name
+        return VarExpr(name)
+    end
+    seen = IdDict{Tuple{OpExpr, String}, ASTExpr}()
+    function walk(e, owner::String)
+        e isa OpExpr || return e
+        r = get(seen, (e, owner), nothing)
+        r === nothing || return r
+        r = walk_node(e, owner)
+        seen[(e, owner)] = r
+        return r
+    end
+    function walk_node(e::OpExpr, owner::String)
+        o = map_children(c -> walk(c, owner), e)
+        (_tpl_is_call(o) && o.bindings !== nothing) || return o
+        info = _tpl_call_info(tt, o.name)
+        info === nothing && return o
+        # Every array parameter, also one a laned call reads through its lanes
+        # (`_call_array_slots` leaves those out): the lanes read the binding
+        # at their subscripts, so they read the hoisted array instead.
+        hoisted = Dict{String, Tuple{ASTExpr, VarExpr}}()
+        for (k, b) in o.bindings
+            (startswith(k, _TPL_OUT) || startswith(k, _TPL_LANE)) && continue
+            ((startswith(k, _TPL_FREE) ? k : _TPL_ARG * k) in info.arrays) || continue
+            (b isa OpExpr && !_call_passable_array(b) && !_tpl_array_expr(b, tt) &&
+                _tpl_buffered_array_expr(b, tt)) || continue
+            r = hoist(b::OpExpr, owner)
+            r === nothing && continue
+            hoisted[JSON3.write(serialize_expression(b))] = (b, r)
+        end
+        isempty(hoisted) && return o
+        function swap(x)
+            x isa OpExpr || return x
+            if x.op == "makearray" || _is_faq_op(x.op) || _tpl_is_call(x)
+                h = get(hoisted, JSON3.write(serialize_expression(x)), nothing)
+                h === nothing || return h[2]
+            end
+            return map_children(swap, x)
+        end
+        nb = Dict{String, ASTExpr}(k => swap(v) for (k, v) in o.bindings)
+        return reconstruct(o; bindings = nb)
+    end
+    eqs = model.equations
+    for (i, eq) in enumerate(model.equations)
+        owner = _hoist_owner(eq.lhs)
+        rhs = walk(eq.rhs, owner)
+        rhs === eq.rhs && continue
+        eqs === model.equations && (eqs = copy(model.equations))
+        eqs[i] = Equation(eq.lhs, rhs; _comment = eq._comment)
+    end
+    isempty(memo) && return model, index_sets
+    allvars = OrderedDict{String, ModelVariable}(model.variables)
+    merge!(allvars, vars)
+    isets = copy(index_sets)
+    merge!(isets, isets_new)
+    return reconstruct(model; variables = allvars, equations = vcat(eqs, eqs_new)), isets
+end
