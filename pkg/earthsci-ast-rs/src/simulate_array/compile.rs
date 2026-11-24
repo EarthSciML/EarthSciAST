@@ -293,7 +293,7 @@ pub(super) fn apply_ragged_factor_scope(
 ///    that the lift defines takes the lift's index sets;
 /// 3. a variable with no declared `shape` whose value is an array on one arm
 ///    of an `ifelse` and a scalar on the other takes the array arm's shape
-///    (esm-spec §4.3.4, [`crate::flatten::conditional_shape_promotions`]),
+///    (esm-spec §4.3.4, [`crate::flatten::conditional_shape_promotions_with`]),
 ///    written into its declaration. `flatten` does not record this shape in
 ///    its output (esm-libraries-spec §4.7.5), so every build gets it here. A
 ///    variable whose shape only data can decide (its only arrays are
@@ -302,26 +302,44 @@ pub(super) fn apply_ragged_factor_scope(
 /// 4. the bare-array-operand check on the lifted equations
 ///    ([`refuse_faq_bare_array_operands`]), whose declared-or-inferred axes
 ///    of every variable the table records.
+#[cfg(test)]
 pub(crate) fn apply_shape_rewrites(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
     inherited: Option<&ShapeTable>,
 ) -> Result<ShapeTable, CompileError> {
+    apply_shape_rewrites_with(model, index_sets, inherited, &mut IndexMap::new())
+}
+
+/// [`apply_shape_rewrites`] over a model whose operator references resolve
+/// against `registry` (a flattened system's merged registry, on the wire):
+/// the elementwise lift reads each reference's parameter roles from it and
+/// may add to it, and the conditional shapes and the bare-array-operand
+/// check read each reference through it.
+pub(crate) fn apply_shape_rewrites_with(
+    model: &mut Model,
+    index_sets: &HashMap<String, IndexSet>,
+    inherited: Option<&ShapeTable>,
+    registry: &mut IndexMap<String, serde_json::Value>,
+) -> Result<ShapeTable, CompileError> {
     if let Some(parent) = inherited {
         set_declared_shapes(model, parent.built());
     }
-    let lifted = crate::elementwise_lift::lift_elementwise_applications(model)
+    let lifted = crate::elementwise_lift::lift_elementwise_applications_with(model, registry)
         .map_err(CompileError::build_err)?;
-    let conditional = crate::flatten::conditional_shape_promotions(
+    let operators = crate::operator_refs::OperatorRegistry::from_json(registry.iter());
+    let ops = Instances::new(operators.clone());
+    let conditional = crate::flatten::conditional_shape_promotions_with(
         &|n: &str| model.variables.get(n),
         model.equations.iter(),
         index_sets,
+        &operators,
     );
     set_declared_shapes(
         model,
         conditional.built.iter().map(|(n, a)| (n, a.as_slice())),
     );
-    let axes = refuse_faq_bare_array_operands(model)?;
+    let axes = refuse_faq_bare_array_operands(model, &ops)?;
     Ok(ShapeTable::assemble(
         model,
         axes,
@@ -347,10 +365,26 @@ pub(crate) fn apply_shape_rewrites(
 /// (esm-libraries-spec §4.7.5). A scalar is absent.
 pub(crate) fn refuse_faq_bare_array_operands(
     model: &Model,
+    ops: &Instances,
 ) -> Result<HashMap<String, Vec<String>>, CompileError> {
     let shapes = crate::structural::promoted_var_shapes(model);
     if shapes.values().all(Vec::is_empty) {
         return Ok(shapes);
+    }
+    let mut through_refs = BareThroughRefs {
+        ops,
+        shapes: &shapes,
+        memo: HashMap::new(),
+    };
+    for eq in &model.equations {
+        if crate::operator_refs::has_reference(&eq.rhs)
+            && let Some(message) = through_refs.check(&eq.rhs)?
+        {
+            return Err(CompileError::build_err(format!(
+                "[faq_bare_array_operand] the equation defining `{}`: {message}",
+                eq.lhs
+            )));
+        }
     }
     for (k, eq) in model.equations.iter().enumerate() {
         let mut errors = Vec::new();
@@ -370,6 +404,201 @@ pub(crate) fn refuse_faq_bare_array_operands(
         }
     }
     Ok(shapes)
+}
+
+/// What one operator instance's body reads bare (whole-array, in an
+/// elementwise position) of its parameters, computed once per instance:
+/// `elem`, from the body's root down through elementwise operators only (what
+/// a `faq` around the reference would read per tuple), and `in_faq`, what a
+/// `faq` inside the body reads so in its `expr` or `filter`.
+#[derive(Default)]
+struct BareParams {
+    elem: HashSet<String>,
+    in_faq: HashSet<String>,
+}
+
+/// The `faq_bare_array_operand` check (esm-spec §4.3.1) through operator
+/// references: each instance body is analysed once ([`BareParams`]), and at
+/// each reference the bindings of the parameters it reads bare are checked
+/// for a bare shaped variable. Never expands a reference.
+struct BareThroughRefs<'a> {
+    ops: &'a Instances,
+    shapes: &'a HashMap<String, Vec<String>>,
+    memo: HashMap<usize, Rc<BareParams>>,
+}
+
+impl BareThroughRefs<'_> {
+    fn instance(
+        &self,
+        node: &ExpressionNode,
+    ) -> Result<std::sync::Arc<crate::operator_refs::CallInstance>, CompileError> {
+        let r = crate::operator_refs::reference_node(node)
+            .ok_or_else(|| CompileError::build_err("an operator reference with no name"))?;
+        self.ops
+            .instance(&r)
+            .map_err(|e| CompileError::build_err(e.to_string()))
+    }
+
+    fn summary(&mut self, node: &ExpressionNode) -> Result<Rc<BareParams>, CompileError> {
+        let inst = self.instance(node)?;
+        let key = std::sync::Arc::as_ptr(&inst) as usize;
+        if let Some(s) = self.memo.get(&key) {
+            return Ok(Rc::clone(s));
+        }
+        let params: HashSet<&str> = inst.definition.params.iter().map(String::as_str).collect();
+        let mut out = BareParams::default();
+        self.elem_params(&inst.body, &params, &mut out.elem)?;
+        self.faq_params(&inst.body, &params, &mut out.in_faq)?;
+        let out = Rc::new(out);
+        self.memo.insert(key, Rc::clone(&out));
+        Ok(out)
+    }
+
+    /// The parameters `e` reads bare in elementwise position.
+    fn elem_params(
+        &mut self,
+        e: &Expr,
+        params: &HashSet<&str>,
+        out: &mut HashSet<String>,
+    ) -> Result<(), CompileError> {
+        match e {
+            Expr::Variable(n) if params.contains(n.as_str()) => {
+                out.insert(n.clone());
+            }
+            Expr::Operator(node) if node.op == crate::operator_refs::APPLY_OP => {
+                let s = self.summary(node)?;
+                if let Some(b) = &node.bindings {
+                    for q in &s.elem {
+                        if let Some(be) = b.get(q) {
+                            self.elem_params(be, params, out)?;
+                        }
+                    }
+                }
+            }
+            Expr::Operator(node) if crate::op_registry::is_elementwise_node(node) => {
+                node.try_for_each_child(&mut |c| self.elem_params(c, params, out))?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The parameters a `faq` anywhere in `e` reads bare in its `expr` or
+    /// `filter`, through the references in it.
+    fn faq_params(
+        &mut self,
+        e: &Expr,
+        params: &HashSet<&str>,
+        out: &mut HashSet<String>,
+    ) -> Result<(), CompileError> {
+        let Expr::Operator(node) = e else {
+            return Ok(());
+        };
+        if crate::faq::is_faq_op(&node.op) {
+            for part in [node.expr.as_deref(), node.filter.as_deref()]
+                .into_iter()
+                .flatten()
+            {
+                self.elem_params(part, params, out)?;
+            }
+        }
+        if node.op == crate::operator_refs::APPLY_OP {
+            let s = self.summary(node)?;
+            if let Some(b) = &node.bindings {
+                for q in &s.in_faq {
+                    if let Some(be) = b.get(q) {
+                        self.elem_params(be, params, out)?;
+                    }
+                }
+            }
+        }
+        node.try_for_each_child(&mut |c| self.faq_params(c, params, out))
+    }
+
+    /// The shaped variables `e` (in the equation's scope) reads bare in
+    /// elementwise position, through the references in it.
+    fn bare_shaped(&mut self, e: &Expr, out: &mut Vec<String>) -> Result<(), CompileError> {
+        match e {
+            Expr::Variable(n) if self.shapes.get(n).is_some_and(|s| !s.is_empty()) => {
+                out.push(n.clone());
+            }
+            Expr::Operator(node) if node.op == crate::operator_refs::APPLY_OP => {
+                let s = self.summary(node)?;
+                if let Some(b) = &node.bindings {
+                    for q in &s.elem {
+                        if let Some(be) = b.get(q) {
+                            self.bare_shaped(be, out)?;
+                        }
+                    }
+                }
+            }
+            Expr::Operator(node) if crate::op_registry::is_elementwise_node(node) => {
+                node.try_for_each_child(&mut |c| self.bare_shaped(c, out))?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The first bare shaped read a `faq` makes through a reference in `e`,
+    /// as a message.
+    fn check(&mut self, e: &Expr) -> Result<Option<String>, CompileError> {
+        let Expr::Operator(node) = e else {
+            return Ok(None);
+        };
+        let mut found: Vec<String> = Vec::new();
+        if crate::faq::is_faq_op(&node.op) {
+            for part in [node.expr.as_deref(), node.filter.as_deref()]
+                .into_iter()
+                .flatten()
+            {
+                // Only what a reference delivers: a bare read written in place
+                // is the structural check's.
+                self.refs_in_elem(part, &mut found)?;
+            }
+        }
+        if node.op == crate::operator_refs::APPLY_OP {
+            let s = self.summary(node)?;
+            if let Some(b) = &node.bindings {
+                for q in &s.in_faq {
+                    if let Some(be) = b.get(q) {
+                        self.bare_shaped(be, &mut found)?;
+                    }
+                }
+            }
+        }
+        if let Some(name) = found.first() {
+            return Ok(Some(format!(
+                "a faq reads '{name}', declared over [{}], by bare name through an operator \
+                 reference. A faq names its axes by its range symbols, and its body is \
+                 evaluated once per index tuple, so a whole array there does not say which \
+                 symbol each of its axes is. Read it through `index` (esm-spec §4.3.1)",
+                self.shapes[name].join(", ")
+            )));
+        }
+        let mut first = None;
+        node.try_for_each_child(&mut |c| {
+            if first.is_none() {
+                first = self.check(c)?;
+            }
+            Ok::<(), CompileError>(())
+        })?;
+        Ok(first)
+    }
+
+    /// The bare shaped reads the references in elementwise position of a
+    /// `faq` part deliver.
+    fn refs_in_elem(&mut self, e: &Expr, out: &mut Vec<String>) -> Result<(), CompileError> {
+        match e {
+            Expr::Operator(node) if node.op == crate::operator_refs::APPLY_OP => {
+                self.bare_shaped(e, out)
+            }
+            Expr::Operator(node) if crate::op_registry::is_elementwise_node(node) => {
+                node.try_for_each_child(&mut |c| self.refs_in_elem(c, out))
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Write `shapes` into `model`'s declarations, by name.
@@ -639,9 +868,10 @@ impl ArrayCompiled {
         // right-hand side. Walk them here, before anything evaluates one
         // (esm-spec §9.6.3 constraint 6), so an unlowered op in an initial
         // condition is refused at build exactly as it is in an equation.
-        for (_, rhs) in &flat.field_ics {
-            check_evaluable(rhs)?;
-        }
+        check_evaluable_all(
+            flat.field_ics.iter().map(|(_, rhs)| rhs),
+            &compiled.operators,
+        )?;
         // Carry the classified scoped-reference `ic` equations through so `u0` is
         // folded from the provider-served loaded initial fields at build time.
         compiled.field_ics = flat.field_ics.clone();
@@ -737,6 +967,7 @@ impl ArrayCompiled {
             model,
             index_sets,
             shapes,
+            operators,
         } = normalized;
         let ResolvedModel {
             model: mut model_owned,
@@ -744,12 +975,14 @@ impl ArrayCompiled {
             runtime_params,
             const_scope,
             any_index,
+            ops,
         } = resolve_for_compile(
             model,
             index_sets,
             &shapes,
             supplied,
             runtime_array_parameters,
+            operators,
         )?;
         let index_sets = &index_sets;
 
@@ -769,7 +1002,7 @@ impl ArrayCompiled {
             unvalued_shaped_params,
             forcing_defaults,
             data_fed,
-        } = classify_model(&model_owned, index_sets, &runtime_params, any_index)?;
+        } = classify_model(&model_owned, index_sets, &runtime_params, any_index, &ops)?;
 
         // (5c) The build-time array scope a field `ic` may read (esm-spec
         // §6.6.5) — captured before stage (6) moves the bodies out.
@@ -801,7 +1034,7 @@ impl ArrayCompiled {
 
         // (7)+(7b)+(8) Build the RHS rules, cover held-at-ic slots, and
         // validate that every state slot has a defining equation.
-        let rhs_rules = build_rhs_rules(model, &slots, &held_at_ic)?;
+        let rhs_rules = build_rhs_rules(model, &slots, &held_at_ic, &ops)?;
         let held_at_ic_names = held_at_ic.clone();
 
         let SlotTables {
@@ -859,6 +1092,7 @@ impl ArrayCompiled {
             unvalued_shaped_params,
             held_at_ic: held_at_ic_names,
             tape_cache: tape::TapeCache::new(),
+            operators: ops,
         })
     }
 }
@@ -877,6 +1111,9 @@ struct ResolvedModel {
     /// Whether any `index` node survives, which is all shape inference needs
     /// to know before it walks the equations.
     any_index: bool,
+    /// The operator instances the model's references name, each body
+    /// resolved by the same passes as the model's expressions.
+    ops: std::sync::Arc<crate::operator_refs::Instances>,
 }
 
 /// Resolve a [`NormalizedModel`]'s data-dependent structure for the compile:
@@ -893,6 +1130,7 @@ fn resolve_for_compile(
     shapes: &ShapeTable,
     supplied: BuildTimeData<'_>,
     runtime_array_parameters: bool,
+    operators: crate::operator_refs::OperatorRegistry,
 ) -> Result<ResolvedModel, CompileError> {
     // Lower every SHAPED parameter whose value the document supplies —
     // inline array data, or one scalar broadcast over the grid (esm-spec
@@ -928,7 +1166,10 @@ fn resolve_for_compile(
     // producer, unless the build already ran it over this system. A producer
     // that cannot run is recorded rather than raised, and is refused below
     // only if a surviving expression ranges over its set.
-    let derived = materialize_derived_extents(&model, &index_sets, supplied);
+    // Value invention reads a producer's references through the system's
+    // registry, each instance body compiled once.
+    let vi_ops = crate::operator_refs::Instances::new(operators.clone());
+    let derived = materialize_derived_extents(&model, &index_sets, supplied, &vi_ops);
     bind_member_factors(&mut model, &derived.member_factors);
     // Drop value-invention (relational) scaffolding — `distinct` producers
     // and membership sets over `kind: "derived"` index sets — plus the
@@ -965,9 +1206,11 @@ fn resolve_for_compile(
     // loop symbols is the data-derived value-equality case and is lowered
     // into a member-equality `filter` over the contraction; a join over a
     // genuine (non-loop) data column is rejected rather than mis-combined.
-    crate::join::resolve_aggregate_joins(&mut model, &index_sets, |model| {
-        shapes.declared_map(|n| model.variables.contains_key(n))
-    })?;
+    let declared_shapes = shapes.declared_map(|n| model.variables.contains_key(n));
+    crate::join::resolve_aggregate_joins(&mut model, &index_sets, |_| declared_shapes.clone())?;
+    // Each instance body an operator reference names is resolved by the same
+    // passes, once per instance: its joins, then its ranges.
+    let ops = build_instances(operators, &index_sets, declared_shapes, &derived.extents);
     // Then rewrite every `{ "from": <index set> }` range reference (§5.2)
     // into a concrete `[lo, hi]` interval before shape inference / rule
     // building, so every downstream consumer sees only dense intervals.
@@ -1002,7 +1245,35 @@ fn resolve_for_compile(
         runtime_params,
         const_scope,
         any_index: census.index,
+        ops: std::sync::Arc::new(ops),
     })
+}
+
+/// The operator instances of `registry` (esm-spec §9.6.4 rule 3), each body
+/// resolved, once per instance, by the passes the build runs over every
+/// expression of the model before it evaluates one: its `join` clauses
+/// ([`crate::join::resolve_expr_joins`], against `declared_shapes`), then its
+/// ranges ([`crate::faq::resolve_expr_ranges_with_extents`]).
+pub(crate) fn build_instances(
+    registry: crate::operator_refs::OperatorRegistry,
+    index_sets: &HashMap<String, IndexSet>,
+    declared_shapes: HashMap<String, Vec<String>>,
+    extents: &HashMap<String, i64>,
+) -> crate::operator_refs::Instances {
+    let sets = index_sets.clone();
+    let sets2 = index_sets.clone();
+    let extents = extents.clone();
+    crate::operator_refs::Instances::new(registry)
+        .with_rewrite(move |e| {
+            crate::join::resolve_overlap_syms_expr(e, &declared_shapes);
+            crate::join::check_overlap_factor_ranks(e, &declared_shapes)
+                .and_then(|()| crate::join::resolve_expr_joins(e, &sets, &declared_shapes))
+                .map_err(|err| err.to_string())
+        })
+        .with_rewrite(move |e| {
+            crate::faq::resolve_expr_ranges_with_extents(e, &sets2, &extents)
+                .map_err(|err| err.to_string())
+        })
 }
 
 /// What stages (0)-(5) of the staged build decide about a resolved model,
@@ -1036,10 +1307,11 @@ fn classify_model(
     index_sets: &HashMap<String, IndexSet>,
     runtime_params: &HashSet<String>,
     any_index: bool,
+    ops: &Instances,
 ) -> Result<Classified, CompileError> {
     // (0) Reject spatial differential operators anywhere in the model's
     // equations or observed-variable expressions (esm-i7b).
-    reject_unlowered_spatial_ops(model)?;
+    reject_unlowered_spatial_ops(model, ops)?;
 
     // (0a) Reject an implicit equation: this runtime has no algebraic
     // solve, and every stage below would skip the equation, leaving the
@@ -1075,7 +1347,7 @@ fn classify_model(
     // it a typo'd/undeclared bare name reaches `lookup_variable`'s final
     // arm, which now fails closed but only names the fault at the drain;
     // catching it HERE names the variable before anything is built.
-    check_free_variables(model, index_sets, &[])?;
+    check_free_variables(model, index_sets, &[], ops.registry())?;
 
     // (1) Collect state / parameter / observed variables.
     let (state_vars, param_vars, observed_vars, data_fed) =
@@ -1084,7 +1356,7 @@ fn classify_model(
     // (2)+(2b) Infer state shapes from every equation usage, seeding
     // declared array shapes where the index-usage inference left an
     // array state scalar.
-    let shape_map = infer_state_shapes(model, &state_vars, index_sets, any_index)?;
+    let shape_map = infer_state_shapes(model, &state_vars, index_sets, any_index, ops)?;
 
     // (3) Partition state variables into integrated / eliminated /
     // held-at-ic.
@@ -1186,7 +1458,7 @@ fn classify_model(
 /// that have no rule in this evaluator because an earlier stage was supposed to
 /// eliminate them (`distinct`, `ic`, `enum`, `apply_expression_template`).
 ///
-/// The second half is [`check_evaluable`]'s `is_evaluable_op` gate, and it is
+/// The second half is [`check_evaluable_all`]'s `is_evaluable_op` gate, and it is
 /// here because [`eval_op`]'s backstop for an ungated op is `unreachable!` — a
 /// PANIC, which is what an author got (exit 101, no diagnostic) from a document
 /// that `esm validate` had just passed. The public `eval_expression` gated;
@@ -1200,49 +1472,42 @@ fn classify_model(
 /// `strip_value_invention` run BEFORE the staged build, so by the time this
 /// sees the model a derived-set producer has been dropped — what remains is
 /// genuinely unevaluable.
-fn reject_unlowered_spatial_ops(model: &Model) -> Result<(), CompileError> {
+fn reject_unlowered_spatial_ops(model: &Model, ops: &Instances) -> Result<(), CompileError> {
+    let mut roots: Vec<&Expr> = Vec::new();
     for eq in &model.equations {
         // The `ic` exemption is for the LHS and only the LHS (esm-spec
         // §11.4.1 puts `ic` there). Applying it to the RHS as well let an
         // `ic`-headed RHS — the one shape that is NOT an initial-condition
         // statement — walk past the gate and reach the evaluator, where it is
         // an ordinary unevaluable-core op with no rule.
-        check_evaluable_side(&eq.lhs)?;
-        check_evaluable(&eq.rhs)?;
+        evaluable_side(&eq.lhs, &mut roots);
+        roots.push(&eq.rhs);
     }
+    let mut carried: Vec<Expr> = Vec::new();
     for var in model.variables.values() {
-        let mut failure = None;
-        var.for_each_expression(&mut |expr| {
-            if failure.is_none()
-                && let Err(e) = check_evaluable(expr)
-            {
-                failure = Some(e);
-            }
-        });
-        if let Some(e) = failure {
-            return Err(e);
-        }
+        var.for_each_expression(&mut |expr| carried.push(expr.clone()));
     }
-    Ok(())
+    roots.extend(carried.iter());
+    // Every expression, then the body of every operator instance they reach,
+    // each once (esm-spec §9.6.3 constraint 6).
+    check_evaluable_all(roots, ops)
 }
 
-/// [`check_evaluable`] over the LEFT side of an equation, with the ONE
+/// The expressions [`check_evaluable_all`] reads on the LEFT side of an equation, with the ONE
 /// structural wrapper the array path consumes rather than evaluates unwrapped
 /// first: an `ic` LHS (esm-spec §11.4). `ic` is evaluable-core and has no `eval_op` arm —
 /// correctly, since initial-condition assembly reads the equation and the
 /// evaluator never sees the node — so gating it as an ordinary expression would
 /// reject every document that states an initial condition. Its OPERAND is
 /// checked, so nothing inside it escapes the gate.
-fn check_evaluable_side(expr: &Expr) -> Result<(), CompileError> {
+fn evaluable_side<'e>(expr: &'e Expr, out: &mut Vec<&'e Expr>) {
     if let Expr::Operator(node) = expr
         && node.op == "ic"
     {
-        for arg in &node.args {
-            check_evaluable(arg)?;
-        }
-        return Ok(());
+        out.extend(node.args.iter());
+        return;
     }
-    check_evaluable(expr)
+    out.push(expr);
 }
 
 /// A set of names, hashed with Fx, as the free-variable check credits them
@@ -1317,6 +1582,7 @@ pub(crate) fn check_free_variables(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
     extra_bound: &[String],
+    operators: &crate::operator_refs::OperatorRegistry,
 ) -> Result<(), CompileError> {
     // ---- Build the bound set. ------------------------------------------------
     // The names the model and its caller declare, borrowed; `bound` holds what
@@ -1403,8 +1669,8 @@ pub(crate) fn check_free_variables(
                     || scope.contains(name)
                     || is_loop_symbol(name)
             };
-            check_expr_free_vars(&eq.lhs, &is_bound)?;
-            check_expr_free_vars(&eq.rhs, &is_bound)
+            check_expr_free_vars(&eq.lhs, &is_bound, operators)?;
+            check_expr_free_vars(&eq.rhs, &is_bound, operators)
         })?;
     }
     for var in model.variables.values() {
@@ -1415,12 +1681,16 @@ pub(crate) fn check_free_variables(
             }
             crate::binders::collect_binders(expr, Binders::ALL, &mut binders);
             if let Err(e) = with_binders(&mut bound, &mut binders, |scope| {
-                check_expr_free_vars(expr, &|name: &str| {
-                    !checked(name)
-                        || declared.contains(name)
-                        || scope.contains(name)
-                        || is_loop_symbol(name)
-                })
+                check_expr_free_vars(
+                    expr,
+                    &|name: &str| {
+                        !checked(name)
+                            || declared.contains(name)
+                            || scope.contains(name)
+                            || is_loop_symbol(name)
+                    },
+                    operators,
+                )
             }) {
                 failure = Some(e);
             }
@@ -1549,7 +1819,11 @@ fn collect_dims_heads_and_binders(
 /// bound, table axis, aggregate key, or template binding is not missed. A `fn`
 /// op's callee lives in `node.name` (not a child), so it is never mistaken for a
 /// variable.
-fn check_expr_free_vars(expr: &Expr, scope: &dyn Fn(&str) -> bool) -> Result<(), CompileError> {
+fn check_expr_free_vars(
+    expr: &Expr,
+    scope: &dyn Fn(&str) -> bool,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> Result<(), CompileError> {
     match expr {
         Expr::Variable(name) => {
             // Builtins and derivative markers are always valid; `scope`
@@ -1565,10 +1839,42 @@ fn check_expr_free_vars(expr: &Expr, scope: &dyn Fn(&str) -> bool) -> Result<(),
             )))
         }
         Expr::Operator(node) => {
+            // A reference's binding is read where the body reads its
+            // parameter: a loop symbol the body binds there is in scope.
+            let captured = crate::operator_refs::reference_node(node)
+                .map(|r| operators.captured_symbols(r.name))
+                .filter(|c| !c.is_empty());
+            let widened = |name: &str| scope(name) || captured.is_some_and(|c| c.contains(name));
+            let scope: &dyn Fn(&str) -> bool = if captured.is_some() { &widened } else { scope };
+            // A binding of a parameter the body spells only in a literal
+            // position (an axis, an index set) names that thing; it reads no
+            // variable.
+            if let Some(r) = crate::operator_refs::reference_node(node) {
+                // A binding of a parameter the body never reads is not
+                // evaluated by its expansion: it reads nothing either.
+                let literal_only = |p: &str| {
+                    let role = operators
+                        .get(r.name)
+                        .and_then(|d| d.param_roles().get(p).copied());
+                    let unread = operators.get(r.name).is_some() && role.is_none();
+                    unread
+                        || (operators.instance_params(r.name).iter().any(|q| q == p)
+                            && !role.is_some_and(|role| role.operand || role.forwarded))
+                };
+                let mut keys: Vec<&String> = r.bindings.keys().collect();
+                keys.sort();
+                for k in keys {
+                    if literal_only(k) && matches!(r.bindings[k], Expr::Variable(_)) {
+                        continue;
+                    }
+                    check_expr_free_vars(&r.bindings[k], scope, operators)?;
+                }
+                return Ok(());
+            }
             let mut first_err: Option<CompileError> = None;
             node.for_each_child(&mut |child| {
                 if first_err.is_none()
-                    && let Err(e) = check_expr_free_vars(child, scope)
+                    && let Err(e) = check_expr_free_vars(child, scope, operators)
                 {
                     first_err = Some(e);
                 }
@@ -2246,9 +2552,11 @@ fn infer_state_shapes(
     state_vars: &[&String],
     index_sets: &HashMap<String, IndexSet>,
     any_index: bool,
+    ops: &Instances,
 ) -> Result<HashMap<String, Vec<usize>>, CompileError> {
-    let mut shape_map = if any_index {
-        infer_shapes(state_vars, &model.equations)?
+    // An `index` may sit in an operator reference's body.
+    let mut shape_map = if any_index || !ops.registry().is_empty() {
+        infer_shapes(state_vars, &model.equations, ops)?
     } else {
         state_vars
             .iter()
@@ -3038,7 +3346,8 @@ fn lower_algebraic_body(
         .map(|d| format!("_lp{d}_{name}"))
         .collect();
     let output_ranges: Vec<(i64, i64)> = extents.iter().map(|n| (1i64, *n as i64)).collect();
-    let looped = index_array_leaves_by_loops(&body, array_axes, Some(&plan), &loops);
+    let looped =
+        index_array_leaves_by_loops(&body, array_axes, Some(&plan), &loops, Instances::empty());
     Ok(AlgebraicRule::ArrayLoop {
         var: name.to_string(),
         output_idx_names: loops,
@@ -3088,6 +3397,7 @@ fn build_rhs_rules(
     model: &Model,
     slots: &SlotTables,
     held_at_ic: &HashSet<String>,
+    ops: &Instances,
 ) -> Result<Vec<RhsRule>, CompileError> {
     let var_shapes = &slots.var_shapes;
     let mut rhs_rules: Vec<RhsRule> = Vec::new();
@@ -3122,6 +3432,7 @@ fn build_rhs_rules(
                     var_shapes,
                     &mut covered_slots,
                     &mut rhs_rules,
+                    ops,
                 )?,
             }
             continue;
@@ -3212,6 +3523,7 @@ fn lower_indexed_derivative(
 /// Lower a bare-variable derivative `D(var, t) = rhs`: a plain scalar slot
 /// write when the state is 0-D, otherwise one of the two whole-array lifts
 /// ([`lower_wholearray_producer_lift`] / [`lower_wholearray_percell`]).
+#[allow(clippy::too_many_arguments)]
 fn lower_bare_derivative(
     var: String,
     rhs: &Expr,
@@ -3220,6 +3532,7 @@ fn lower_bare_derivative(
     var_shapes: &IndexMap<String, VarShape>,
     covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
+    ops: &Instances,
 ) -> Result<(), CompileError> {
     let shape = var_shapes
         .get(&var)
@@ -3248,7 +3561,7 @@ fn lower_bare_derivative(
             slot,
             body: Box::new(rhs.clone()),
         });
-    } else if rhs_has_array_producer(rhs) {
+    } else if rhs_has_array_producer(rhs, ops) {
         lower_wholearray_producer_lift(
             var,
             rhs,
@@ -3257,6 +3570,7 @@ fn lower_bare_derivative(
             array_axes,
             covered_slots,
             rhs_rules,
+            ops,
         )?;
     } else {
         lower_wholearray_percell(
@@ -3283,6 +3597,7 @@ fn lower_bare_derivative(
 /// analog of the Julia `_lift_wholearray_deriv_equations`
 /// (shape_promotion.jl) and keeps the rule eligible for the
 /// vectorized whole-array fast path (ess-bdm).
+#[allow(clippy::too_many_arguments)]
 fn lower_wholearray_producer_lift(
     var: String,
     rhs: &Expr,
@@ -3291,6 +3606,7 @@ fn lower_wholearray_producer_lift(
     array_axes: &HashMap<String, Vec<String>>,
     covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
+    ops: &Instances,
 ) -> Result<(), CompileError> {
     let ndim = shape.shape.len();
     let loops: Vec<String> = (0..ndim).map(|d| format!("_lp{d}_{var}")).collect();
@@ -3302,7 +3618,7 @@ fn lower_wholearray_producer_lift(
         .collect();
     let lhs_idx_exprs: Vec<Expr> = loops.iter().map(|l| Expr::Variable(l.clone())).collect();
     let plan = build_gather_plan(rhs, array_axes, &var, target_axes, false)?;
-    let body = index_array_leaves_by_loops(rhs, array_axes, Some(&plan), &loops);
+    let body = index_array_leaves_by_loops(rhs, array_axes, Some(&plan), &loops, ops);
     let total = shape.shape.iter().copied().product::<usize>().max(1);
     covered_slots.insert_range(shape.flat_offset, total);
     rhs_rules.push(RhsRule::ArrayLoop {
@@ -3448,7 +3764,13 @@ pub(crate) fn eval_buildtime_field(
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
 ) -> Result<Value, CompileError> {
-    eval_buildtime_field_in_scope(expr, index_sets, params, &HashMap::new())
+    eval_buildtime_field_in_scope(
+        expr,
+        index_sets,
+        params,
+        &HashMap::new(),
+        crate::operator_refs::Instances::empty(),
+    )
 }
 
 /// [`eval_buildtime_field`] with a build-time ARRAY scope bound by name — a
@@ -3461,6 +3783,7 @@ pub(crate) fn eval_buildtime_field_in_scope(
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
     scope: &HashMap<String, ArrayD<f64>>,
+    ops: &crate::operator_refs::Instances,
 ) -> Result<Value, CompileError> {
     super::eval::eval_buildtime_field_routed(
         None,
@@ -3469,6 +3792,7 @@ pub(crate) fn eval_buildtime_field_in_scope(
         params,
         scope,
         super::eval::BuildEval::Fast { strict: false },
+        ops,
     )
     .map(super::eval::Routed::into_value)
 }
@@ -3509,6 +3833,7 @@ pub(super) struct IcTargetMemo {
 /// Anything else is a hard error, so a scoped-reference ic that cannot be resolved
 /// is never silently dropped. Mirrors tree_walk.jl `_resolve_field_ic` and the
 /// Python `_resolve_field_ic`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_field_ic_cell(
     target: &str,
     rhs: &Expr,
@@ -3517,6 +3842,7 @@ pub(super) fn resolve_field_ic_cell(
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
     memo: &mut IcTargetMemo,
+    ops: &crate::operator_refs::Instances,
 ) -> Result<f64, SimulateError> {
     let IcTargetMemo {
         mode,
@@ -3573,7 +3899,7 @@ pub(super) fn resolve_field_ic_cell(
             // the case-(4) hard error below (byte-identical to the old
             // `match … { _ => {} }` arm, which likewise dropped the error).
             match super::eval::eval_buildtime_field_routed(
-                None, rhs, index_sets, params, forcing, mode,
+                None, rhs, index_sets, params, forcing, mode, ops,
             ) {
                 Ok(super::eval::Routed::Value(v, r)) => {
                     *cached_field = Some(v);
@@ -4145,7 +4471,13 @@ pub fn run_value_invention_with_params<S: std::hash::BuildHasher>(
     overrides: &HashMap<String, f64>,
 ) -> Result<ValueInventionResult, CompileError> {
     let params = collect_scalar_params(model, overrides);
-    run_value_invention_in_scope(model, index_sets, caller_arrays, &params)
+    run_value_invention_in_scope(
+        model,
+        index_sets,
+        caller_arrays,
+        &params,
+        crate::operator_refs::Instances::empty(),
+    )
 }
 
 /// [`run_value_invention`] with the scalar `params` already decided: the
@@ -4156,13 +4488,14 @@ pub(crate) fn run_value_invention_in_scope<S: std::hash::BuildHasher>(
     index_sets: &HashMap<String, IndexSet>,
     caller_arrays: Option<&HashMap<String, ArrayD<f64>, S>>,
     params: &HashMap<String, f64>,
+    ops: &crate::operator_refs::Instances,
 ) -> Result<ValueInventionResult, CompileError> {
     let own = collect_const_factor_arrays(model);
     let factors = match caller_arrays {
         Some(caller) => Factors::overlaid(&own, caller),
         None => Factors::of(&own),
     };
-    invent_values(model, index_sets, &factors, params, &HashMap::new()).map_err(|e| {
+    invent_values(model, index_sets, &factors, params, &HashMap::new(), ops).map_err(|e| {
         // A NaN key or join column already names its column (esm-spec §9.6.6).
         match e.code {
             Some(code) => CompileError::ValueInventionRefused {
@@ -4219,6 +4552,7 @@ fn materialize_derived_extents(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
     supplied: BuildTimeData<'_>,
+    ops: &crate::operator_refs::Instances,
 ) -> DerivedMaterialization {
     let mut out = DerivedMaterialization {
         extents: HashMap::new(),
@@ -4239,7 +4573,8 @@ fn materialize_derived_extents(
         }
         None => {
             let factors = value_invention_factors(model, index_sets, caller_arrays);
-            match run_value_invention(model, index_sets, Some(&factors)) {
+            let params = collect_scalar_params(model, &HashMap::new());
+            match run_value_invention_in_scope(model, index_sets, Some(&factors), &params, ops) {
                 Ok(result) => {
                     out.member_factors =
                         member_factor_columns(index_sets, &result.member_ids(), caller_arrays);
@@ -4372,7 +4707,13 @@ fn value_invention_factors(
                 return false;
             }
         }
-        match eval_buildtime_field_in_scope(&body, cx.index_sets, &HashMap::new(), &cx.scope) {
+        match eval_buildtime_field_in_scope(
+            &body,
+            cx.index_sets,
+            &HashMap::new(),
+            &cx.scope,
+            crate::operator_refs::Instances::empty(),
+        ) {
             Ok(Value::Array(a)) => {
                 cx.scope.insert(name.to_string(), *a);
                 true
@@ -4636,19 +4977,29 @@ pub(super) fn is_array_producer(node: &ExpressionNode) -> bool {
 /// discretization rule's lowered stencil (`alpha * makearray(…)`). Follows the
 /// same descent rules as the Julia `_index_array_leaves`: `index` gathers and
 /// aggregate-family nodes are already scalar/self-indexed and are not entered.
-pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
+pub(super) fn rhs_has_array_producer(expr: &Expr, ops: &Instances) -> bool {
     match expr {
         Expr::Operator(node) => {
-            if is_array_producer(node) {
+            if is_array_producer(node) || reference_is_array_producer(node, ops) {
                 return true;
             }
             if node.op == "index" || is_faq_op(&node.op) {
                 return false;
             }
-            node.args.iter().any(rhs_has_array_producer)
+            node.args.iter().any(|a| rhs_has_array_producer(a, ops))
         }
         _ => false,
     }
+}
+
+/// Whether `node` is an operator reference whose instance body is an array
+/// producer ([`is_array_producer`]): it denotes that producer (esm-spec
+/// §9.6.4 rule 2), so it is gathered per cell as one, and the evaluator reads
+/// the cell through the body ([`super::eval::eval_call`]).
+pub(super) fn reference_is_array_producer(node: &ExpressionNode, ops: &Instances) -> bool {
+    crate::operator_refs::reference_node(node)
+        .and_then(|r| ops.instance(&r).ok())
+        .is_some_and(|i| matches!(&i.body, Expr::Operator(b) if is_array_producer(b)))
 }
 
 /// Inline a `makearray`'s ARRAY-VALUED aggregate region values into the
@@ -4874,6 +5225,7 @@ pub(super) fn index_array_leaves_by_loops(
     array_axes: &HashMap<String, Vec<String>>,
     plan: Option<&GatherPlan>,
     loops: &[String],
+    ops: &Instances,
 ) -> Expr {
     let wrap = |target: Expr, ix: Vec<&String>| {
         let mut args = vec![target];
@@ -4900,6 +5252,11 @@ pub(super) fn index_array_leaves_by_loops(
             wrap(expr.clone(), ix)
         }
         Expr::Operator(node) => {
+            // A reference to an array producer is gathered whole; the
+            // evaluator reads the cell through its body.
+            if reference_is_array_producer(node, ops) {
+                return wrap(expr.clone(), loops.iter().collect());
+            }
             if is_array_producer(node) {
                 let target = if node.op == "makearray" {
                     Expr::operator(inline_region_aggregates(node, loops))
@@ -4919,7 +5276,7 @@ pub(super) fn index_array_leaves_by_loops(
             out.args = node
                 .args
                 .iter()
-                .map(|a| index_array_leaves_by_loops(a, array_axes, child_plan, loops))
+                .map(|a| index_array_leaves_by_loops(a, array_axes, child_plan, loops, ops))
                 .collect();
             Expr::operator(out)
         }
@@ -5325,7 +5682,9 @@ pub(super) fn extract_algebraic_faq(lhs: &Expr, rhs: &Expr) -> Option<AlgebraicA
 pub(super) fn infer_shapes(
     state_vars: &[&String],
     equations: &[crate::types::Equation],
+    ops: &Instances,
 ) -> Result<HashMap<String, Vec<usize>>, CompileError> {
+    let mut memo = IndexBoundsMemo::new();
     let state_set: HashSet<&str> = state_vars.iter().map(|s| s.as_str()).collect();
 
     // Pass 1: LHS only — these are the authoritative (pinned) shapes.
@@ -5341,6 +5700,8 @@ pub(super) fn infer_shapes(
             per_var_max: &mut per_var_max,
             seen_indexed: &mut seen_indexed,
             skip_shape_update: &skip_none,
+            ops,
+            memo: &mut memo,
         };
         for eq in equations {
             walk.walk(&eq.lhs, &no_loops);
@@ -5357,6 +5718,8 @@ pub(super) fn infer_shapes(
             per_var_max: &mut per_var_max,
             seen_indexed: &mut seen_indexed,
             skip_shape_update: &lhs_pinned,
+            ops,
+            memo: &mut memo,
         };
         for eq in equations {
             walk.walk(&eq.rhs, &no_loops);
@@ -5417,12 +5780,15 @@ fn infer_unsized_forcing_shapes(
     let no_loops: HashMap<String, (i64, i64)> = HashMap::new();
     let mut ranks: HashMap<String, HashSet<usize>> = HashMap::new();
     {
+        let mut memo = IndexBoundsMemo::new();
         let mut walk = ShapeWalk {
             states: &unsized_,
             per_var_min: &mut per_var_min,
             per_var_max: &mut per_var_max,
             seen_indexed: &mut seen_indexed,
             skip_shape_update: &skip_none,
+            ops: Instances::empty(),
+            memo: &mut memo,
         };
         for eq in equations {
             walk.walk(&eq.lhs, &no_loops);
@@ -5474,9 +5840,106 @@ pub(super) struct ShapeWalk<'a> {
     per_var_max: &'a mut HashMap<String, Vec<i64>>,
     seen_indexed: &'a mut HashSet<String>,
     skip_shape_update: &'a HashSet<String>,
+    /// The operator instances the references walked name.
+    ops: &'a Instances,
+    /// Each instance body's index bounds per parameter, by instance and the
+    /// bounds its parameters take as subscripts ([`IndexBoundsMemo`]).
+    memo: &'a mut IndexBoundsMemo,
 }
 
+/// What [`ShapeWalk`] learns from one instance body, analysed once per
+/// instance and per the bounds its parameters take as subscripts: for each
+/// parameter indexed in the body, the lowest and highest subscript of each
+/// axis, and the parameters indexed at all.
+type ParamIndexBounds = (
+    HashMap<String, Vec<i64>>,
+    HashMap<String, Vec<i64>>,
+    HashSet<String>,
+);
+
+/// [`ParamIndexBounds`] per (instance address, parameter subscript bounds).
+pub(super) type IndexBoundsMemo = HashMap<(usize, Vec<(i64, i64)>), Rc<ParamIndexBounds>>;
+
 impl ShapeWalk<'_> {
+    /// The index bounds an operator reference's body gives the variables its
+    /// bindings name (esm-spec §9.6.4): the body is analysed once per
+    /// instance and per the bounds its parameters take as subscripts, with
+    /// each parameter standing for its binding, and a parameter's bounds
+    /// are merged into the state its binding names.
+    fn reference(&mut self, node: &ExpressionNode, loop_ranges: &HashMap<String, (i64, i64)>) {
+        let Some(r) = crate::operator_refs::reference_node(node) else {
+            return;
+        };
+        let Ok(inst) = self.ops.instance(&r) else {
+            return;
+        };
+        let mut key = Vec::with_capacity(inst.definition.params.len());
+        let mut param_ranges: HashMap<String, (i64, i64)> = HashMap::new();
+        for p in &inst.definition.params {
+            let rg = r
+                .binding(p)
+                .map(|b| evaluate_index_range(b, loop_ranges))
+                .unwrap_or((0, 0));
+            key.push(rg);
+            param_ranges.insert(p.clone(), rg);
+        }
+        let key = (std::sync::Arc::as_ptr(&inst) as usize, key);
+        let summary = match self.memo.get(&key) {
+            Some(s) => Rc::clone(s),
+            None => {
+                let params: HashSet<&str> =
+                    inst.definition.params.iter().map(String::as_str).collect();
+                let (mut mn, mut mx, mut seen) = Default::default();
+                let none = HashSet::new();
+                {
+                    let mut w = ShapeWalk {
+                        states: &params,
+                        per_var_min: &mut mn,
+                        per_var_max: &mut mx,
+                        seen_indexed: &mut seen,
+                        skip_shape_update: &none,
+                        ops: self.ops,
+                        memo: &mut *self.memo,
+                    };
+                    w.walk(&inst.body, &param_ranges);
+                }
+                let s = Rc::new((mn, mx, seen));
+                self.memo.insert(key, Rc::clone(&s));
+                s
+            }
+        };
+        let (mn, mx, seen) = &*summary;
+        for p in seen {
+            let Some(Expr::Variable(var)) = r.binding(p) else {
+                continue;
+            };
+            if !self.states.contains(var.as_str()) {
+                continue;
+            }
+            self.seen_indexed.insert(var.clone());
+            if self.skip_shape_update.contains(var) {
+                continue;
+            }
+            let (Some(lo), Some(hi)) = (mn.get(p), mx.get(p)) else {
+                continue;
+            };
+            let cur_min = self.per_var_min.entry(var.clone()).or_default();
+            if cur_min.len() < lo.len() {
+                cur_min.resize(lo.len(), i64::MAX);
+            }
+            for (d, v) in lo.iter().enumerate() {
+                cur_min[d] = cur_min[d].min(*v);
+            }
+            let cur_max = self.per_var_max.entry(var.clone()).or_default();
+            if cur_max.len() < hi.len() {
+                cur_max.resize(hi.len(), i64::MIN);
+            }
+            for (d, v) in hi.iter().enumerate() {
+                cur_max[d] = cur_max[d].max(*v);
+            }
+        }
+    }
+
     /// Walk an expression tree collecting per-variable index bounds for shape
     /// inference. `loop_ranges` carries the concrete bounds of the enclosing
     /// aggregate loop symbols.
@@ -5484,6 +5947,9 @@ impl ShapeWalk<'_> {
         let Expr::Operator(node) = expr else {
             return;
         };
+        if node.op == crate::operator_refs::APPLY_OP {
+            self.reference(node, loop_ranges);
+        }
         if node.op == "index"
             && let Some(Expr::Variable(var)) = node.args.first()
             && self.states.contains(var.as_str())

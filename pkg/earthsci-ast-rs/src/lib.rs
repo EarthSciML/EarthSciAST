@@ -111,6 +111,8 @@ mod data_binding;
 pub(crate) mod expression;
 pub mod extension;
 pub(crate) mod flatten;
+pub(crate) mod flatten_refs;
+pub(crate) mod flatten_template_dt;
 pub(crate) mod graph;
 pub(crate) mod inline_test_checks;
 pub mod intern;
@@ -121,6 +123,7 @@ pub(crate) mod lower_expression_templates;
 pub(crate) mod migration;
 pub(crate) mod observed_cone;
 pub(crate) mod op_registry;
+pub mod operator_refs;
 pub(crate) mod parse;
 /// The evaluator's working precision — `domain.element_type` (esm-spec
 /// §11.3). Public because the contract it implements (`"Float32"` means
@@ -265,9 +268,9 @@ pub use data_output::{
     derive_output_gridding, derive_output_meta, derive_output_plan, group_gridding_by_grid,
     parse_cell_key, plan_dimension_coordinates,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use expression::evaluate;
 pub use expression::{contains, free_parameters, free_variables, simplify};
+#[cfg(not(target_arch = "wasm32"))]
+pub use expression::{evaluate, evaluate_with_operators};
 pub use flatten::{
     Contribution, DimensionPromotionRecord, FlattenError, FlattenMetadata, FlattenedSystem,
     LoaderField, TermOrigin, capture_coupling_diagnostics, flatten, flatten_model,
@@ -393,8 +396,8 @@ pub use compile_error::CompileError;
 #[cfg(feature = "solve")]
 pub use inline_tests::{
     AssertionResult, InlineTestOptions, check_assertion, ephemeral_injected_file,
-    evaluate_cellwise, field_reduce, resolve_tolerance, run_inline_tests, run_inline_tests_paths,
-    run_inline_tests_with_options, state_cells,
+    evaluate_cellwise, evaluate_cellwise_with_operators, field_reduce, resolve_tolerance,
+    run_inline_tests, run_inline_tests_paths, run_inline_tests_with_options, state_cells,
 };
 pub use simulate::{
     Alg, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, IntegratorPrecision, Progress, ProgressFn,
@@ -433,7 +436,8 @@ pub use units::{
     UNIT_FINDING_DIMENSIONAL_MISMATCH, UNIT_FINDING_DIMENSIONLESS_LITERAL,
     UNIT_FINDING_UNPARSEABLE, Unit, UnitError, UnitFinding, UnitParseFailure, UnitSeverity,
     build_unit_env, check_dimensional_consistency, check_equation_dimensions,
-    check_expression_dimensions, convert_units, equation_dimension_verdict, model_unit_env,
+    check_equation_dimensions_with_operators, check_expression_dimensions, convert_units,
+    equation_dimension_verdict, equation_dimension_verdict_with_operators, model_unit_env,
     parse_unit, validate_equation_dimensions,
 };
 

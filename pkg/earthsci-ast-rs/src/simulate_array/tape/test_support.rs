@@ -245,7 +245,7 @@ pub(super) fn ab_harness(compiled: &ArrayCompiled, opts: &AbOptions) -> AbOutcom
         "the unfused build must not fuse"
     );
     assert!(
-        fused.instrs.len() <= unfused.instrs.len(),
+        all_instrs(&fused).count() <= all_instrs(&unfused).count(),
         "fusion must not grow the program"
     );
     let arms: &[Arm] = if opts.row_major_and_split {
@@ -313,7 +313,7 @@ pub(super) fn ab_harness(compiled: &ArrayCompiled, opts: &AbOptions) -> AbOutcom
     }
     AbOutcome {
         fused,
-        unfused_len: unfused.instrs.len(),
+        unfused_len: all_instrs(&unfused).count(),
     }
 }
 
@@ -442,7 +442,15 @@ pub(super) fn no_params() -> Vec<HashMap<String, f64>> {
 
 /// How many instructions of `prog` satisfy `pred`.
 pub(super) fn count_where(prog: &TapeProgram, pred: impl Fn(&Instr) -> bool) -> usize {
-    prog.instrs.iter().filter(|i| pred(i)).count()
+    all_instrs(prog).filter(|i| pred(i)).count()
+}
+
+/// Every instruction of `prog` and of each function it calls (each function
+/// once: an operator definition is compiled once, however often it is called).
+pub(super) fn all_instrs(prog: &TapeProgram) -> impl Iterator<Item = &Instr> {
+    prog.instrs
+        .iter()
+        .chain(prog.funcs.iter().flat_map(|f| f.instrs.iter()))
 }
 
 /// How many instructions of a given opcode the program carries.
@@ -606,8 +614,7 @@ pub(super) fn flat_in_n(make: impl Fn(i64) -> Value, small: i64, large: i64) -> 
 
 /// The `Instr::Count`s of `prog`, as `(rel, sorted)`.
 pub(super) fn counts(prog: &TapeProgram) -> Vec<(CountRel, bool)> {
-    prog.instrs
-        .iter()
+    all_instrs(prog)
         .filter_map(|i| match i {
             Instr::Count { rel, sorted, .. } => Some((*rel, *sorted)),
             _ => None,

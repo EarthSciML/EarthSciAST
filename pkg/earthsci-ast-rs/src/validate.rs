@@ -264,6 +264,7 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
         // Check for circular dependencies between models
         if scope == ValidationScope::Full {
             crate::structural::check_circular_dependencies_in_models(
+                esm_file,
                 models,
                 &mut structural_errors,
             );

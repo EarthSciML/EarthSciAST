@@ -130,7 +130,7 @@ pub struct EsmFile {
     /// NOT a wire field: `#[serde(skip)]` keeps it out of both directions, so a
     /// `parse -> emit` round trip is byte-identical and a document is never
     /// asked to carry it. It exists because
-    /// [`crate::flatten::merged_template_registry`] must reconstruct the
+    /// `crate::flatten_refs::prepare` must reconstruct the
     /// step-4 merged registry, and the typed structs — by design — never see an
     /// `expression_templates` block. Mirrors the Python oracle's
     /// `EsmFile.component_templates`.
@@ -198,6 +198,18 @@ impl Default for EsmFile {
             coupling_import_base: None,
             document_base: None,
         }
+    }
+}
+
+impl EsmFile {
+    /// Copy into `self` the fields of `from` that are not on the wire
+    /// (`component_templates`, `coupling_import_base`, `document_base`): a
+    /// pass that rebuilds a document through its JSON form loses them, and
+    /// they describe the same document.
+    pub(crate) fn carry_non_wire_fields(&mut self, from: &EsmFile) {
+        self.component_templates = from.component_templates.clone();
+        self.coupling_import_base = from.coupling_import_base.clone();
+        self.document_base = from.document_base.clone();
     }
 }
 

@@ -13,7 +13,8 @@
 //! * the serde form of [`TermOrigin`] is the untagged corpus form.
 
 use earthsci_ast::{
-    Contribution, Expr, FlattenedSystem, TermOrigin, evaluate, flatten, free_variables, load_path,
+    Contribution, Expr, FlattenedSystem, TermOrigin, evaluate_with_operators, flatten,
+    free_variables, load_path,
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -112,7 +113,10 @@ fn body<'a>(flat: &FlattenedSystem, lhs: &Expr, rhs: &'a Expr) -> &'a Expr {
 /// check is about — how the contributions are summed — is untouched.
 fn scalarize(expr: &Expr) -> Expr {
     match expr {
-        Expr::Operator(node) if node.op == "index" => {
+        // An element read, or an operator reference (esm-spec §9.6.4: kept
+        // through flatten), is one opaque value: the invariant is about how
+        // the contributions are summed, not about what each one is.
+        Expr::Operator(node) if node.op == "index" || node.op == "apply_operator" => {
             Expr::Variable(format!("<{}>", crate::common::canon(expr)))
         }
         Expr::Operator(node) => Expr::operator(node.map_children(&mut |c| scalarize(c))),
@@ -146,10 +150,11 @@ fn check_invariant(
             .map(|n| (n.clone(), sample(n, salt)))
             .collect();
         bindings.insert("t".to_string(), 0.75);
-        let got = evaluate(&body, &bindings).ok()?;
+        let ops = flat.operators();
+        let got = evaluate_with_operators(&body, &bindings, &ops).ok()?;
         let values: Vec<f64> = parts
             .iter()
-            .map(|p| evaluate(p, &bindings).ok())
+            .map(|p| evaluate_with_operators(p, &bindings, &ops).ok())
             .collect::<Option<_>>()?;
         let fold = values[1..].iter().fold(values[0], |acc, v| acc + v);
         assert_eq!(
@@ -171,6 +176,14 @@ fn check_invariant(
 fn body_is_the_left_fold_of_the_contributions() {
     for fixture in fixture_names() {
         let flat = flatten_path(&fixtures_dir().join(&fixture));
+        // `flatten` keeps references; the scalar evaluator reads the
+        // expansion, made here in the test only (the Julia test's
+        // `expand_flattened_refs`).
+        let flat = if flat.template_registry.is_empty() {
+            flat
+        } else {
+            crate::flatten_wire_conformance::expanded(&flat)
+        };
         for (eq, contributions) in flat.equations.iter().zip(&flat.equation_contributions) {
             let result = check_invariant(&fixture, &flat, &eq.lhs, &eq.rhs, contributions);
             // Only `grad` without a discretization is out of the evaluator's

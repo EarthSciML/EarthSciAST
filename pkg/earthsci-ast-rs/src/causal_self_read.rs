@@ -133,14 +133,9 @@ pub(crate) struct SelfReads<'a> {
 /// names a cell of an array that has to exist in full before the op can run, so
 /// no cell-by-cell sweep can supply it (esm-spec §4.3.1.1 `recurrence_unsupported_form`).
 fn op_blocks_cell_restriction(op: &str) -> bool {
-    // `apply_expression_template` is deliberately NOT here. Its operands ride
-    // the `bindings` field, which this walk does not visit (and must not start
-    // visiting unilaterally — five bindings mirror this field set, and §5.19.5
-    // is exact agreement), so listing it would have been a rule that barely
-    // reached what it named. It is also unreachable in practice: a template
-    // application surviving into an evaluation position is already an
-    // `unlowered_operator` error (esm-spec §9.6.4), so this list names only the
-    // ops that legitimately reach evaluation and consume an operand whole.
+    // `apply_operator` is not here: a reference's bindings are read where its
+    // body reads them, cell by cell, and the walk visits them as the
+    // reference's expansion holds them.
     matches!(op, "reshape" | "transpose" | "concat" | "broadcast")
 }
 
@@ -232,6 +227,18 @@ fn walk_self_reads<'a>(
     if let Some(vs) = node.values.as_ref() {
         for v in vs {
             walk_self_reads(v, vars, bounds, env, true, out);
+        }
+    }
+    // An operator reference's bindings are read where its definition's body
+    // reads each parameter, in this scope (esm-spec §9.6.4): a self-read in a
+    // binding is a self-read of the equation, as in the reference's
+    // expansion. Visited in sorted parameter-name order, so the reads are
+    // collected in a fixed order.
+    if let Some(r) = crate::operator_refs::reference_node(node) {
+        let mut keys: Vec<&String> = r.bindings.keys().collect();
+        keys.sort();
+        for k in keys {
+            walk_self_reads(&r.bindings[k], vars, bounds, env, blocked_children, out);
         }
     }
     env.truncate(env.len() - pushed);

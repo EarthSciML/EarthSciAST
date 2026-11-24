@@ -186,6 +186,10 @@ pub(super) fn program_work(prog: &TapeProgram) -> usize {
 /// move control or a few scalars).
 pub(super) fn instr_work(prog: &TapeProgram, ins: &Instr) -> usize {
     match ins {
+        // The whole function program's work, once per call.
+        Instr::Call { call, .. } => {
+            program_work(&prog.funcs[prog.tables.calls[*call as usize].func as usize])
+        }
         Instr::Fused { spec } => {
             let fs = &prog.fused[*spec as usize];
             let pre = fs.pre.as_ref().map_or(0, |p| p.rows * p.n_inner);

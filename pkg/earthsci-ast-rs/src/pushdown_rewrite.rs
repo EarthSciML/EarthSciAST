@@ -36,6 +36,9 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
+use std::rc::Rc;
+
+use crate::operator_refs::OperatorRegistry;
 
 use serde_json::{Map, Value, json};
 
@@ -85,70 +88,8 @@ fn pd_model_name(doc: &Value, model_name: Option<&str>) -> Option<String> {
 // Raw-AST leaf helpers (the Julia typed-IR helpers, on raw JSON)
 // --------------------------------------------------------------------------- //
 
-fn pd_varname(e: &Value) -> Option<&str> {
-    e.as_str()
-}
-
 fn op_of(e: &Value) -> Option<&str> {
     e.get("op")?.as_str()
-}
-
-/// `index(F, sym)` with EXACTLY one index → `(F, sym)`; else `None`.
-fn pd_index_split(e: &Value) -> Option<(&str, &str)> {
-    if op_of(e)? != "index" {
-        return None;
-    }
-    let a = e.get("args")?.as_array()?;
-    if a.len() != 2 {
-        return None;
-    }
-    Some((pd_varname(&a[0])?, pd_varname(&a[1])?))
-}
-
-/// `index(F, sym…)` with ≥1 index → `(F, [syms…])`; else `None`.
-fn pd_index_syms(e: &Value) -> Option<(&str, Vec<&str>)> {
-    if op_of(e)? != "index" {
-        return None;
-    }
-    let a = e.get("args")?.as_array()?;
-    if a.len() < 2 {
-        return None;
-    }
-    let f = pd_varname(&a[0])?;
-    let mut syms = Vec::with_capacity(a.len() - 1);
-    for x in &a[1..] {
-        syms.push(pd_varname(x)?);
-    }
-    Some((f, syms))
-}
-
-/// Classify an aggregate BODY `A[c, out…] · E[c]` — a two-factor `⊗=·`
-/// product of a rank-(1+|out|) array factor `A` subscripted `[c, out…]` and a
-/// rank-1 factor `E` subscripted `[c]` — into `(Aname, Ename)`, or `None`
-/// when `body` is not that exact shape. PURE STRUCTURAL check on index
-/// symbols (the caller applies the semiring guard).
-fn pd_matvec_factors(body: &Value, c_sym: &str, out_syms: &[&str]) -> Option<(String, String)> {
-    if op_of(body)? != "*" {
-        return None;
-    }
-    let args = body.get("args")?.as_array()?;
-    if args.len() != 2 || out_syms.is_empty() {
-        return None;
-    }
-    let mut a_syms: Vec<&str> = vec![c_sym];
-    a_syms.extend_from_slice(out_syms);
-    let e_syms: Vec<&str> = vec![c_sym];
-    let mut aname: Option<&str> = None;
-    let mut ename: Option<&str> = None;
-    for arg in args {
-        let (f, syms) = pd_index_syms(arg)?;
-        if syms == a_syms {
-            aname = Some(f);
-        } else if syms == e_syms {
-            ename = Some(f);
-        }
-    }
-    Some((aname?.to_string(), ename?.to_string()))
 }
 
 /// The `reduce` spelling of a registry ⊕ — how the guard's string comparison
@@ -429,41 +370,6 @@ fn pd_register_derived(
     Ok(())
 }
 
-/// Condition of the first `ifelse(cond, then, else)` in a raw subtree.
-/// Object-value iteration is insertion-ordered (`preserve_order`), matching
-/// the Python `dict.values()` walk exactly.
-///
-/// Hand-rolled rather than `crate::json_visit`: a first-match search returning
-/// a borrowed reference with an early return, which the shared visitors don't
-/// provide.
-fn pd_find_ifelse_cond(e: &Value) -> Option<&Value> {
-    match e {
-        Value::Object(m) => {
-            if m.get("op").and_then(Value::as_str) == Some("ifelse")
-                && let Some(a) = m.get("args").and_then(Value::as_array)
-                && a.len() == 3
-            {
-                return Some(&a[0]);
-            }
-            for v in m.values() {
-                if let Some(r) = pd_find_ifelse_cond(v) {
-                    return Some(r);
-                }
-            }
-            None
-        }
-        Value::Array(xs) => {
-            for x in xs {
-                if let Some(r) = pd_find_ifelse_cond(x) {
-                    return Some(r);
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
 /// The §5.5.6 overlap-gate envelopes of a containment predicate. `tgt_env` is
 /// always the four cell bounds; `src_env` is two point coordinates or four
 /// record-envelope bounds, per the shape matched.
@@ -498,12 +404,19 @@ struct Containment {
 /// invariant under. Appearance order is used because it is deterministic.
 ///
 /// `None` on any other shape.
-fn pd_parse_containment(pred: &Value, c_sym: &str, r_sym: &str) -> Option<Containment> {
+fn pd_parse_containment(
+    tt: PdTt<'_>,
+    pred: &Value,
+    fr: &PdFr,
+    c_sym: &str,
+    r_sym: &str,
+) -> Option<Containment> {
+    let (pred, fr) = pd_open(tt, pred, fr);
     if !pred.is_object() {
         return None;
     }
     let single = [pred.clone()];
-    let comps: &[Value] = if matches!(op_of(pred), Some("and") | Some("*")) {
+    let comps: &[Value] = if matches!(op_of(&pred), Some("and") | Some("*")) {
         pred.get("args")?.as_array()?.as_slice()
     } else {
         &single
@@ -513,7 +426,8 @@ fn pd_parse_containment(pred: &Value, c_sym: &str, r_sym: &str) -> Option<Contai
     let mut bounds: HashMap<String, HashMap<&'static str, String>> = HashMap::new();
     let mut rec_order: Vec<String> = Vec::new();
     for cmp in comps {
-        let opn0 = op_of(cmp)?;
+        let (cmp, cfr) = pd_open(tt, cmp, &fr);
+        let opn0 = op_of(&cmp)?;
         if !matches!(opn0, "<" | "<=" | ">" | ">=") {
             return None;
         }
@@ -521,8 +435,9 @@ fn pd_parse_containment(pred: &Value, c_sym: &str, r_sym: &str) -> Option<Contai
         if args.len() != 2 {
             return None;
         }
-        let (f1, sym1) = pd_index_split(&args[0])?;
-        let (f2, sym2) = pd_index_split(&args[1])?;
+        let (f1, sym1) = pd_index_split(tt, &args[0], &cfr)?;
+        let (f2, sym2) = pd_index_split(tt, &args[1], &cfr)?;
+        let (f1, f2) = (f1.as_str(), f2.as_str());
         let (fc, fp, cell_on_left) = if sym1 == c_sym && sym2 == r_sym {
             (f1, f2, true)
         } else if sym1 == r_sym && sym2 == c_sym {
@@ -666,6 +581,12 @@ fn pd_set_def(model: &mut Value, name: &str, rhs: Value) {
     }
 }
 
+/// [`pd_def`] read through the operator references ([`pd_open`]): the
+/// aggregate the detection matches, with the frame it is read in.
+fn pd_def_view(model: &Value, tt: PdTt<'_>, name: &str) -> Option<(Value, PdFr)> {
+    Some(pd_open(tt, pd_def(model, name)?, &None))
+}
+
 /// Is `v` a declared UNKNOWN (esm-spec §6.3)?
 fn pd_is_unknown(v: &Value) -> bool {
     v.get("type").and_then(Value::as_str) == Some("unknown")
@@ -690,8 +611,9 @@ fn pd_is_unknown(v: &Value) -> bool {
 /// only once `c_set`/`r_set` are fixed, so both callers do know. `None` prefers
 /// the out-as-cell reading, which is what the point case always gave.
 fn pd_detect_binning(
+    tt: PdTt<'_>,
     ev: &Value,
-    agg: &Value,
+    (agg, afr): &(Value, PdFr),
     out_set: &str,
     want_out_is_cell: Option<bool>,
 ) -> Option<Binning> {
@@ -720,13 +642,13 @@ fn pd_detect_binning(
     }
     let in_sym = ranges.keys().find(|k| k.as_str() != out_sym)?.clone();
     let in_set = range_from(ranges.get(&in_sym))?.to_string();
-    let body = agg.get("expr")?;
+    let (body, bfr) = pd_open(tt, agg.get("expr")?, afr);
     if !body.is_object() {
         return None;
     }
-    let pred = pd_find_ifelse_cond(body)?;
+    let (pred, pfr) = pd_find_ifelse_cond(tt, &body, &bfr)?;
     if want_out_is_cell != Some(false)
-        && let Some(env) = pd_parse_containment(pred, out_sym, &in_sym)
+        && let Some(env) = pd_parse_containment(tt, &pred, &pfr, out_sym, &in_sym)
     {
         return Some(Binning {
             c_sym: out_sym.to_string(),
@@ -741,7 +663,7 @@ fn pd_detect_binning(
     if want_out_is_cell == Some(true) {
         return None;
     }
-    let env = pd_parse_containment(pred, &in_sym, out_sym)?;
+    let env = pd_parse_containment(tt, &pred, &pfr, &in_sym, out_sym)?;
     Some(Binning {
         c_sym: in_sym,
         r_sym: out_sym.to_string(),
@@ -754,11 +676,10 @@ fn pd_detect_binning(
 }
 
 // --------------------------------------------------------------------------- //
-// Detection-time template-reference expansion (esm-spec §9.6.4 rule 2).
+// Detection through operator references (esm-spec §9.6.4 rule 2).
 //
-// Under Option B (§9.6.4) `load` PRESERVES `apply_expression_template`
-// references: they ride to the build boundary, where they are expanded ONCE with
-// site recording. `prepare` therefore hands
+// `load` PRESERVES `apply_operator` references, and nothing expands them.
+// `prepare` therefore hands
 // `desugar_pushdown` a document whose binning body may be a surviving reference
 // rather than the containment `ifelse` the recogniser looks for.
 //
@@ -766,7 +687,7 @@ fn pd_detect_binning(
 // §9.6.3 REWRITE-RULE ENGINE. This desugar is a different consumer and rule 2
 // governs it: a reference DENOTES its expansion. So whether the pushdown fires
 // MUST NOT depend on whether the author factored the body through a template —
-// detection runs on the EXPANDED view.
+// detection reads THROUGH the references ([`pd_open`]) without expanding them.
 //
 // EMISSION does not: `pd_apply` edits the call site's `bindings` (and the
 // aggregate's own `ranges` / `args` / `shape` / `join`), never the shared
@@ -776,6 +697,249 @@ fn pd_detect_binning(
 
 /// The op name of a surviving expression-template reference.
 const APPLY_OP: &str = "apply_operator";
+
+/// One operator reference the detection reads through: the reference node, the
+/// parameters of the definition it names, the body of the instance it names
+/// (esm-spec §9.6.4 rule 3), and the frame the reference itself sits in.
+struct PdFrame {
+    call: Value,
+    params: Vec<String>,
+    /// The names the body reads free (in a component's registry): read in
+    /// the scope of the reference's site, as implicit parameters bound to
+    /// themselves.
+    free: std::collections::BTreeSet<String>,
+    body: Value,
+    parent: PdFr,
+}
+
+/// A frame of [`pd_open`]: `None` is the model's own tree.
+type PdFr = Option<Rc<PdFrame>>;
+
+/// The registry detection reads references through (esm-spec §9.6.4 rule 2):
+/// a reference DENOTES its expansion, so whether the pushdown fires must not
+/// depend on whether the author factored the binning body through a
+/// template. No reference is expanded: at a reference the matcher reads the
+/// body of the instance it names, in the reference's frame, and at a
+/// parameter of that body it reads the reference's binding, in the caller's
+/// frame. `None` when the model has no registry (every read is then the plain
+/// tree read). Mirrors the Julia reference's `_pd_open`.
+type PdTt<'r> = Option<&'r OperatorRegistry>;
+
+/// `e` read in frame `fr` through the operator references: a parameter of a
+/// body is read as the call site's binding in the caller's frame, and a
+/// reference as its instance body in the reference's frame. A reference that
+/// cannot be read (an unknown name, a binding missing) is returned as it is:
+/// the pass leaves a document it cannot recognise unchanged, and
+/// [`pd_binning_refusal`] reports the reference if the definition is
+/// join-shaped.
+fn pd_open(tt: PdTt<'_>, e: &Value, fr: &PdFr) -> (Value, PdFr) {
+    let mut e = e.clone();
+    let mut fr = fr.clone();
+    loop {
+        if let (Some(f), Value::String(s)) = (&fr, &e)
+            && f.params.iter().any(|p| p == s)
+        {
+            let Some(b) = f.call.get("bindings").and_then(|b| b.get(s.as_str())) else {
+                return (e, fr);
+            };
+            let (b, parent) = (b.clone(), f.parent.clone());
+            e = b;
+            fr = parent;
+            continue;
+        }
+        if let (Some(f), Value::String(s)) = (&fr, &e)
+            && f.free.contains(s.as_str())
+        {
+            fr = f.parent.clone();
+            continue;
+        }
+        if let Some(reg) = tt
+            && op_of(&e) == Some(APPLY_OP)
+        {
+            match pd_frame(reg, &e, &fr) {
+                Some(f) => {
+                    e = f.body.clone();
+                    fr = Some(f);
+                    continue;
+                }
+                None => return (e, fr),
+            }
+        }
+        return (e, fr);
+    }
+}
+
+/// The frame of the reference `call` (sitting in `fr`): its instance body,
+/// each instance parameter specialized to the value `call` binds it
+/// ([`crate::operator_refs::specialize_body`]).
+fn pd_frame(reg: &OperatorRegistry, call: &Value, fr: &PdFr) -> Option<Rc<PdFrame>> {
+    let name = call.get("name")?.as_str()?;
+    let d = reg.get(name)?;
+    let raw = d.raw_body()?;
+    let ips = reg.instance_params(name);
+    let body = if ips.is_empty() {
+        raw.clone()
+    } else {
+        let bindings = call.get("bindings")?.as_object()?;
+        let mut lits = HashMap::new();
+        for p in ips {
+            lits.insert(p.clone(), bindings.get(p)?.clone());
+        }
+        crate::operator_refs::specialize_body(raw, &lits)
+    };
+    Some(Rc::new(PdFrame {
+        call: call.clone(),
+        params: d.params.clone(),
+        free: d.free_names().clone(),
+        body,
+        parent: fr.clone(),
+    }))
+}
+
+/// The name `e` reads as a name of the model's own tree (frame `None`), or
+/// `None`: a name bound inside a body is the body's own, never one of them.
+fn pd_name(tt: PdTt<'_>, e: &Value, fr: &PdFr) -> Option<String> {
+    let (x, xf) = pd_open(tt, e, fr);
+    match (x, xf) {
+        (Value::String(s), None) => Some(s),
+        _ => None,
+    }
+}
+
+/// The `args` of `e` (already opened), each with the frame it is read in.
+fn pd_args(e: &Value) -> Option<&Vec<Value>> {
+    e.get("args")?.as_array()
+}
+
+/// `index(F, sym)` with EXACTLY one index → `(F, sym)`, both names of the
+/// model's own tree; else `None`.
+fn pd_index_split(tt: PdTt<'_>, e: &Value, fr: &PdFr) -> Option<(String, String)> {
+    let (e, fr) = pd_open(tt, e, fr);
+    if op_of(&e)? != "index" {
+        return None;
+    }
+    let a = pd_args(&e)?;
+    if a.len() != 2 {
+        return None;
+    }
+    Some((pd_name(tt, &a[0], &fr)?, pd_name(tt, &a[1], &fr)?))
+}
+
+/// `index(F, sym…)` with ≥1 index → `(F, [syms…])`; else `None`.
+fn pd_index_syms(tt: PdTt<'_>, e: &Value, fr: &PdFr) -> Option<(String, Vec<String>)> {
+    let (e, fr) = pd_open(tt, e, fr);
+    if op_of(&e)? != "index" {
+        return None;
+    }
+    let a = pd_args(&e)?;
+    if a.len() < 2 {
+        return None;
+    }
+    let f = pd_name(tt, &a[0], &fr)?;
+    let mut syms = Vec::with_capacity(a.len() - 1);
+    for x in &a[1..] {
+        syms.push(pd_name(tt, x, &fr)?);
+    }
+    Some((f, syms))
+}
+
+/// Classify an aggregate BODY `A[c, out…] · E[c]` — a two-factor `⊗=·`
+/// product of a rank-(1+|out|) array factor `A` subscripted `[c, out…]` and a
+/// rank-1 factor `E` subscripted `[c]` — into `(Aname, Ename)`, or `None`
+/// when `body` is not that exact shape. PURE STRUCTURAL check on index
+/// symbols (the caller applies the semiring guard).
+fn pd_matvec_factors(
+    tt: PdTt<'_>,
+    body: &Value,
+    fr: &PdFr,
+    c_sym: &str,
+    out_syms: &[&str],
+) -> Option<(String, String)> {
+    let (body, fr) = pd_open(tt, body, fr);
+    if op_of(&body)? != "*" {
+        return None;
+    }
+    let args = pd_args(&body)?;
+    if args.len() != 2 || out_syms.is_empty() {
+        return None;
+    }
+    let mut a_syms: Vec<&str> = vec![c_sym];
+    a_syms.extend_from_slice(out_syms);
+    let e_syms: Vec<&str> = vec![c_sym];
+    let mut aname: Option<String> = None;
+    let mut ename: Option<String> = None;
+    for arg in args {
+        let (f, syms) = pd_index_syms(tt, arg, &fr)?;
+        let syms: Vec<&str> = syms.iter().map(String::as_str).collect();
+        if syms == a_syms {
+            aname = Some(f);
+        } else if syms == e_syms {
+            ename = Some(f);
+        }
+    }
+    Some((aname?, ename?))
+}
+
+/// Condition of the first `ifelse(cond, then, else)` in a subtree, read
+/// through the references, with the frame it is read in. Object-value
+/// iteration is insertion-ordered (`preserve_order`), matching the Python
+/// `dict.values()` walk exactly.
+fn pd_find_ifelse_cond(tt: PdTt<'_>, e: &Value, fr: &PdFr) -> Option<(Value, PdFr)> {
+    let (e, fr) = pd_open(tt, e, fr);
+    match &e {
+        Value::Object(m) => {
+            if m.get("op").and_then(Value::as_str) == Some("ifelse")
+                && let Some(a) = m.get("args").and_then(Value::as_array)
+                && a.len() == 3
+            {
+                return Some((a[0].clone(), fr));
+            }
+            let apply = m.get("op").and_then(Value::as_str) == Some(APPLY_OP);
+            m.iter()
+                .filter(|(k, _)| !(apply && k.as_str() == "name"))
+                .find_map(|(_, v)| pd_find_ifelse_cond(tt, v, &fr))
+        }
+        Value::Array(xs) => xs.iter().find_map(|x| pd_find_ifelse_cond(tt, x, &fr)),
+        _ => None,
+    }
+}
+
+/// The `name` of the first reference in `e` (pre-order, read through the
+/// references) that cannot be read, for the residual diagnostic; `None` when
+/// there is none.
+fn pd_first_apply_name(tt: PdTt<'_>, e: &Value, fr: &PdFr) -> Option<String> {
+    let (x, xf) = pd_open(tt, e, fr);
+    match &x {
+        Value::Object(m) => {
+            if m.get("op").and_then(Value::as_str) == Some(APPLY_OP) {
+                return m.get("name").and_then(Value::as_str).map(str::to_string);
+            }
+            m.values().find_map(|v| pd_first_apply_name(tt, v, &xf))
+        }
+        Value::Array(xs) => xs.iter().find_map(|v| pd_first_apply_name(tt, v, &xf)),
+        _ => None,
+    }
+}
+
+/// Call `visit` on every node of `e` read through the references, each with
+/// the frame it is read in: a reference is walked as its instance body, a
+/// parameter of a body as the call site's binding.
+fn pd_foreach_node(tt: PdTt<'_>, e: &Value, fr: &PdFr, visit: &mut impl FnMut(&Value, &PdFr)) {
+    let (x, xf) = pd_open(tt, e, fr);
+    visit(&x, &xf);
+    match &x {
+        Value::Object(m) => {
+            let apply = m.get("op").and_then(Value::as_str) == Some(APPLY_OP);
+            for (k, v) in m {
+                if !(apply && k == "name") {
+                    pd_foreach_node(tt, v, &xf, visit);
+                }
+            }
+        }
+        Value::Array(xs) => xs.iter().for_each(|v| pd_foreach_node(tt, v, &xf, visit)),
+        _ => {}
+    }
+}
 
 /// The component template registry of `model`, or `None`.
 ///
@@ -802,102 +966,6 @@ fn pd_templates(model: &Value) -> Option<Cow<'_, Map<String, Value>>> {
         Some(Ok(_)) => None,
         _ => own.map(Cow::Borrowed),
     }
-}
-
-/// Does `node` carry a surviving `apply_expression_template` reference?
-/// Descends every object value, `bindings` included.
-///
-/// Hand-rolled rather than `crate::json_visit`: a short-circuiting existence
-/// test, and the read-only shared visitor cannot stop early.
-fn pd_has_apply(node: &Value) -> bool {
-    match node {
-        Value::Object(m) => {
-            m.get("op").and_then(Value::as_str) == Some(APPLY_OP) || m.values().any(pd_has_apply)
-        }
-        Value::Array(xs) => xs.iter().any(pd_has_apply),
-        _ => false,
-    }
-}
-
-/// The `name` of the first surviving reference in `node` (pre-order), for the
-/// residual diagnostic; `None` when it carries none.
-///
-/// Hand-rolled rather than `crate::json_visit`: short-circuits at the first
-/// reference node and does not descend into it.
-fn pd_first_apply_name(node: &Value) -> Option<String> {
-    match node {
-        Value::Object(m) => {
-            if m.get("op").and_then(Value::as_str) == Some(APPLY_OP) {
-                return m.get("name").and_then(Value::as_str).map(str::to_string);
-            }
-            m.values().find_map(pd_first_apply_name)
-        }
-        Value::Array(xs) => xs.iter().find_map(pd_first_apply_name),
-        _ => None,
-    }
-}
-
-/// `Expand(node)` against `templates` — DETECTION ONLY; nothing of the result is
-/// emitted. Returns `None` when there is nothing to expand, and `None` when
-/// expansion FAILS: the pass's contract is to leave a document it cannot
-/// recognise alone, and an unexpandable reference is then reported by
-/// [`pd_binning_refusal`] if the variable is join-shaped.
-fn pd_expand_for_detection(node: &Value, templates: Option<&Map<String, Value>>) -> Option<Value> {
-    let templates = templates?;
-    if !pd_has_apply(node) {
-        return None;
-    }
-    crate::lower_expression_templates::expand_against_registry(node, templates, "pushdown_rewrite")
-        .ok()
-}
-
-/// The definitions ([`pd_def`]) that carried a surviving
-/// `apply_expression_template` reference, EXPANDED — the `Expand(tree)` view the
-/// pattern matcher must see (§9.6.4 rule 2). From esm 1.0.0 an observed
-/// unknown's body is its defining EQUATION's right-hand side, so this — not the
-/// variable table — is what the detector matches against.
-///
-/// Only the expanded definitions are returned, as OVERRIDES for [`pd_def_view`]
-/// to consult: a template-free document builds an empty map, allocates no
-/// `Value`, and takes the byte-identical pre-existing path.
-///
-/// DETECTION ONLY. The emission side reads [`pd_def`] / [`pd_def_mut`] so it
-/// edits the AUTHORED body (and, for a template-factored one, the call site's
-/// `bindings`) rather than a detached expansion.
-fn pd_detection_defs(model: &Value, templates: Option<&Map<String, Value>>) -> Map<String, Value> {
-    let mut out = Map::new();
-    if templates.is_none() {
-        return out;
-    }
-    let Some(eqs) = model.get("equations").and_then(Value::as_array) else {
-        return out;
-    };
-    for eq in eqs {
-        let Some(lhs) = eq.get("lhs").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(rhs) = eq.get("rhs") else {
-            continue;
-        };
-        // FIRST definition wins, matching `pd_def`.
-        if out.contains_key(lhs) {
-            continue;
-        }
-        if let Some(expanded) = pd_expand_for_detection(rhs, templates) {
-            out.insert(lhs.to_string(), expanded);
-        }
-    }
-    out
-}
-
-/// [`pd_def`] through the detection view: the EXPANDED body when
-/// [`pd_detection_defs`] produced one for `name`, else the authored body.
-fn pd_def_view<'a>(
-    model: &'a Value,
-    defs: &'a Map<String, Value>,
-    name: &str,
-) -> Option<&'a Value> {
-    defs.get(name).or_else(|| pd_def(model, name))
 }
 
 // --------------------------------------------------------------------------- //
@@ -936,8 +1004,9 @@ is produced and no gate is emitted";
 /// `("predicate_unparsed", None)` when a containment `ifelse` was found but did
 /// not read as a rectangle containment in either orientation.
 fn pd_binning_refusal(
+    tt: PdTt<'_>,
     ev: &Value,
-    agg: &Value,
+    (agg, afr): &(Value, PdFr),
     out_set: &str,
 ) -> Option<(&'static str, Option<String>)> {
     let shape = ev.get("shape")?.as_array()?;
@@ -962,14 +1031,14 @@ fn pd_binning_refusal(
     }
     let in_sym = ranges.keys().find(|k| k.as_str() != out_sym)?;
     range_from(ranges.get(in_sym))?;
-    let body = agg.get("expr")?;
+    let (body, bfr) = pd_open(tt, agg.get("expr")?, afr);
     if !body.is_object() {
         return None;
     }
-    if pd_find_ifelse_cond(body).is_none() {
-        // No predicate at all ⇒ genuinely dense, unless a surviving reference
-        // is hiding one.
-        let tname = pd_first_apply_name(body)?;
+    if pd_find_ifelse_cond(tt, &body, &bfr).is_none() {
+        // No predicate at all ⇒ genuinely dense, unless a reference that
+        // cannot be read is hiding one.
+        let tname = pd_first_apply_name(tt, &body, &bfr)?;
         return Some(("surviving_template_reference", Some(tname)));
     }
     Some(("predicate_unparsed", None))
@@ -1020,7 +1089,7 @@ through the template's params, or write the predicate longhand.",
 /// document's own const-array rects, unrewritten.
 fn pd_mirror_specs(
     model: &Value,
-    defs: &Map<String, Value>,
+    tt: PdTt<'_>,
     c_set: &str,
     r_set: &str,
     forward_names: &[String],
@@ -1033,17 +1102,17 @@ fn pd_mirror_specs(
         if forward_names.iter().any(|f| f == name) {
             continue;
         }
-        let Some(agg) = pd_def_view(model, defs, name) else {
+        let Some(agg) = pd_def_view(model, tt, name) else {
             continue;
         };
-        let Some(bind) = pd_detect_binning(v, agg, r_set, Some(false)) else {
+        let Some(bind) = pd_detect_binning(tt, v, &agg, r_set, Some(false)) else {
             continue;
         };
         if bind.out_is_cell || bind.c_set != c_set || bind.r_set != r_set {
             continue;
         }
         // Never stack a second gate on an aggregate that already declares a join.
-        if agg.get("join").is_some() {
+        if agg.0.get("join").is_some() {
             continue;
         }
         out.push((name.clone(), bind.src_env, bind.tgt_env));
@@ -1100,19 +1169,19 @@ struct Plan {
 
 /// One consumer whose reduction matched the pushdown pattern (see
 /// [`pd_match_conc`]), together with the FORWARD binning observed it reads.
-struct ConcMatch<'a> {
+struct ConcMatch {
     /// The reduction's contracted symbol.
-    s_sym: &'a String,
+    s_sym: String,
     /// The cell index set (the mat-vec array's first axis).
-    c_set: &'a str,
+    c_set: String,
     /// The record index set the reduction is shaped on.
-    r_set: &'a str,
+    r_set: String,
     /// The provider-backed rank-2 `[c_set, r_set]` array factor (`A`).
     aname: String,
     /// The FORWARD binning observed (`E`).
     ename: String,
-    /// `E`'s aggregate body on the detection view.
-    eagg: &'a Value,
+    /// `E`'s aggregate read through the references, with its frame.
+    eagg: (Value, PdFr),
     /// `E`'s binning binding.
     bind: Binning,
 }
@@ -1124,19 +1193,20 @@ struct ConcMatch<'a> {
 /// `pushdown_join_unrecognised` diagnostic into `diags`.
 fn pd_match_conc<'a>(
     model: &'a Value,
-    defs: &'a Map<String, Value>,
+    tt: PdTt<'_>,
     variables: &'a Map<String, Value>,
     cname: &str,
     cv: &Value,
     diags: &mut Vec<Value>,
-) -> Option<ConcMatch<'a>> {
+) -> Option<ConcMatch> {
     if !pd_is_unknown(cv) {
         return None;
     }
     // An OBSERVED unknown is one with a bare-variable-LHS defining
     // equation (esm-spec §6.3.1); one without is a state or algebraic
     // unknown and matches nothing here.
-    let agg = pd_def_view(model, defs, cname)?;
+    let agg_view = pd_def_view(model, tt, cname)?;
+    let agg = &agg_view.0;
     if !is_faq_op(op_of(agg)) {
         return None;
     }
@@ -1153,11 +1223,12 @@ fn pd_match_conc<'a>(
     if ranges.len() != 2 || !ranges.contains_key(rcv_sym) {
         return None;
     }
-    let s_sym = ranges.keys().find(|k| k.as_str() != rcv_sym)?;
-    let c_set = range_from(ranges.get(s_sym))?;
-    let r_set = range_from(ranges.get(rcv_sym))?;
+    let s_sym = ranges.keys().find(|k| k.as_str() != rcv_sym)?.clone();
+    let c_set = range_from(ranges.get(&s_sym))?.to_string();
+    let r_set = range_from(ranges.get(rcv_sym))?.to_string();
+    let (c_set, r_set) = (c_set.as_str(), r_set.as_str());
     let body = agg.get("expr")?;
-    let (aname, ename) = pd_matvec_factors(body, s_sym, &[rcv_sym])?;
+    let (aname, ename) = pd_matvec_factors(tt, body, &agg_view.1, &s_sym, &[rcv_sym])?;
     // A must be a declared rank-2 parameter [c_set, r_set].
     let av = variables.get(&aname)?;
     let a_ok = av.get("type").and_then(Value::as_str) == Some("parameter")
@@ -1170,13 +1241,13 @@ fn pd_match_conc<'a>(
         return None;
     }
     let ev = variables.get(&ename)?;
-    let eagg = pd_def_view(model, defs, &ename)?;
-    let Some(bind) = pd_detect_binning(ev, eagg, c_set, None) else {
+    let eagg = pd_def_view(model, tt, &ename)?;
+    let Some(bind) = pd_detect_binning(tt, ev, &eagg, c_set, None) else {
         // `ev` is the rank-1 factor of a `+`-mat-vec against a
         // provider-backed `[c_set, r_set]` array: the join position. If it
         // is ALSO binning-shaped but unreadable, say so — silence here is
         // the ungated whole-array fetch that surfaces hours later.
-        if let Some((reason, template)) = pd_binning_refusal(ev, eagg, c_set) {
+        if let Some((reason, template)) = pd_binning_refusal(tt, ev, &eagg, c_set) {
             diags.push(json!({
                 "code": "pushdown_join_unrecognised",
                 "variable": ename,
@@ -1198,8 +1269,8 @@ fn pd_match_conc<'a>(
     }
     Some(ConcMatch {
         s_sym,
-        c_set,
-        r_set,
+        c_set: c_set.to_string(),
+        r_set: r_set.to_string(),
         aname,
         ename,
         eagg,
@@ -1228,16 +1299,15 @@ fn pd_order_diags(diags: &mut Vec<Value>) {
 
 /// Detect the pushdown pattern across a model's observeds.
 ///
-/// `defs` is the DETECTION view ([`pd_detection_defs`]): the observed
-/// definitions with surviving template references expanded, so a binning body
-/// factored through a template matches exactly as its expansion would. `model`
-/// supplies the declarations beside them — shapes and types, which no expansion
-/// touches.
+/// `tt` is the registry the observed definitions' references are read
+/// through ([`pd_open`]), so a binning body factored through a template
+/// matches exactly as its expansion would, without expanding it. `model`
+/// supplies the declarations beside them — shapes and types.
 ///
 /// Returns `(plan, diagnostics)` — `plan` `None` when nothing matches / the
 /// semiring guard fails, `diagnostics` the residual "a join I could not read"
 /// records (see [`pd_binning_refusal`]).
-fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Value>) {
+fn pd_detect(model: &Value, tt: PdTt<'_>) -> (Option<Plan>, Vec<Value>) {
     let Some(variables) = model.get("variables").and_then(Value::as_object) else {
         return (None, Vec::new());
     };
@@ -1250,7 +1320,7 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
     let mut plan: Option<Plan> = None;
 
     for (cname, cv) in variables {
-        let Some(m) = pd_match_conc(model, defs, variables, cname, cv, &mut diags) else {
+        let Some(m) = pd_match_conc(model, tt, variables, cname, cv, &mut diags) else {
             continue;
         };
 
@@ -1289,10 +1359,11 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
             // edits the authored body / call-site bindings, and
             // `pd_assert_rects_rebound` proves the substitution landed.
             pd_cell_factors(
-                m.eagg,
+                tt,
+                &m.eagg,
                 &m.bind.c_sym,
                 variables,
-                m.c_set,
+                &m.c_set,
                 &mut cell_factors,
                 &mut cell_bad,
             );
@@ -1319,7 +1390,7 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
     // trigger, so a document holding only mirrored binning aggregates is not
     // rewritten at all (§5.5.7).
     let forward_names: Vec<String> = e_specs.iter().map(|s| s.ename.clone()).collect();
-    plan.mirror_specs = pd_mirror_specs(model, defs, &plan.c_set, &plan.r_set, &forward_names);
+    plan.mirror_specs = pd_mirror_specs(model, tt, &plan.c_set, &plan.r_set, &forward_names);
     plan.conc_specs = conc_specs;
     plan.a_names = a_names;
     plan.e_specs = e_specs;
@@ -1366,35 +1437,38 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
 /// alone: it still reads the full-grid array at a full-grid position, which the
 /// rewrite does not disturb.
 fn pd_cell_factors(
-    node: &Value,
+    tt: PdTt<'_>,
+    (node, nfr): &(Value, PdFr),
     c_sym: &str,
     variables: &Map<String, Value>,
     c_set: &str,
     out: &mut BTreeMap<String, Vec<String>>,
     bad: &mut BTreeMap<String, String>,
 ) {
-    crate::json_visit::visit_values(node, &mut |_path, v| {
+    // Every node of the aggregate read through the references; a body's reads
+    // are read through its frame.
+    pd_foreach_node(tt, node, nfr, &mut |v, fr| {
         let Some(o) = v.as_object() else { return };
         if o.get("op").and_then(Value::as_str) == Some("index")
             && let Some(a) = o.get("args").and_then(Value::as_array)
             && a.len() >= 2
-            && let Some(f) = a[0].as_str()
+            && let Some(f) = pd_name(tt, &a[0], fr)
             && let Some(shape) = variables
-                .get(f)
+                .get(&f)
                 .and_then(|v| v.get("shape"))
                 .and_then(Value::as_array)
             && shape.first().and_then(Value::as_str) == Some(c_set)
         {
-            if a[1].as_str() == Some(c_sym) {
-                out.entry(f.to_string()).or_insert_with(|| {
+            if pd_name(tt, &a[1], fr).as_deref() == Some(c_sym) {
+                out.entry(f).or_insert_with(|| {
                     shape
                         .iter()
                         .map(|t| t.as_str().unwrap_or_default().to_string())
                         .collect()
                 });
-            } else if pd_mentions_sym(&a[1], c_sym) {
-                bad.entry(f.to_string())
-                    .or_insert_with(|| pd_subscript_sketch(&a[1]));
+            } else if pd_mentions_sym(tt, &a[1], fr, c_sym) {
+                bad.entry(f)
+                    .or_insert_with(|| pd_subscript_sketch(tt, &a[1], fr));
             }
         }
     });
@@ -1405,20 +1479,23 @@ fn pd_cell_factors(
 /// Hand-rolled rather than `crate::json_visit`: descent is key-dependent
 /// (`name` entries are labels, not references, and are skipped) and the test
 /// short-circuits.
-fn pd_mentions_sym(node: &Value, sym: &str) -> bool {
-    match node {
-        Value::String(s) => s == sym,
+fn pd_mentions_sym(tt: PdTt<'_>, node: &Value, fr: &PdFr, sym: &str) -> bool {
+    let (x, xf) = pd_open(tt, node, fr);
+    match &x {
+        Value::String(s) => xf.is_none() && s == sym,
         Value::Object(o) => o
             .iter()
-            .any(|(k, v)| k != "name" && pd_mentions_sym(v, sym)),
-        Value::Array(xs) => xs.iter().any(|x| pd_mentions_sym(x, sym)),
+            .any(|(k, v)| k != "name" && pd_mentions_sym(tt, v, &xf, sym)),
+        Value::Array(xs) => xs.iter().any(|v| pd_mentions_sym(tt, v, &xf, sym)),
         _ => false,
     }
 }
 
 /// A one-line rendering of a subscript expression, for the refusal message.
-fn pd_subscript_sketch(node: &Value) -> String {
-    match node {
+fn pd_subscript_sketch(tt: PdTt<'_>, node: &Value, fr: &PdFr) -> String {
+    let (node, fr) = pd_open(tt, node, fr);
+    let sketch = |v: &Value| pd_subscript_sketch(tt, v, &fr);
+    match &node {
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
         Value::Object(o) => {
@@ -1426,10 +1503,10 @@ fn pd_subscript_sketch(node: &Value) -> String {
             let empty: Vec<Value> = Vec::new();
             let args = o.get("args").and_then(Value::as_array).unwrap_or(&empty);
             if op == "index" && !args.is_empty() {
-                let inner: Vec<String> = args[1..].iter().map(pd_subscript_sketch).collect();
-                format!("{}[{}]", pd_subscript_sketch(&args[0]), inner.join(", "))
+                let inner: Vec<String> = args[1..].iter().map(sketch).collect();
+                format!("{}[{}]", sketch(&args[0]), inner.join(", "))
             } else {
-                let inner: Vec<String> = args.iter().map(pd_subscript_sketch).collect();
+                let inner: Vec<String> = args.iter().map(sketch).collect();
                 format!("{}({})", op, inner.join(", "))
             }
         }
@@ -1593,31 +1670,8 @@ fn pd_overlap_clause(src_env: &[String], tgt_env: &[String]) -> Value {
     })
 }
 
-/// Collect every factor name in `rectmap` that still appears in an
-/// `index(F, …)` position — every occurrence [`pd_rewrite_rects`] targets but
-/// did not reach.
-fn pd_collect_stale_rects(
-    node: &Value,
-    rectmap: &HashMap<String, String>,
-    out: &mut std::collections::BTreeSet<String>,
-) {
-    crate::json_visit::visit_values(node, &mut |_path, v| {
-        if let Some(m) = v.as_object()
-            && m.get("op").and_then(Value::as_str) == Some("index")
-            && let Some(f) = m
-                .get("args")
-                .and_then(Value::as_array)
-                .and_then(|a| a.first())
-                .and_then(Value::as_str)
-            && rectmap.contains_key(f)
-        {
-            out.insert(f.to_string());
-        }
-    });
-}
-
 /// POST-CONDITION of the forward arm's rect re-pointing, discharged on the
-/// EXPANDED form of the rewritten aggregate (esm-spec §9.6.4 rule 2: what the
+/// rewritten aggregate read through its references (esm-spec §9.6.4 rule 2: what the
 /// evaluator sees is `Expand(tree)`).
 ///
 /// `E`'s reduction axis now ranges over the COMPACT derived support set, so
@@ -1639,10 +1693,26 @@ fn pd_assert_rects_rebound(
     if rectmap.is_empty() {
         return Ok(());
     }
-    let expanded = pd_expand_for_detection(expr, templates);
-    let view = expanded.as_ref().unwrap_or(expr);
+    // Every `index(F, …)` the aggregate reads, through the references: a
+    // rect factor read as a name of the model's tree, or named free inside a
+    // body (a name of the call site's scope the rewrite cannot reach), that
+    // is still in `rectmap` was not re-pointed.
+    let registry = templates.map(|t| OperatorRegistry::from_json(t.iter()));
+    let tt = registry.as_ref();
     let mut stale = std::collections::BTreeSet::new();
-    pd_collect_stale_rects(view, rectmap, &mut stale);
+    pd_foreach_node(tt, expr, &None, &mut |v, fr| {
+        if let Some(m) = v.as_object()
+            && m.get("op").and_then(Value::as_str) == Some("index")
+            && let Some(first) = m
+                .get("args")
+                .and_then(Value::as_array)
+                .and_then(|a| a.first())
+            && let (Value::String(f), _) = pd_open(tt, first, fr)
+            && rectmap.contains_key(&f)
+        {
+            stale.insert(f);
+        }
+    });
     if stale.is_empty() {
         return Ok(());
     }
@@ -2201,15 +2271,17 @@ pub fn pushdown_diagnostics(esm: &Value, model_name: Option<&str>) -> Vec<Value>
 
 /// The ONE detection entry point shared by [`desugar_pushdown`] (which then
 /// emits) and [`pushdown_diagnostics`] (which only reports): run the matcher on
-/// the EXPANDED view and hand back the plan (`None` ⇒ the pattern did not
+/// definitions read through their references and hand back the plan (`None` ⇒ the pattern did not
 /// match), the residual diagnostics, and the component template registry the
 /// emission side needs.
 #[allow(clippy::type_complexity)]
 fn pd_analyze(model: &Value) -> Option<(Option<Plan>, Vec<Value>, Option<Map<String, Value>>)> {
     model.get("variables")?.as_object()?;
     let templates = pd_templates(model);
-    let defs = pd_detection_defs(model, templates.as_deref());
-    let (plan, diags) = pd_detect(model, &defs);
+    let registry = templates
+        .as_deref()
+        .map(|t| OperatorRegistry::from_json(t.iter()));
+    let (plan, diags) = pd_detect(model, registry.as_ref());
     Some((plan, diags, templates.map(Cow::into_owned)))
 }
 

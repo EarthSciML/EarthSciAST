@@ -121,7 +121,8 @@ pub fn print_math(expr: &serde_json::Value, names: &[String], format: DocumentFo
 }
 
 /// The variable names an expression or an equation uses, in order of first
-/// use: its string leaves under `lhs`, `rhs` and `args`. These are the
+/// use: its string leaves under `lhs`, `rhs` and `args`, and a reference's
+/// `bindings` values. These are the
 /// `names` to give [`print_math`] to show an expression on its own, with its
 /// names declared.
 pub fn expression_names(expr: &serde_json::Value) -> Vec<String> {
@@ -133,6 +134,15 @@ pub fn expression_names(expr: &serde_json::Value) -> Vec<String> {
                 for key in ["lhs", "rhs", "args"] {
                     if let Some(child) = fields.get(key) {
                         walk(child, out);
+                    }
+                }
+                // A reference reads the names its bindings read (esm-spec
+                // §9.6.4), in parameter order by name.
+                if let Some(serde_json::Value::Object(b)) = fields.get("bindings") {
+                    let mut keys: Vec<&String> = b.keys().collect();
+                    keys.sort();
+                    for k in keys {
+                        walk(&b[k], out);
                     }
                 }
             }

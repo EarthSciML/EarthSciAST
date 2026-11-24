@@ -77,6 +77,7 @@
         "extension",
         "inline_tests_adapter",
         "intern",
+        "operator_refs",
         "precision",
         "precision_infer",
         "provider",
@@ -94,17 +95,17 @@
     }
   },
   "counts": {
-    "symbols": 1010,
+    "symbols": 1014,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 373,
       "typescript": 241,
       "python": 272,
-      "rust": 404,
+      "rust": 408,
       "go": 462
     },
     "by_tier": {
-      "extension": 698,
+      "extension": 702,
       "stable": 312
     }
   },
@@ -902,6 +903,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "check_equation_dimensions"
+      }
+    },
+    {
+      "name": "check_equation_dimensions_with_operators",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "check_equation_dimensions_with_operators"
       }
     },
     {
@@ -3287,6 +3296,14 @@
       }
     },
     {
+      "name": "equation_dimension_verdict_with_operators",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "equation_dimension_verdict_with_operators"
+      }
+    },
+    {
       "name": "equation_unit_findings",
       "kind": "function",
       "tier": "extension",
@@ -3717,6 +3734,14 @@
       }
     },
     {
+      "name": "evaluate_cellwise_with_operators",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "evaluate_cellwise_with_operators"
+      }
+    },
+    {
       "name": "evaluate_expr",
       "kind": "function",
       "tier": "extension",
@@ -3738,6 +3763,14 @@
       "tier": "extension",
       "bindings": {
         "python": "evaluate_rhs"
+      }
+    },
+    {
+      "name": "evaluate_with_operators",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "evaluate_with_operators"
       }
     },
     {

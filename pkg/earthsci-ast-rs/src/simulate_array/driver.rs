@@ -875,6 +875,7 @@ impl ArrayCompiled {
             forcing: &self.forcing,
             t,
             declared: &self.declared_names,
+            ops: &self.operators,
         }
     }
 
@@ -890,6 +891,7 @@ impl ArrayCompiled {
             forcing: &self.forcing,
             const_arrays: &self.const_scope,
             declared: &self.declared_names,
+            ops: &self.operators,
         }
     }
 
@@ -1002,7 +1004,9 @@ impl ArrayCompiled {
     #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
     pub(crate) fn observeds_are_scalar(&self) -> bool {
         self.observed_rules.iter().all(|rule| match rule {
-            AlgebraicRule::Scalar { body, .. } => check_scalar_evaluable(body).is_ok(),
+            AlgebraicRule::Scalar { body, .. } => {
+                check_scalar_evaluable_in(body, &self.operators).is_ok()
+            }
             _ => false,
         })
     }
@@ -1255,6 +1259,7 @@ impl ArrayCompiled {
                     &bound,
                     &built,
                     mode,
+                    &self.operators,
                 );
                 let route = match routed {
                     Ok(Routed::Refused(why)) => {
@@ -1326,6 +1331,7 @@ impl ArrayCompiled {
                     &self.index_sets,
                     params,
                     &mut memo,
+                    &self.operators,
                 );
                 if let Some(Err(why)) = memo.route {
                     // As for the scope above: the tape's decline is the
@@ -1463,6 +1469,7 @@ impl ArrayCompiled {
                 params,
                 &scope,
                 mode,
+                &self.operators,
             );
             let value = match value {
                 Ok(Routed::Refused(why)) => {

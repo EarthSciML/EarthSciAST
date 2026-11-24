@@ -43,6 +43,19 @@ pub(super) fn run_reference(
             *a = a.view().reversed_axes().as_standard_layout().into_owned();
         }
     }
+    run_program(prog, compiled, &state_arrays, params, t, dy)
+}
+
+/// Execute all three sections of `prog` with its state read from
+/// `state_arrays` (by state-variable name, in the program's layout).
+fn run_program(
+    prog: &TapeProgram,
+    compiled: &ArrayCompiled,
+    state_arrays: &ArrMap,
+    params: &[f64],
+    t: f64,
+    dy: &mut [f64],
+) -> RefRun {
     let mut obs: ArrMap = ArrMap::default();
     let mut slots: Vec<Option<RefVal>> = vec![None; prog.tables.slots.len()];
 
@@ -67,7 +80,7 @@ pub(super) fn run_reference(
             };
             let sw = &prog.tables.sweeps[*spec as usize];
             if pc == spc + 1 + sw.body_len as usize {
-                let RefVal::Scalar(v) = resolve(prog, &slots, &state_arrays, params, t, &sw.result)
+                let RefVal::Scalar(v) = resolve(prog, &slots, state_arrays, params, t, &sw.result)
                 else {
                     panic!("a recurrence cell is a scalar");
                 };
@@ -104,8 +117,8 @@ pub(super) fn run_reference(
         match instr {
             Instr::Bin { op, a, b, out } => {
                 let f = binary_kernel_of(*op);
-                let av = resolve(prog, &slots, &state_arrays, params, t, a);
-                let bv = resolve(prog, &slots, &state_arrays, params, t, b);
+                let av = resolve(prog, &slots, state_arrays, params, t, a);
+                let bv = resolve(prog, &slots, state_arrays, params, t, b);
                 let v = match (av, bv) {
                     (RefVal::Scalar(x), RefVal::Scalar(y)) => RefVal::Scalar(f(x, y)),
                     (RefVal::Scalar(x), RefVal::Arr(ya)) => RefVal::Arr(ya.mapv(|y| f(x, y))),
@@ -123,7 +136,7 @@ pub(super) fn run_reference(
             }
             Instr::Un { op, a, out } => {
                 let f = unary_kernel_of(*op);
-                let av = resolve(prog, &slots, &state_arrays, params, t, a);
+                let av = resolve(prog, &slots, state_arrays, params, t, a);
                 let v = match av {
                     RefVal::Scalar(x) => RefVal::Scalar(f(x)),
                     RefVal::Arr(xa) => RefVal::Arr(xa.mapv(f)),
@@ -131,7 +144,7 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(v);
             }
             Instr::Neg { a, out } => {
-                let av = resolve(prog, &slots, &state_arrays, params, t, a);
+                let av = resolve(prog, &slots, state_arrays, params, t, a);
                 let v = match av {
                     RefVal::Scalar(x) => RefVal::Scalar(-x),
                     RefVal::Arr(xa) => RefVal::Arr(xa.mapv(|x| -x)),
@@ -139,9 +152,9 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(v);
             }
             Instr::Select { cond, a, b, out } => {
-                let cv = resolve(prog, &slots, &state_arrays, params, t, cond);
-                let av = resolve(prog, &slots, &state_arrays, params, t, a);
-                let bv = resolve(prog, &slots, &state_arrays, params, t, b);
+                let cv = resolve(prog, &slots, state_arrays, params, t, cond);
+                let av = resolve(prog, &slots, state_arrays, params, t, a);
+                let bv = resolve(prog, &slots, state_arrays, params, t, b);
                 let desc = &prog.tables.slots[*out as usize];
                 let v = if desc.scalar {
                     let (RefVal::Scalar(c), RefVal::Scalar(x), RefVal::Scalar(y)) = (&cv, &av, &bv)
@@ -166,12 +179,12 @@ pub(super) fn run_reference(
             }
             Instr::Gather { src, plan, out } => {
                 let plan = &prog.tables.plans[*plan as usize];
-                let sv = resolve_src(prog, &slots, &state_arrays, src);
+                let sv = resolve_src(prog, &slots, state_arrays, src);
                 let v = exec_gather(plan, sv.view());
                 slots[*out as usize] = Some(RefVal::Arr(v));
             }
             Instr::LoadElem { src, idx, out } => {
-                let sv = resolve_src(prog, &slots, &state_arrays, src);
+                let sv = resolve_src(prog, &slots, state_arrays, src);
                 let v = sv[IxDyn(&idx[..])];
                 slots[*out as usize] = Some(RefVal::Scalar(v));
             }
@@ -185,7 +198,7 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(RefVal::Arr(arr));
             }
             Instr::Fill { v, out } => {
-                let vv = resolve(prog, &slots, &state_arrays, params, t, v);
+                let vv = resolve(prog, &slots, state_arrays, params, t, v);
                 let RefVal::Scalar(s) = vv else {
                     panic!("Fill with an array operand");
                 };
@@ -198,7 +211,7 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(val);
             }
             Instr::Copy { a, out } => {
-                let v = resolve(prog, &slots, &state_arrays, params, t, a);
+                let v = resolve(prog, &slots, state_arrays, params, t, a);
                 slots[*out as usize] = Some(v);
             }
             Instr::Region {
@@ -212,7 +225,7 @@ pub(super) fn run_reference(
                     panic!("Region base slot not an array");
                 };
                 let mut o = basev.clone();
-                let sv = resolve(prog, &slots, &state_arrays, params, t, src);
+                let sv = resolve(prog, &slots, state_arrays, params, t, src);
                 {
                     let mut sub = o.slice_each_axis_mut(|ax| {
                         let d = ax.axis.index();
@@ -233,7 +246,7 @@ pub(super) fn run_reference(
                 let mut o = ArrayD::<f64>::zeros(IxDyn(&desc.shape));
                 for (src, region) in &prog.tables.assemblies[*table as usize].parts {
                     let spec = &prog.tables.regions[*region as usize];
-                    let sv = resolve(prog, &slots, &state_arrays, params, t, src);
+                    let sv = resolve(prog, &slots, state_arrays, params, t, src);
                     let mut sub = o.slice_each_axis_mut(|ax| {
                         let d = ax.axis.index();
                         Slice::from(spec.dest_lo[d]..spec.dest_lo[d] + spec.shape[d])
@@ -288,7 +301,7 @@ pub(super) fn run_reference(
                 x,
                 out,
             } => {
-                let av = resolve_src(prog, &slots, &state_arrays, axis);
+                let av = resolve_src(prog, &slots, state_arrays, axis);
                 assert_eq!(av.ndim(), 1, "Count axis rank");
                 let win: Vec<f64> = av
                     .iter()
@@ -298,7 +311,7 @@ pub(super) fn run_reference(
                     .collect();
                 assert_eq!(win.len(), *n as usize, "Count window");
                 let count = |q: f64| win.iter().filter(|&&a| rel.holds(a, q)).count() as f64;
-                let xv = resolve(prog, &slots, &state_arrays, params, t, x);
+                let xv = resolve(prog, &slots, state_arrays, params, t, x);
                 let desc = &prog.tables.slots[*out as usize];
                 let v = if desc.scalar {
                     let RefVal::Scalar(q) = xv else {
@@ -321,7 +334,7 @@ pub(super) fn run_reference(
                 out,
             } => {
                 let f = binary_kernel_of(*op);
-                let sv = resolve_src(prog, &slots, &state_arrays, src);
+                let sv = resolve_src(prog, &slots, state_arrays, src);
                 assert_eq!(sv.shape(), &src_shape[..], "Reduce source box");
                 let desc = &prog.tables.slots[*out as usize];
                 let mut acc = ArrayD::<f64>::from_elem(IxDyn(&desc.shape[..]), *init);
@@ -369,7 +382,7 @@ pub(super) fn run_reference(
                 out,
             } => {
                 let f = binary_kernel_of(*op);
-                let sv = resolve_src(prog, &slots, &state_arrays, src);
+                let sv = resolve_src(prog, &slots, state_arrays, src);
                 assert_eq!(sv.shape(), &src_shape[..], "Scan source box");
                 let ax = Axis(*axis as usize);
                 let mut o = ArrayD::<f64>::zeros(IxDyn(&src_shape[..]));
@@ -402,9 +415,9 @@ pub(super) fn run_reference(
                 out,
             } => {
                 let spec = &prog.tables.index_gathers[*spec as usize];
-                let sv = resolve_src(prog, &slots, &state_arrays, src);
+                let sv = resolve_src(prog, &slots, state_arrays, src);
                 assert_eq!(sv.shape(), &spec.src_shape[..], "IndexGather source box");
-                let iv = resolve(prog, &slots, &state_arrays, params, t, idx);
+                let iv = resolve(prog, &slots, state_arrays, params, t, idx);
                 let iv = to_shape(&iv, &spec.shape);
                 let mut o = ArrayD::<f64>::zeros(IxDyn(&spec.shape[..]));
                 let mut at: Vec<usize> = vec![0; spec.axes.len()];
@@ -433,7 +446,7 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(RefVal::Arr(o));
             }
             Instr::TableGather { src, table, out } => {
-                let sv = resolve_src(prog, &slots, &state_arrays, src);
+                let sv = resolve_src(prog, &slots, state_arrays, src);
                 let tbl = &prog.tables.gather_tables[*table as usize];
                 assert_eq!(sv.shape(), &tbl.src_shape[..], "TableGather source box");
                 let flat: Vec<f64> = sv.iter().copied().collect();
@@ -492,7 +505,7 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(val);
             }
             Instr::Reshape { src, out } => {
-                let sv = resolve_src(prog, &slots, &state_arrays, src);
+                let sv = resolve_src(prog, &slots, state_arrays, src);
                 let desc = &prog.tables.slots[*out as usize];
                 // `iter()` is the logical row-major walk.
                 let flat: Vec<f64> = sv.iter().copied().collect();
@@ -508,14 +521,14 @@ pub(super) fn run_reference(
             }
             Instr::DataGather { src, spec, out, .. } => {
                 let spec = &prog.tables.data_gathers[*spec as usize];
-                let sv = resolve_src(prog, &slots, &state_arrays, src);
+                let sv = resolve_src(prog, &slots, state_arrays, src);
                 assert_eq!(sv.shape(), &spec.src_shape[..], "DataGather source box");
                 // Every subscript at the output box, row-major.
                 let subs: Vec<Vec<f64>> = spec
                     .subs
                     .iter()
                     .map(|o| {
-                        let v = resolve(prog, &slots, &state_arrays, params, t, o);
+                        let v = resolve(prog, &slots, state_arrays, params, t, o);
                         to_shape(&v, &spec.shape).iter().copied().collect()
                     })
                     .collect();
@@ -566,7 +579,7 @@ pub(super) fn run_reference(
                             }
                         }
                     }
-                    _ => match resolve(prog, &slots, &state_arrays, params, t, op) {
+                    _ => match resolve(prog, &slots, state_arrays, params, t, op) {
                         RefVal::Scalar(v) => v,
                         RefVal::Arr(_) => panic!("a scalar condition reads a scalar"),
                     },
@@ -594,12 +607,12 @@ pub(super) fn run_reference(
             }
             Instr::ScalarRead { src, spec, out } => {
                 let sp = &prog.tables.scalar_reads[*spec as usize];
-                let sv = resolve_src(prog, &slots, &state_arrays, src);
+                let sv = resolve_src(prog, &slots, state_arrays, src);
                 let raw: Vec<i64> = sp
                     .subs
                     .iter()
                     .map(
-                        |o| match resolve(prog, &slots, &state_arrays, params, t, o) {
+                        |o| match resolve(prog, &slots, state_arrays, params, t, o) {
                             RefVal::Scalar(x) => subscript_of(x),
                             RefVal::Arr(_) => panic!("a run-time subscript is a scalar"),
                         },
@@ -628,7 +641,7 @@ pub(super) fn run_reference(
                 n_true,
                 n_false,
             } => {
-                let cv = resolve(prog, &slots, &state_arrays, params, t, cond);
+                let cv = resolve(prog, &slots, state_arrays, params, t, cond);
                 let RefVal::Scalar(c) = cv else {
                     panic!("JmpIfZero with an array condition");
                 };
@@ -664,7 +677,7 @@ pub(super) fn run_reference(
                 // A pre-reduction runs first, whole: the instruction it was,
                 // each cell folded over the leading positions in order.
                 if let Some(p) = &fs.pre {
-                    let src = resolve_src(prog, &slots, &state_arrays, &p.src);
+                    let src = resolve_src(prog, &slots, state_arrays, &p.src);
                     let flat: Vec<f64> = src.iter().copied().collect();
                     let f = binary_kernel_of(p.op);
                     let cells: Vec<f64> = (0..p.n_inner)
@@ -680,7 +693,7 @@ pub(super) fn run_reference(
                     .scalars
                     .iter()
                     .map(
-                        |op| match resolve(prog, &slots, &state_arrays, params, t, op) {
+                        |op| match resolve(prog, &slots, state_arrays, params, t, op) {
                             RefVal::Scalar(s) => s,
                             RefVal::Arr(a) if a.ndim() == 0 => a[IxDyn(&[])],
                             other => panic!("fused scalar operand is {other:?}"),
@@ -691,7 +704,7 @@ pub(super) fn run_reference(
                     .inputs
                     .iter()
                     .map(|inp| {
-                        let a = resolve_src(prog, &slots, &state_arrays, &inp.src);
+                        let a = resolve_src(prog, &slots, state_arrays, &inp.src);
                         assert_eq!(a.shape(), &inp.src_shape[..], "fused input box");
                         if a.is_standard_layout() {
                             a
@@ -817,16 +830,42 @@ pub(super) fn run_reference(
                     slots[slot as usize] = Some(RefVal::Arr(arr));
                 }
             }
+            Instr::Call { call, out } => {
+                // The function's state variables are the array arguments, its
+                // parameters the scalar ones, in order.
+                let spec = &prog.tables.calls[*call as usize];
+                let f = &prog.funcs[spec.func as usize];
+                let mut args: ArrMap = ArrMap::default();
+                for (sv, src) in f.state_vars.iter().zip(&spec.arrays) {
+                    args.insert(
+                        sv.name.clone(),
+                        resolve_src(prog, &slots, state_arrays, src),
+                    );
+                }
+                let fparams: Vec<f64> = spec
+                    .scalars
+                    .iter()
+                    .map(
+                        |o| match resolve(prog, &slots, state_arrays, params, t, o) {
+                            RefVal::Scalar(v) => v,
+                            other => panic!("a scalar argument is {other:?}"),
+                        },
+                    )
+                    .collect();
+                let run = run_program(f, compiled, &args, &fparams, t, &mut []);
+                let result = f.exports[0].1;
+                slots[*out as usize] = run.slots[result as usize].clone();
+            }
             Instr::Lanes { spec } => {
                 // Lane by lane through the shared micro-op semantics, each
                 // input read through the reference resolver.
                 let ls = &prog.lanes[*spec as usize];
-                let scalar =
-                    |op: &Operand| match resolve(prog, &slots, &state_arrays, params, t, op) {
-                        RefVal::Scalar(v) => v,
-                        RefVal::Arr(a) if a.ndim() == 0 => a[IxDyn(&[])],
-                        other => panic!("lane operand is {other:?}"),
-                    };
+                let scalar = |op: &Operand| match resolve(prog, &slots, state_arrays, params, t, op)
+                {
+                    RefVal::Scalar(v) => v,
+                    RefVal::Arr(a) if a.ndim() == 0 => a[IxDyn(&[])],
+                    other => panic!("lane operand is {other:?}"),
+                };
                 let svals: Vec<f64> = ls.scalars.iter().map(scalar).collect();
                 // Scalar state by flat offset, so a lane's state read is one
                 // lookup rather than a scan of every state.

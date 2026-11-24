@@ -26,7 +26,7 @@ pub(crate) enum ShapeSource {
     /// ([`crate::structural::promoted_var_shapes`]).
     Inferred,
     /// The array arm of an unshaped mixed-rank `ifelse` (esm-spec §4.3.4,
-    /// [`crate::flatten::conditional_shape_promotions`]).
+    /// [`crate::flatten::conditional_shape_promotions_with`]).
     Conditional,
     /// The index sets of an expression template applied elementwise over an
     /// array argument (esm-spec §9.6.11, [`crate::elementwise_lift`]).

@@ -51,6 +51,7 @@ pub(crate) enum StandaloneError {
 ///
 /// The result is the rule's value at origin 1 on every axis, as the observed
 /// passes publish it (a scalar is a 0-d array).
+#[allow(clippy::too_many_arguments)]
 pub(in crate::simulate_array) fn eval_standalone_rule(
     rule: &AlgebraicRule,
     inputs: &[(&str, &ndarray::ArrayD<f64>)],
@@ -59,8 +60,9 @@ pub(in crate::simulate_array) fn eval_standalone_rule(
     t: f64,
     const_arrays: &ConstArrayScope,
     pipeline: bool,
+    ops: Option<&crate::operator_refs::Instances>,
 ) -> Result<ndarray::ArrayD<f64>, StandaloneError> {
-    let prog = build_standalone_program(rule, inputs, param_names, const_arrays, pipeline)
+    let prog = build_standalone_program(rule, inputs, param_names, const_arrays, pipeline, ops)
         .map_err(|b| StandaloneError::Declined(b.reason))?;
     run_standalone_program(prog, rule, param_names, params, t)
 }
@@ -71,6 +73,7 @@ fn build_standalone_program(
     param_names: &[String],
     const_arrays: &ConstArrayScope,
     pipeline: bool,
+    ops: Option<&crate::operator_refs::Instances>,
 ) -> LResult<TapeProgram> {
     let name = observed_rule_var(rule);
     // A rule that reads the time is homed where a time read lands; the
@@ -82,24 +85,32 @@ fn build_standalone_program(
     } else {
         Cadence::Const
     };
-    with_standalone_builder(name, param_names, const_arrays, pipeline, home, |mut b| {
-        let _rule_precision = crate::precision::enter_variable(name);
-        for (input, value) in inputs {
-            let lv = if value.ndim() == 0 {
-                // `lookup_variable`'s 0-d arm: a scalar, rounded to the
-                // precision in force.
-                LV::Lit(crate::precision::active().round(value[ndarray::IxDyn(&[])]))
-            } else {
-                b.standalone_array_input(value)?
-            };
-            b.obs_defined
-                .insert((*input).to_string(), ObsVal::Taped(lv));
-        }
-        let v = b.lower_observed_rule(rule)?;
-        b.flush_rule_fault()?;
-        b.obs_defined.insert(name.clone(), v);
-        Ok(b.finish_standalone(rule))
-    })
+    with_standalone_builder(
+        name,
+        param_names,
+        const_arrays,
+        pipeline,
+        home,
+        ops,
+        |mut b| {
+            let _rule_precision = crate::precision::enter_variable(name);
+            for (input, value) in inputs {
+                let lv = if value.ndim() == 0 {
+                    // `lookup_variable`'s 0-d arm: a scalar, rounded to the
+                    // precision in force.
+                    LV::Lit(crate::precision::active().round(value[ndarray::IxDyn(&[])]))
+                } else {
+                    b.standalone_array_input(value)?
+                };
+                b.obs_defined
+                    .insert((*input).to_string(), ObsVal::Taped(lv));
+            }
+            let v = b.lower_observed_rule(rule)?;
+            b.flush_rule_fault()?;
+            b.obs_defined.insert(name.clone(), v);
+            Ok(b.finish_standalone(rule))
+        },
+    )
 }
 
 /// Run `f` on a fresh builder for the observed `name` alone, inside its rule
@@ -112,6 +123,7 @@ pub(super) fn with_standalone_builder<R>(
     const_arrays: &ConstArrayScope,
     pipeline: bool,
     home: Cadence,
+    ops: Option<&crate::operator_refs::Instances>,
     f: impl for<'b> FnOnce(TapeBuilder<'b>) -> R,
 ) -> R {
     let var_shapes: IndexMap<String, VarShape> = IndexMap::new();
@@ -125,6 +137,7 @@ pub(super) fn with_standalone_builder<R>(
     obs_tier.insert(name.to_string(), home);
     let mut b = TapeBuilder::new(&var_shapes, param_names, obs_tier, const_arrays, &forcing);
     b.array_bool_reductions = pipeline;
+    b.ops = ops;
     b.begin_rule(RuleInfo {
         name: name.to_string(),
         kind: RuleKind::Observed(0),
@@ -222,6 +235,7 @@ impl TapeBuilder<'_> {
         let exports = self.compute_exports(std::slice::from_ref(rule), true);
         self.materialize_deferred();
         self.finish(exports, None, false)
+            .expect("a standalone tape calls no function")
     }
 
     /// The build-time value of each observed of `names` as an array (a
@@ -278,6 +292,7 @@ pub(super) fn run_standalone_export(
             forcing: &forcing,
             t,
             declared: empty_declared_names(),
+            ops: crate::operator_refs::Instances::empty(),
         },
         &mut [],
         &mut RhsStats::default(),
@@ -346,8 +361,17 @@ impl TapeBuilder<'_> {
         let inputs: Vec<(&str, &ndarray::ArrayD<f64>)> =
             values.iter().map(|(n, a)| (n.as_str(), a)).collect();
         // No parameters beyond the baked ones.
-        let a =
-            eval_standalone_rule(rule, &inputs, &[], &[], 0.0, self.const_arrays, false).ok()?;
+        let a = eval_standalone_rule(
+            rule,
+            &inputs,
+            &[],
+            &[],
+            0.0,
+            self.const_arrays,
+            false,
+            self.ops,
+        )
+        .ok()?;
         let shape: DimU = a.shape().iter().copied().collect();
         Some((shape, Arc::new(a.iter().copied().collect())))
     }

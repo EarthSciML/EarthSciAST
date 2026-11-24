@@ -616,6 +616,8 @@ pub(super) struct RhsCall<'a> {
     /// See [`EvalCtx::declared`] — the compiled model's declared-name set,
     /// carried so the evaluator's fault arm can name the right defect.
     pub(super) declared: &'a HashSet<String>,
+    /// The operator instances the rules' references name.
+    pub(super) ops: &'a Instances,
 }
 
 impl<'a> RhsCall<'a> {
@@ -633,6 +635,7 @@ impl<'a> RhsCall<'a> {
             forcing: self.forcing,
             const_arrays,
             declared: self.declared,
+            ops: self.ops,
         }
     }
 }

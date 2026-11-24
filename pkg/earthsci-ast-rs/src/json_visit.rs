@@ -67,11 +67,6 @@ impl JsonPath<'_> {
     }
 }
 
-/// Read-only pre-order visit of `root` and every value nested under it.
-///
-/// `f` receives each value together with its [`JsonPath`] from `root` (`""`
-/// for the root itself). Callers that don't need the path just ignore it; it
-/// is formatted only by a caller that displays it.
 /// `map.get(key)` for the small objects an expression tree is made of: for a
 /// handful of entries, comparing the keys in order is cheaper than hashing the
 /// one looked up.
@@ -102,7 +97,22 @@ pub(crate) fn is_number_data(v: &[Value]) -> bool {
     v.len() >= DATA_MIN_LEN && v.iter().all(numbers)
 }
 
+/// Read-only pre-order visit of `root` and every value nested under it.
+///
+/// `f` receives each value together with its [`JsonPath`] from `root` (`""`
+/// for the root itself). Callers that don't need the path just ignore it; it
+/// is formatted only by a caller that displays it.
 pub(crate) fn visit_values(root: &Value, f: &mut impl FnMut(&JsonPath<'_>, &Value)) {
+    visit_values_at(root, &JsonPath::Root(""), f);
+}
+
+/// [`visit_values`] of a value that sits at `at` in its document: every path
+/// `f` sees starts there.
+pub(crate) fn visit_values_at(
+    root: &Value,
+    at: &JsonPath<'_>,
+    f: &mut impl FnMut(&JsonPath<'_>, &Value),
+) {
     fn go(v: &Value, at: &JsonPath<'_>, f: &mut impl FnMut(&JsonPath<'_>, &Value)) {
         f(at, v);
         match v {
@@ -120,7 +130,7 @@ pub(crate) fn visit_values(root: &Value, f: &mut impl FnMut(&JsonPath<'_>, &Valu
             _ => {}
         }
     }
-    go(root, &JsonPath::Root(""), f);
+    go(root, at, f);
 }
 
 /// Mutable pre-order visit: `f` sees each value BEFORE its children, so when

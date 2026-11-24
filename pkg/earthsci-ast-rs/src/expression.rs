@@ -151,6 +151,15 @@ fn simplify_node(node: crate::types::ExpressionNode) -> Expr {
 /// non-positive number) are not errors: they come back as `NaN` or `±inf` in
 /// the `Ok` branch, which is the answer.
 ///
+/// An operator reference (`apply_operator`, esm-spec §9.6.4) names a
+/// definition in a registry, and this function has none: an expression
+/// holding one (any expression of a loaded document that calls a
+/// definition) is refused as `unevaluable_operator`, naming the reference. Evaluate it
+/// with [`evaluate_with_operators`], passing the registry it resolves
+/// against: the component's ([`crate::EsmFile::component_operators`]) for an
+/// expression of a loaded document, the flattened system's
+/// ([`crate::FlattenedSystem::operators`]) for a flattened one.
+///
 /// # Examples
 ///
 /// ```
@@ -164,6 +173,37 @@ fn simplify_node(node: crate::types::ExpressionNode) -> Expr {
 /// assert!((result - 3.14).abs() < 1e-10);
 /// ```
 pub fn evaluate(expr: &Expr, bindings: &HashMap<String, f64>) -> Result<f64, Vec<String>> {
+    let mut named: Option<String> = None;
+    crate::operator_refs::for_each_reference(expr, &mut |r| {
+        named.get_or_insert_with(|| r.name.to_string());
+    });
+    if let Some(name) = named {
+        return Err(vec![format!(
+            "unevaluable_operator: operator 'apply_operator' (the reference to `{name}`) \
+             cannot be evaluated by `evaluate`, which has no operator registry to resolve it \
+             against: use \
+             `evaluate_with_operators` with the registry of the component the expression \
+             belongs to (`EsmFile::component_operators`) or of the flattened system \
+             (`FlattenedSystem::operators`)"
+        )]);
+    }
+    evaluate_with_operators(
+        expr,
+        bindings,
+        &crate::operator_refs::OperatorRegistry::default(),
+    )
+}
+
+/// [`evaluate`] of an expression that may hold operator references
+/// (esm-spec §9.6.4), each resolved against `operators` (a flattened
+/// system's [`crate::FlattenedSystem::operators`], or a component's
+/// [`crate::EsmFile::component_operators`]) and evaluated as a call of the
+/// instance it names, never expanded.
+pub fn evaluate_with_operators(
+    expr: &Expr,
+    bindings: &HashMap<String, f64>,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> Result<f64, Vec<String>> {
     let mut unbound: Vec<String> = Vec::new();
     collect_unbound(expr, bindings, &mut unbound);
     if !unbound.is_empty() {
@@ -173,7 +213,8 @@ pub fn evaluate(expr: &Expr, bindings: &HashMap<String, f64>) -> Result<f64, Vec
     names.sort();
     let values: Vec<f64> = names.iter().map(|n| bindings[n]).collect();
     let t = bindings.get("t").copied().unwrap_or(0.0);
-    crate::simulate_array::eval_scalar_expression(expr, &values, &names, t)
+    let ops = crate::operator_refs::Instances::new(operators.clone());
+    crate::simulate_array::eval_scalar_expression_in(expr, &values, &names, t, &ops)
         .map_err(|e| vec![e.to_string()])
 }
 
@@ -459,5 +500,28 @@ mod tests {
                 .any(|m| m.contains("unevaluable_operator") && m.contains("const")),
             "{err:?}"
         );
+    }
+
+    /// `evaluate` has no operator registry, so an expression holding a
+    /// reference is refused with a message that points to
+    /// `evaluate_with_operators`, which evaluates it.
+    #[test]
+    fn evaluate_refuses_a_reference_and_names_the_registry_entry_point() {
+        let e: Expr = serde_json::from_value(serde_json::json!({"op": "+", "args": [1,
+            {"op": "apply_operator", "args": [], "name": "twice", "bindings": {"v": "x"}}]}))
+        .unwrap();
+        let bindings = HashMap::from([("x".to_string(), 3.0)]);
+        let err = evaluate(&e, &bindings).expect_err("no registry");
+        assert!(
+            err.iter()
+                .any(|m| m.contains("twice") && m.contains("evaluate_with_operators")),
+            "{err:?}"
+        );
+        let reg = crate::operator_refs::OperatorRegistry::from_json(
+            serde_json::json!({"twice": {"params": ["v"], "body": {"op": "*", "args": [2, "v"]}}})
+                .as_object()
+                .unwrap(),
+        );
+        assert_eq!(evaluate_with_operators(&e, &bindings, &reg), Ok(7.0));
     }
 }

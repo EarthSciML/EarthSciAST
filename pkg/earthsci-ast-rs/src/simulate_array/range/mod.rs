@@ -1527,6 +1527,7 @@ impl RhsProgram {
                         forcing: &iw.forcing,
                         t,
                         declared: &m.declared_names,
+                        ops: &m.operators,
                     },
                     dy,
                     &mut RhsStats::default(),

@@ -4,7 +4,7 @@
 
 use earthsci_ast::{
     EquationDimensionVerdict, ExpressionGraphOptions, StructuralErrorCode, Unit, UnitError,
-    component_exists, component_graph, equation_dimension_verdict, expression_graph,
+    component_exists, component_graph, equation_dimension_verdict_with_operators, expression_graph,
     expression_graph_with_options, model_unit_env, parse_unit, stoichiometric_matrix, to_json,
     to_json_compact, validate, validate_text,
 };
@@ -38,7 +38,7 @@ pub(crate) fn analyze_model_units(esm_file: &earthsci_ast::EsmFile) {
                 model.variables.len()
             );
 
-            for (i, equation, verdict) in model_equation_verdicts(esm_file, model) {
+            for (i, equation, verdict) in model_equation_verdicts(esm_file, model_id, model) {
                 let label = match equation_lhs_label(&equation.lhs) {
                     Some(lhs) => format!("Equation {} ({lhs})", i + 1),
                     None => format!("Equation {}", i + 1),
@@ -59,18 +59,27 @@ pub(crate) fn analyze_model_units(esm_file: &earthsci_ast::EsmFile) {
     }
 }
 
-/// The dimensional analyser's verdict on each of `model`'s equations, judged
-/// against the same unit environment `validate` uses.
+/// The dimensional analyser's verdict on each of the equations of `model`,
+/// the document's model `model_id`, judged against the same unit environment
+/// and operator registry `validate` uses.
 pub(crate) fn model_equation_verdicts<'m>(
     esm_file: &earthsci_ast::EsmFile,
+    model_id: &str,
     model: &'m earthsci_ast::Model,
 ) -> Vec<(usize, &'m earthsci_ast::Equation, EquationDimensionVerdict)> {
     let (env, _) = model_unit_env(esm_file, model);
+    let operators = esm_file.component_operators(&format!("models.{model_id}"));
     model
         .equations
         .iter()
         .enumerate()
-        .map(|(i, eq)| (i, eq, equation_dimension_verdict(eq, &env)))
+        .map(|(i, eq)| {
+            (
+                i,
+                eq,
+                equation_dimension_verdict_with_operators(eq, &env, &operators),
+            )
+        })
         .collect()
 }
 
@@ -672,8 +681,8 @@ pub(crate) fn run_units(file: PathBuf, check: bool) -> Result<(), Box<dyn std::e
             .collect();
 
         let (mut consistent, mut mismatched, mut not_checked) = (0, 0, 0);
-        for model in esm_file.models.iter().flat_map(|m| m.values()) {
-            for (_, _, verdict) in model_equation_verdicts(&esm_file, model) {
+        for (model_id, model) in esm_file.models.iter().flatten() {
+            for (_, _, verdict) in model_equation_verdicts(&esm_file, model_id, model) {
                 match verdict {
                     EquationDimensionVerdict::Consistent(_) => consistent += 1,
                     EquationDimensionVerdict::Mismatch(_) => mismatched += 1,

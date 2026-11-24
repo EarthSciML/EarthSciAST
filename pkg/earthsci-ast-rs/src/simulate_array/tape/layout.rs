@@ -41,6 +41,18 @@ pub(super) fn align_state_layout(prog: &mut TapeProgram) {
     prog.col_major = true;
 }
 
+/// Lay `prog` out axis-reversed whatever its state needs (a function
+/// program, laid out like the column-major program that calls it). `false`
+/// when some instruction has no reversed meaning.
+pub(super) fn reverse_forced(prog: &mut TapeProgram) -> bool {
+    if !reversible(prog) {
+        return false;
+    }
+    reverse(prog);
+    prog.col_major = true;
+    true
+}
+
 /// Whether a box's row-major order is the same walk as its reversed box's:
 /// true when at most one axis has more than one element.
 pub(crate) fn order_free(shape: &[usize]) -> bool {
@@ -127,7 +139,7 @@ fn src_shape<'a>(prog: &'a TapeProgram, src: &SrcRef) -> &'a [usize] {
 
 /// Whether every instruction means the same thing in reversed coordinates
 /// (see the module docs for what declines).
-fn reversible(prog: &TapeProgram) -> bool {
+pub(super) fn reversible(prog: &TapeProgram) -> bool {
     let slot_free = |s: SlotId| order_free(&prog.tables.slots[s as usize].shape);
     prog.instrs.iter().all(|i| match i {
         Instr::Bin { .. }
@@ -151,6 +163,9 @@ fn reversible(prog: &TapeProgram) -> bool {
         | Instr::FaultScan { .. }
         | Instr::JmpIfZero { .. }
         | Instr::Export { .. } => true,
+        // The function is laid out in the caller's coordinates when it is
+        // finished, and refused there if it cannot be.
+        Instr::Call { .. } => true,
         Instr::Reduce { axes, .. } => axes.len() <= 1,
         // Elementwise in the query; the axis is rank 1, the same either way.
         Instr::Count { .. } => true,
@@ -203,6 +218,8 @@ fn reverse(prog: &mut TapeProgram) {
                 // tuple means the same element either way.
                 scalar_reads: _,
                 dy_writes,
+                // Sources and operands only; the out slot is a slot.
+                calls: _,
             },
         state_vars,
         // The forcing load transposes at the boundary (module docs).
@@ -219,6 +236,10 @@ fn reverse(prog: &mut TapeProgram) {
         col_major: _,
         // Built from the finished program, after every pass.
         prepared: _,
+        // Each function is laid out like its caller when it is finished
+        // (`TapeBuilder::finish_functions`).
+        funcs: _,
+        is_function: _,
     } = prog;
 
     // Instructions: the axis fields that live inline.
@@ -268,6 +289,8 @@ fn reverse(prog: &mut TapeProgram) {
             | Instr::FaultScan { .. }
             | Instr::JmpIfZero { .. }
             | Instr::Export { .. } => {}
+            // Sources, operands and a slot.
+            Instr::Call { .. } => {}
             Instr::Sweep { .. } | Instr::Fused { .. } | Instr::Lanes { .. } => {
                 unreachable!("`reversible` declines a program holding one")
             }

@@ -1577,7 +1577,7 @@ fn build_problem(
     if owned_json.is_none()
         && let Some(file) = owned_file.as_ref().filter(|_| wants_build_pipeline(&opts))
     {
-        owned_json = Some(serde_json::to_value(file).map_err(|e| {
+        owned_json = Some(crate::serialize::document_value(file).map_err(|e| {
             SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
                 "re-serializing the typed document for the build pipeline: {e}"
             )))
@@ -2380,7 +2380,7 @@ fn static_observed_fields(
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(file) = file
         && crate::simulate::whole_document_is_one_model(file)
-        && let Some((_, model)) = file.models.as_ref().and_then(|m| m.iter().next())
+        && let Some((name, model)) = file.models.as_ref().and_then(|m| m.iter().next())
     {
         let index_sets: HashMap<String, crate::types::IndexSet> = file
             .index_sets
@@ -2388,8 +2388,13 @@ fn static_observed_fields(
             .unwrap_or_default()
             .into_iter()
             .collect();
-        crate::simulate_array::check_free_variables(model, &index_sets, &[])
-            .map_err(SimulateError::Compile)?;
+        crate::simulate_array::check_free_variables(
+            model,
+            &index_sets,
+            &[],
+            &file.component_operators(&format!("models.{name}")),
+        )
+        .map_err(SimulateError::Compile)?;
     }
     // `ProblemOptions::observed_cone`: compile and evaluate only what the
     // requested fields read. The gates above see the whole document, so a

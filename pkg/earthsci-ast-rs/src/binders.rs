@@ -69,7 +69,11 @@ impl ExpressionNode {
         {
             f(v);
         }
+        // An operator reference's parameters are bound in its definition's
+        // body, not over its own children: a binding's value is read in the
+        // reference's scope (esm-spec §9.6.4), so they bind nothing here.
         if kinds.has(Binders::BINDINGS)
+            && self.op != crate::operator_refs::APPLY_OP
             && let Some(b) = &self.bindings
         {
             b.keys().for_each(|k| f(k));
@@ -97,7 +101,9 @@ impl ExpressionNode {
         (kinds.has(Binders::RANGES) && self.ranges.is_some())
             || (kinds.has(Binders::OUTPUT_IDX) && self.output_idx.is_some())
             || (kinds.has(Binders::INT_VAR) && self.int_var.is_some())
-            || (kinds.has(Binders::BINDINGS) && self.bindings.is_some())
+            || (kinds.has(Binders::BINDINGS)
+                && self.op != crate::operator_refs::APPLY_OP
+                && self.bindings.is_some())
             || (kinds.has(Binders::INDEX_SUBSCRIPTS)
                 && self.op == "index"
                 && self
