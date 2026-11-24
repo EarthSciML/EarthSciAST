@@ -698,3 +698,44 @@ fn scalar_lookup_blocks_match_the_oracle() {
     model["operators"] = library("interp.esm");
     oracle_ab(document("scalar_lookup_blocks", json!({}), model));
 }
+
+/// A reference inside a rank-0 reduction at a recurrence cell, which is
+/// lowered one contraction tuple at a time with the tuple bound as
+/// constants: each binding that reads the bound index is passed its value at
+/// that term, and the calls agree with the oracle bit for bit.
+#[test]
+fn a_call_inside_an_unrolled_contraction_matches_the_oracle() {
+    let term = apply(
+        "scaled",
+        json!({"x": ix("u", vec![json!("j")]), "w": op("+", vec![json!("j"), json!(0.5)])}),
+    );
+    let inner = json!({"op": "faq", "args": [], "output_idx": [], "reduce": "+",
+                       "ranges": {"j": [1, 3]}, "expr": term});
+    let s = json!({"op": "faq", "args": [], "output_idx": ["k"], "ranges": {"k": {"from": "steps"}},
+        "expr": op("ifelse", vec![
+            op("<=", vec![json!("k"), json!(1)]),
+            ix("u", vec![json!(1)]),
+            op("+", vec![
+                op("*", vec![json!(0.3), ix("s", vec![op("-", vec![json!("k"), json!(1)])])]),
+                inner])])});
+    let steps = json!({"k": [1, 5]});
+    let model = json!({
+        "variables": {
+            "u": {"type": "unknown", "shape": ["steps"], "default": 0.0},
+            "s": {"type": "unknown", "shape": ["steps"]}
+        },
+        "operators": {"scaled": {"params": ["x", "w"],
+            "body": op("+", vec![op("*", vec![json!("x"), json!("w")]), json!(0.125)])}},
+        "equations": [
+            {"lhs": "s", "rhs": s},
+            {"lhs": d_lhs("u", &["k"], steps.clone()),
+             "rhs": faq(&["k"], steps, op("-", vec![ix("s", vec![json!("k")]), ix("u", vec![json!("k")])]))}
+        ]
+    });
+    let (prog, _) = oracle_ab(document(
+        "unrolled_call",
+        json!({"steps": {"kind": "interval", "size": 5}}),
+        model,
+    ));
+    assert!(count_where(&prog, |x| matches!(x, Instr::Call { .. })) > 0);
+}

@@ -47,9 +47,10 @@ pub(in crate::simulate_array::tape) struct TupleFrame {
     id: u32,
     /// Output index names, then contracted names.
     names: Vec<String>,
-    /// The column of each name, until it is first read (then its values live
-    /// in the `ConstArray` that `slots` names).
-    cols: Vec<Vec<f64>>,
+    /// The column of each name, shared with the `ConstArray` that `slots`
+    /// names once it is first read (and with a called function's own list,
+    /// [`TapeBuilder::open_tuple_frame`]).
+    cols: Vec<Arc<Vec<f64>>>,
     slots: Vec<Option<SlotId>>,
     len: usize,
     /// For a nested reduction's list: the enclosing list's id and how many
@@ -435,7 +436,7 @@ impl TapeBuilder<'_> {
         self.rule.tuple_frames.push(TupleFrame {
             id,
             names,
-            cols: list.cols,
+            cols: list.cols.into_iter().map(Arc::new).collect(),
             slots: vec![None; idx_names.len() + contract_names.len()],
             len: m,
             parent: self.next_tuple_parent.take(),
@@ -711,7 +712,7 @@ impl TapeBuilder<'_> {
             let frame = &self.rule.tuple_frames[fi];
             let vals = match frame.slots[ci] {
                 Some(slot) => self.known_values(slot),
-                None => Some(Arc::new(frame.cols[ci].clone())),
+                None => Some(Arc::clone(&frame.cols[ci])),
             };
             match vals.filter(|v| v.len() == m) {
                 Some(v) => outer_vals.push(v),
@@ -1515,6 +1516,44 @@ impl TapeBuilder<'_> {
         Ok(gates)
     }
 
+    /// The values of loop symbol `name` in the open tuple frame `id`, shared
+    /// with the frame, and the list's length. `None` when `name` is not one
+    /// of the frame's symbols.
+    pub(super) fn tuple_column_values(
+        &self,
+        id: u32,
+        name: &str,
+    ) -> Option<(Arc<Vec<f64>>, usize)> {
+        let frame = self.rule.tuple_frames.iter().rev().find(|f| f.id == id)?;
+        let ci = frame.names.iter().position(|n| n == name)?;
+        Some((Arc::clone(&frame.cols[ci]), frame.len))
+    }
+
+    /// Open a tuple frame of its own over `len` tuples whose loop symbols are
+    /// `names` with the columns `cols`: a called function's copy of the
+    /// columns its caller's list binds ([`super::calls`]). Its id, the
+    /// [`LBox::tuple`] of the box to lower over.
+    pub(super) fn open_tuple_frame(
+        &mut self,
+        names: Vec<String>,
+        cols: Vec<Arc<Vec<f64>>>,
+        len: usize,
+    ) -> u32 {
+        let id = self.next_tuple;
+        self.next_tuple += 1;
+        let n = names.len();
+        self.rule.tuple_frames.push(TupleFrame {
+            id,
+            names,
+            cols,
+            slots: vec![None; n],
+            len,
+            parent: None,
+            hoisted: FxHashMap::default(),
+        });
+        id
+    }
+
     /// The column slot of loop symbol `name` in tuple frame `id`, created on
     /// first read. `None` when `name` is not one of the frame's symbols.
     pub(super) fn tuple_column(&mut self, id: u32, name: &str) -> LResult<Option<LV>> {
@@ -1531,13 +1570,13 @@ impl TapeBuilder<'_> {
         if let Some(s) = self.rule.tuple_frames[fi].slots[ci] {
             return Ok(Some(LV::Arr(s)));
         }
-        let frame = &mut self.rule.tuple_frames[fi];
+        let frame = &self.rule.tuple_frames[fi];
         let len = frame.len;
-        let values = std::mem::take(&mut frame.cols[ci]);
+        let values = Arc::clone(&frame.cols[ci]);
         // Every later read shares this slot, so it is defined unconditionally:
         // a first read inside a conditional branch still places the column
         // ahead of the branch, not in it.
-        let out = self.emit_const_data(&[len], &[1], Arc::new(values), true)?;
+        let out = self.emit_const_data(&[len], &[1], values, true)?;
         self.rule.tuple_frames[fi].slots[ci] = Some(out);
         Ok(Some(LV::Arr(out)))
     }
@@ -1553,6 +1592,18 @@ impl TapeBuilder<'_> {
         e: &Expr,
         bx: &LBox,
     ) -> LResult<Option<Arc<Vec<f64>>>> {
+        self.known_over_list(e, bx, false)
+    }
+
+    /// [`Self::tuple_known_values`]; `in_body` while folding an operator
+    /// body ([`Self::call_known_values`]), where a leaf is only a literal or
+    /// a column of the list and nothing is lowered.
+    pub(super) fn known_over_list(
+        &mut self,
+        e: &Expr,
+        bx: &LBox,
+        in_body: bool,
+    ) -> LResult<Option<Arc<Vec<f64>>>> {
         let m = bx.shape[0];
         if let Expr::Operator(n) = e
             && matches!(n.op.as_str(), "+" | "-" | "*" | "/")
@@ -1561,7 +1612,7 @@ impl TapeBuilder<'_> {
         {
             let mut parts = Vec::with_capacity(n.args.len());
             for a in &n.args {
-                match self.tuple_known_values(a, bx)? {
+                match self.known_over_list(a, bx, in_body)? {
                     Some(v) => parts.push(v),
                     None => return Ok(None),
                 }
@@ -1592,7 +1643,7 @@ impl TapeBuilder<'_> {
             if (cmp && n.args.len() == 2) || (n.op == "ifelse" && n.args.len() == 3) {
                 let mut parts = Vec::with_capacity(n.args.len());
                 for a in &n.args {
-                    match self.tuple_known_values(a, bx)? {
+                    match self.known_over_list(a, bx, in_body)? {
                         Some(v) => parts.push(v),
                         None => return Ok(None),
                     }
@@ -1617,6 +1668,28 @@ impl TapeBuilder<'_> {
                 };
                 return Ok(Some(Arc::new(out)));
             }
+        }
+        // An operator reference: its body's values at the bindings, folded
+        // here as the positions it yields (a wrapped vertex slot
+        // `geo_next(v, n)`). Nothing of the body is lowered.
+        if let Expr::Operator(n) = e
+            && n.op == crate::operator_refs::APPLY_OP
+        {
+            return self.call_known_values(n, bx);
+        }
+        if in_body {
+            return Ok(match e {
+                Expr::Number(x) => Some(Arc::new(vec![*x; m])),
+                Expr::Integer(x) => Some(Arc::new(vec![*x as f64; m])),
+                Expr::Variable(name) => match bx.cbind(name) {
+                    Some(v) => Some(Arc::new(vec![v as f64; m])),
+                    None => self
+                        .tuple_column_values(bx.tuple, name)
+                        .map(|(vals, _)| vals)
+                        .filter(|v| v.len() == m),
+                },
+                _ => None,
+            });
         }
         Ok(match self.lower_expr(e, bx)? {
             LV::Lit(x) => Some(Arc::new(vec![x; m])),

@@ -26,7 +26,21 @@
 //!   global domain exactly as the caller's are (the halo walk in
 //!   `range/walk.rs` reads through the call and restricts the body the
 //!   reference names to the call's box);
-//! * a scalar value is a scalar argument: a parameter of the function.
+//! * a scalar value is a scalar argument: a parameter of the function;
+//! * a contraction index an unrolled contraction binds to its value at this
+//!   term is that literal.
+//!
+//! Inside a tuple list (a join-gated or ragged contraction, `tuples`) the
+//! call's box is the list, whose loop symbols are columns of build-time data
+//! rather than axes. A binding that reads one is compiled into the instance
+//! as a binding that reads an axis is, and the function is lowered over a
+//! list of its own, one tuple per tuple of the caller's, holding the columns
+//! the instance reads (the same payloads, so the instance is keyed by them).
+//! Every other name is one value for every tuple and is passed as above. A
+//! reference read as a subscript there must give build-time positions, as
+//! any subscript in a list does: its body is folded at its bindings into the
+//! gather table's positions ([`TapeBuilder::call_known_values`]), and nothing
+//! of the body is emitted into the caller.
 //!
 //! The lowering of the body is the lowering the expansion got, with each
 //! parameter resolving to what it stands for, so the function computes the
@@ -88,6 +102,11 @@ struct FuncKey {
     syms: Vec<String>,
     lo: DimI,
     shape: DimU,
+    /// For a call inside a tuple list (its box is the list, [`LBox::tuple`]):
+    /// the loop symbols of the list the instance reads, each with the
+    /// identity of its column (held in [`FuncTable::known_vals`]), by name.
+    /// The function is lowered over a list of its own with these columns.
+    tuple: Option<Vec<(String, usize)>>,
 }
 
 /// What a finished function returns, in the caller's terms.
@@ -286,12 +305,35 @@ impl<'m> TapeBuilder<'m> {
         let inst = ops
             .instance_of_node(node)
             .map_err(|e| Bail::new(e.to_string()))?;
-        if bx.tuple != 0 || !bx.cnames.is_empty() {
-            bail_tape!(
-                "operator reference `{name}`: a call inside an unrolled contraction or a tuple \
-                 list is not compiled yet"
-            );
-        }
+        // A loop symbol of the tuple list the call is inside: a column of
+        // build-time data over the list.
+        let is_col =
+            |b: &Self, n: &str| bx.tuple != 0 && b.tuple_column_values(bx.tuple, n).is_some();
+        // The box a value of the caller is lowered over to be passed: the
+        // call's own, except inside a tuple list, where a name that is not a
+        // column is one value for every tuple (an array is passed whole),
+        // as `resolve_var` reads it there. A contraction index bound to its
+        // value at this term reads as that value in either.
+        let arg_box = LBox {
+            syms: if bx.tuple != 0 { &empty_syms } else { bx.syms },
+            lo: if bx.tuple != 0 {
+                DimI::new()
+            } else {
+                bx.lo.clone()
+            },
+            shape: if bx.tuple != 0 {
+                DimU::new()
+            } else {
+                bx.shape.clone()
+            },
+            cnames: bx.cnames,
+            cvals: bx.cvals.clone(),
+            tuple: 0,
+            visit: SmallVec::new(),
+        };
+        let abx = if bx.tuple != 0 { &arg_box } else { bx };
+        // The columns of the list the instance reads.
+        let mut cols_read: Vec<String> = Vec::new();
         let Some(r) = crate::operator_refs::reference_node(node) else {
             bail_tape!("operator reference without a name");
         };
@@ -360,9 +402,9 @@ impl<'m> TapeBuilder<'m> {
             // The names the binding reads free: a loop symbol a node of the
             // binding binds is its own.
             let reads = crate::binders::free_names(b, crate::binders::Binders::SCOPE);
-            // A tuple list's symbols are columns of the list, not axes: a
-            // binding that reads one is an array argument over the list.
-            let reads_box = bx.tuple == 0 && reads.iter().any(|n| bx.syms.contains(n));
+            // A column of a tuple list is a loop symbol of the call's box as
+            // an axis is.
+            let reads_box = reads.iter().any(|n| bx.syms.contains(n) || is_col(self, n));
             // A constant array is build-time data the lowering reads by its
             // name (its values, its boundary policy): a binding that reads
             // one is compiled into the instance under that name.
@@ -378,9 +420,16 @@ impl<'m> TapeBuilder<'m> {
                 // reads is an argument of its own, named by position, so two
                 // sites that read different arrays the same way share one
                 // function.
+                // A column it reads is the function's column of that name.
+                cols_read.extend(
+                    reads
+                        .iter()
+                        .filter(|n| !binders.contains(*n) && is_col(self, n))
+                        .cloned(),
+                );
                 let mut caller_names: Vec<&String> = reads
                     .iter()
-                    .filter(|n| !binders.contains(*n) && (bx.tuple != 0 || !bx.syms.contains(n)))
+                    .filter(|n| !binders.contains(*n) && !bx.syms.contains(n) && !is_col(self, n))
                     .collect();
                 caller_names.sort();
                 let mut rename: FxHashMap<String, String> = FxHashMap::default();
@@ -405,7 +454,7 @@ impl<'m> TapeBuilder<'m> {
                     let lv = if wholesale {
                         self.lower_wholesale(&v)?
                     } else {
-                        self.lower_expr(&v, bx)?
+                        self.lower_expr(&v, abx)?
                     };
                     cadence = cadence.max(self.lv_cadence(&lv));
                     let kind =
@@ -436,7 +485,7 @@ impl<'m> TapeBuilder<'m> {
             let lv = if wholesale {
                 self.lower_wholesale(b)
             } else {
-                self.lower_expr(b, bx)
+                self.lower_expr(b, abx)
             }
             .map_err(|e| {
                 Bail::new(format!(
@@ -486,6 +535,10 @@ impl<'m> TapeBuilder<'m> {
                 }
             }
             for n in free {
+                if is_col(self, &n) {
+                    cols_read.push(n);
+                    continue;
+                }
                 if let Some(kind) = self.known_name_arg(&n) {
                     params.push((n, kind));
                     continue;
@@ -494,7 +547,7 @@ impl<'m> TapeBuilder<'m> {
                 let lv = if wholesale {
                     self.lower_wholesale(&v)?
                 } else {
-                    self.lower_expr(&v, bx)?
+                    self.lower_expr(&v, abx)?
                 };
                 cadence = cadence.max(self.lv_cadence(&lv));
                 let kind = self.arg_kind(lv, &mut arrays, &mut scalars, &mut arr_lvs, &mut sc_lvs);
@@ -507,6 +560,22 @@ impl<'m> TapeBuilder<'m> {
                 params.push((n, kind));
             }
         }
+        let tuple = (bx.tuple != 0).then(|| {
+            cols_read.sort();
+            cols_read.dedup();
+            let mut t = self.funcs.borrow_mut();
+            cols_read
+                .iter()
+                .map(|n| {
+                    let (vals, _) = self
+                        .tuple_column_values(bx.tuple, n)
+                        .expect("a column of the open list");
+                    let id = Arc::as_ptr(&vals) as usize;
+                    t.known_vals.insert(id, vals);
+                    (n.clone(), id)
+                })
+                .collect()
+        });
         let key = FuncKey {
             instance: Arc::as_ptr(&inst) as usize,
             wholesale,
@@ -514,6 +583,7 @@ impl<'m> TapeBuilder<'m> {
             syms: bx.syms.to_vec(),
             lo: bx.lo.clone(),
             shape: bx.shape.clone(),
+            tuple,
         };
         let funcs = Rc::clone(&self.funcs);
         let known = funcs.borrow().by_key.get(&key).cloned();
@@ -574,6 +644,39 @@ impl<'m> TapeBuilder<'m> {
         } else {
             LV::Arr(out)
         })
+    }
+
+    /// The build-time values over the tuple list `bx` of the reference
+    /// `node` read as a subscript ([`Self::tuple_known_values`]): its
+    /// instance body at its bindings, folded with the kernels the list's
+    /// positions are folded with. The positions are build-time data the
+    /// gather table holds, so nothing of the body is lowered into the caller;
+    /// `None` when the body is not build-time data over the list.
+    pub(super) fn call_known_values(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+    ) -> LResult<Option<Arc<Vec<f64>>>> {
+        let Some(ops) = self.ops else {
+            return Ok(None);
+        };
+        let Ok(inst) = ops.instance_of_node(node) else {
+            return Ok(None);
+        };
+        let Some(r) = crate::operator_refs::reference_node(node) else {
+            return Ok(None);
+        };
+        let mut fixed: FxHashMap<String, Expr> = FxHashMap::default();
+        for p in &inst.definition.params {
+            if inst.instance_params.iter().any(|ip| ip == p) {
+                continue;
+            }
+            if let Some(b) = r.binding(p) {
+                fixed.insert(p.clone(), b.clone());
+            }
+        }
+        let body = specialize(&inst.body, &fixed);
+        self.known_over_list(&body, bx, true)
     }
 
     /// A caller name whose value the build knows (a constant observed it can
@@ -837,7 +940,20 @@ impl<'m> TapeBuilder<'m> {
         let lv = if key.wholesale {
             f.lower_wholesale_rule(|f| f.lower_wholesale(&body))?
         } else {
-            let fbox = LBox::new(&key.syms, bx.lo.clone(), bx.shape.clone());
+            let mut fbox = LBox::new(&key.syms, bx.lo.clone(), bx.shape.clone());
+            if let Some(cols) = &key.tuple {
+                // Inside a tuple list: a list of the function's own with the
+                // columns of the caller's that the instance reads, one tuple
+                // per tuple of the caller's.
+                let len = bx.shape[0];
+                let (names, vals): (Vec<String>, Vec<Arc<Vec<f64>>>) = {
+                    let t = self.funcs.borrow();
+                    cols.iter()
+                        .map(|(n, id)| (n.clone(), Arc::clone(&t.known_vals[id])))
+                        .unzip()
+                };
+                fbox.tuple = f.open_tuple_frame(names, vals, len);
+            }
             f.push_scope();
             let lv = f.lower_expr(&body, &fbox);
             f.pop_scope();
