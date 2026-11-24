@@ -1730,9 +1730,10 @@ keep their global 1-based values.
   cells[:, l]]` bitwise, whatever the other lanes' times, and with every
   `ts[l]` equal to `t` the call equals the one-time call. Every observed that
   depends on `t` (or on the state) is computed per lane; a pre-gathered read
-  never involves `t`. Rust evaluates a batch at mixed times in one pass; Julia
-  evaluates lanes of equal time together, its 0-d observeds being one value per
-  call.
+  never involves `t`. Both bindings evaluate a batch at mixed times in one pass:
+  the program reads `t` from a lane buffer of times, and a 0-d observed that
+  depends on `t` is one value per lane (Julia: an array observed over the
+  written states' shape in the lane build).
 - **Capacity.** Julia loops over lanes with a run-time count, so one build
   serves every `L` (`L = size(cells, 2)`). Rust slot boxes are static, so a lane
   program is built per capacity (re-lowering only, no document rebuild) and `L`

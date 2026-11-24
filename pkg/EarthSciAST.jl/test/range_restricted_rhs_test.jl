@@ -1081,8 +1081,10 @@ end
     end
 end
 
-# U19: lanes each at their own time. Every lane equals the one-time call at
-# its own time, bit for bit, whatever the other lanes' times.
+# U19: lanes each at their own time. Every lane equals the one-time call and
+# the whole-domain program at its own time, bit for bit, whatever the other
+# lanes' times: `t` read directly, through a 0-d observed, a 0-d observed of an
+# observed and an array observed, all in one call.
 @testset "lanes at their own times" begin
     ix(v, i) = Dict("op" => "index", "args" => Any[v, i])
     doc = Dict(
@@ -1097,10 +1099,21 @@ end
                         "type" => "parameter", "units" => "1", "shape" => ["x"],
                         "default" => [0.5, 1.5, 2.5, 3.5, 4.5]
                     ),
-                    "k" => Dict("type" => "unknown", "units" => "1")
+                    "k" => Dict("type" => "unknown", "units" => "1"),
+                    "k0" => Dict("type" => "unknown", "units" => "1"),
+                    "a" => Dict("type" => "unknown", "units" => "1", "shape" => ["x"])
                 ),
                 "equations" => Any[
-                    Dict("lhs" => "k", "rhs" => Dict("op" => "+", "args" => Any[1.0, Dict("op" => "sin", "args" => Any["t"])])),
+                    Dict("lhs" => "k0", "rhs" => Dict("op" => "+", "args" => Any[1.0, Dict("op" => "sin", "args" => Any["t"])])),
+                    Dict("lhs" => "k", "rhs" => Dict("op" => "*", "args" => Any[0.5, "k0"])),
+                    # An array observed of `t` and of a 0-d observed of `t`.
+                    Dict(
+                        "lhs" => "a", "rhs" => Dict(
+                            "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                            "ranges" => Dict("i" => Dict("from" => "x")),
+                            "expr" => Dict("op" => "+", "args" => Any[Dict("op" => "*", "args" => Any[ix("c", "i"), "t"]), "k0"])
+                        )
+                    ),
                     Dict(
                         "lhs" => Dict(
                             "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
@@ -1113,7 +1126,7 @@ end
                             "expr" => Dict(
                                 "op" => "+", "args" => Any[
                                     Dict("op" => "*", "args" => Any[-1.0, "k", ix("u", "i")]),
-                                    Dict("op" => "*", "args" => Any[ix("c", "i"), "t"]),
+                                    ix("a", "i"),
                                 ]
                             )
                         )
@@ -1139,6 +1152,16 @@ end
         one = fill(NaN, LL.n_u * L)
         rhs!(one, lp, ws, u, Float64[], prob.p, ts[l], fs, cells, 3)
         @test reinterpret(UInt64, du[l]) == reinterpret(UInt64, one[l])
+    end
+    # The whole-domain program at each lane's own time: one pass over a batch
+    # at mixed times (0-d observeds of `t` are computed per lane).
+    prog = rhs_program(prob)
+    uw = [1.0, 2.1, 0.7, 1.3, 0.9]    # cells 4, 1, 3 hold u[4], u[1], u[3]
+    uw[4], uw[1], uw[3] = u[1], u[2], u[3]
+    for l in 1:3
+        dw = fill(NaN, 5)
+        rhs!(dw, prog, rhs_workspace(prog), uw, Float64[], prob.p, ts[l], default_forcing_set(prog))
+        @test reinterpret(UInt64, du[l]) == reinterpret(UInt64, dw[cells[1, l]])
     end
     # Equal times: the one-time call.
     du2 = fill(NaN, LL.n_u * L)
