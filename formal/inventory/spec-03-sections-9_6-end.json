@@ -1140,6 +1140,51 @@
       "note": "A variable's element_type governs the precision of every operation over it, not only the rounding where its data enters."
     },
     {
+      "id": "spec.11.3.2.report-integrator-precision",
+      "section": "11.3.2",
+      "quote": "binding MUST report the precisions it uses for state, time, norms and linear algebra in solution metadata.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "The time integrator reports the arithmetic used for state, time, norms and linear algebra."
+    },
+    {
+      "id": "spec.11.3.2.store-declared-state-precision",
+      "section": "11.3.2",
+      "quote": "Each accepted state value MUST be stored at the variable's precision.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "Each accepted state value is representable at the declared element type and stored there across steps."
+    },
+    {
+      "id": "spec.11.3.2.round-stage-and-newton-inputs",
+      "section": "11.3.2",
+      "quote": "Stage values and Newton iterates MUST be rounded by the time the model reads them.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "The integrator may use wider intermediate arithmetic before values enter the model."
+    },
+    {
+      "id": "spec.11.3.2.float32-relative-tolerance-floor",
+      "section": "11.3.2",
+      "quote": "A relative tolerance below 2⁻²² for a Float32 state MUST be refused with",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "The integration refusal reports the tolerance and the source chosen by the resolution chain."
+    },
+    {
+      "id": "spec.11.3.2.refuse-unsupported-integration",
+      "section": "11.3.2",
+      "quote": "A binding unable to meet these requirements MUST refuse the integration with `float32_unsupported`, naming the unsupported construct.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "A solver must honour the state precision contract or identify what it cannot integrate."
+    },
+    {
       "id": "spec.11.4.ic-coordinate-symbols-declared",
       "section": "11.4",
       "quote": "Those symbols are implicitly declared and MUST NOT be reported as `undefined_variable` (§4.9.1).",

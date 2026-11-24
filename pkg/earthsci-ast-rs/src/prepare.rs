@@ -757,8 +757,7 @@ fn eval_observed(
     // exact key still rounds its accumulator, which is enough to turn
     // `2260007005` back into `2260006912`. A no-op swap for every document
     // that declares no per-variable element type.
-    let _rule_precision = crate::precision::has_variable_overrides()
-        .then(|| crate::precision::enter(crate::precision::of_variable(name)));
+    let _rule_precision = crate::precision::enter_variable(name);
     // A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) cannot be evaluated
     // wholesale: its cells are not independent, and the self-read would
     // resolve against a map that does not yet hold the array being built.

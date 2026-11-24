@@ -1057,6 +1057,8 @@ pub(crate) enum UnCode {
     Acosh,
     Atanh,
     Not,
+    /// Narrow a context-adopting value at a binary32 read in the tape.
+    RoundF32,
     Unknown,
 }
 

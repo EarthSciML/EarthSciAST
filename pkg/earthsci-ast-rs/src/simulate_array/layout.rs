@@ -178,6 +178,11 @@ fn owner_of(
     (local < var_slot_count(vs)).then_some((name.as_str(), vs, local))
 }
 
+/// The state variable that owns slot `slot`.
+pub(super) fn slot_owner(var_shapes: &IndexMap<String, VarShape>, slot: usize) -> Option<&str> {
+    owner_of(var_shapes, slot).map(|(name, ..)| name)
+}
+
 /// The name of state slot `slot`: `u[2,3]` for a cell of an array state, the
 /// bare variable name for a 0-D one. `None` past the end of the state vector.
 pub(super) fn slot_name(var_shapes: &IndexMap<String, VarShape>, slot: usize) -> Option<String> {

@@ -79,6 +79,7 @@ pub(crate) mod scalar_ops;
 mod session;
 mod shape_table;
 mod solve_rhs;
+pub(crate) use range::derivative_target;
 #[cfg(feature = "solve")]
 pub(crate) use session::{RunSpec, SolveSession};
 pub mod tape;
@@ -374,6 +375,29 @@ enum RhsRule {
         /// false contribute the additive identity 0̄. `None` ⇒ no gating.
         filter: Option<Box<Expr>>,
     },
+}
+
+impl RhsRule {
+    /// The state variable the rule writes the derivative of.
+    fn state<'a>(&'a self, var_shapes: &'a IndexMap<String, VarShape>) -> Option<&'a str> {
+        match self {
+            RhsRule::Scalar { slot, .. } | RhsRule::IndexedScalar { slot, .. } => {
+                slot_owner(var_shapes, *slot)
+            }
+            RhsRule::ArrayLoop { var_name, .. } => Some(var_name),
+        }
+    }
+
+    /// Evaluate at the precision of the state the rule writes until the
+    /// returned guard is dropped (esm-spec §11.3.1), as
+    /// [`crate::precision::enter_variable`].
+    fn enter_precision(
+        &self,
+        var_shapes: &IndexMap<String, VarShape>,
+    ) -> Option<crate::precision::PrecisionGuard> {
+        self.state(var_shapes)
+            .and_then(crate::precision::enter_variable)
+    }
 }
 
 /// Instrumentation for one right-hand-side evaluation: which evaluator ran
