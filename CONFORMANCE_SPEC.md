@@ -3031,12 +3031,9 @@ Three refusals, each naming what it refused:
    `"Float32"` (`float32_unsupported`) naming the construct. No core op is such
    a construct; the standard-library definitions (`lib/*.esm`) are ordinary AST
    and evaluate at the working precision like any other expression.
-3. **Time integration** of a `"Float32"` document is an error naming it. An
-   ODE/DAE solver's step-size control, error norms and Newton solve are binary64
-   in every binding here, so integrating would give a binary64 trajectory around
-   a binary32 right-hand side. Algebraic, observed and relational evaluation —
-   which is what an inline `tests` block and `observed_field` read — is
-   unaffected and runs in binary32.
+3. **Time integration** follows esm-spec §11.3.2. A binding unable to
+   integrate a state at its declared precision MUST refuse with
+   `float32_unsupported`. See §5.18.5.
 
 A binding that cannot honour a clause MUST refuse it. Evaluating part of a
 document in a precision it did not ask for, and saying nothing, is the defect
@@ -3113,7 +3110,8 @@ a document that declares no domain evaluated in binary64, and
 precision crosses a mount") makes the edge write the leaf's declared precision
 onto every variable of the spliced component that declares none, whenever it
 differs from the mounting document's effective precision (its own declaration,
-else inherited from its mounter, else `"Float64"` at a root). A leaf that
+else inherited from its mounter, else determined by the root format version as
+in §5.18.6). A leaf that
 declares no precision adopts its mounter's.
 
 Obligations, per binding:
@@ -3134,11 +3132,9 @@ Obligations, per binding:
    Python do. Mixing a mounted binary32 variable with a
    binary64 one of the mounting document, by an equation or by a coupling, is
    `mixed_element_type` (§5.18.2a).
-4. **Time integration.** A mounted binary32 leaf's states integrate as any
-   per-variable binary32 state does (§5.18.2a): the right-hand side rounds to
-   the declared precision and the solver steps in binary64. Only a document
-   whose `domain.element_type` is `"Float32"` is refused integration (§5.18.2
-   clause 3), and a mount does not change the mounting document's.
+4. **Time integration.** A mounted leaf's binary32 state follows
+   esm-spec §11.3.2. A binary32 state has the same semantics whether its
+   precision comes from the domain, a variable override, or a mount.
 
 Gate: `tests/conformance/mount_element_type/` (README there). `expected.json`
 pins, per fixture, every written field and every load-time refusal (all five
@@ -3186,6 +3182,53 @@ cannot see this class of corruption at all. A key set must be compared exactly.
 `bindings_required` is `["rust"]` today; Julia, Python, Go and TypeScript ignore
 `element_type` and are tracked in `ESM_COMPLIANCE_VALIDATION_MATRIX.md`
 §Precision.
+
+#### 5.18.5 Integration gate
+
+`tests/conformance/precision_integration/vanishing_increment.esm` exercises
+the public integration path. The trajectory of `x` is exactly 1 at every
+accepted step in binary32. In binary64, the increments accumulate to about
+1.000001 at 100 seconds. The Rust integration tests exercise both compiler
+routes, all three solver algorithms, the stepping API, the per-class
+precision metadata, and the tolerance and clock refusals. The public RHS
+test supplies 100000001 as binary64 time and checks that a binary32
+expression reads 100000000, including when called from a fresh thread.
+The Rust test also runs every §5.9 PDE fixture with Float32 state and compares
+its trajectory with the existing binary64 reference.
+
+Rust uses a single scalar type for its built-in integrator. It refuses mixed
+state types and Float32 runs with distinct output, span, or provider-refresh
+times that coincide on its binary32 clock. Julia and Python currently
+refuse builds requiring Float32 dynamics with `float32_unsupported`.
+
+#### 5.18.6 Declared and unspecified precision
+
+The binding's precision-source accessor MUST distinguish omitted precision at
+the root from a declaration, including per-variable overrides written by a
+mount. Omission below esm 2.4.0 remains a binary64 declaration. From 2.4.0
+onward, an omitted root and variable precision stays unspecified without
+changing the built-in binary64 evaluation path. A mounted leaf that declares
+binary64 below an unspecified root MUST retain its declaration through load,
+emit and reload. A reaction-system leaf that declares binary64 below an
+unspecified root is `element_type_uncarried`, and the refusal names the
+unspecified mounting document and the declaration that resolves it; below
+esm 2.4.0 the same mount loads. Fixtures: `root_unspecified.esm`,
+`root_legacy.esm`, `reaction_f64_unspecified.esm` and
+`reaction_f64_legacy.esm` in `tests/conformance/mount_element_type/`, whose
+`expected.json` pins each binding's precision-source accessor
+(`precision_sources`) and the refusal's text (`load_error_contains`).
+
+Any external binary32 build option exercises the same precision inference and
+per-operation rounding as a declared binary32 document. Check the rounding
+witness at zero tolerance. A request introducing a mix or reaching only
+declared variables fails with `precision_choice_conflict`. An unspecified
+variable used as an equality or join key fails with
+`key_precision_unspecified`, and every binding's `validate` reports it as a
+`warnings` entry (never on `unit_warnings`) for any run: the shared fixture is
+`tests/conformance/precision_source/key_comparison.esm`, its expectations in
+`expected.json` beside it. With both keys declared binary64, their exact
+comparison may feed the binary32 group. Consumer-level tolerance, conversions
+and result metadata follow esm-spec §11.3.3 P5–P9.
 
 ### 5.19 Causal Self-Reference (Recurrence) Along One Index Axis (normative)
 
@@ -7494,7 +7537,8 @@ in its last bit.
 
 **Adapters.** Rust — `pkg/earthsci-ast-rs/tests/initial_state_conformance.rs`,
 which also checks each case against a zero-length solve bit for bit, and that a
-static Problem and a Float32 Problem that integrates have no initial state. `bindings_required` is `["rust"]`: Julia
+static Problem has no initial state and that a Float32 Problem returns rounded
+initial values. `bindings_required` is `["rust"]`: Julia
 holds the state in the `prob.u0` field and Python only as `init(prob).u`, and
 neither exports `initial_state` yet (`bindings_pending` in the manifest says so).
 Go and TypeScript do not simulate.

@@ -214,3 +214,101 @@ fn the_written_fields_round_trip() {
         );
     }
 }
+
+/// `precision_sources`: the precision-source accessor (esm-spec §11.3.3) on
+/// the loaded document and on its emit-then-reload, per fixture: `""` is the
+/// document default, `Model.var` a variable.
+#[test]
+fn precision_sources_match_the_version_gate() {
+    use earthsci_ast::{PrecisionSource, load_string, precision_source};
+    let spelled = |s: PrecisionSource| match s {
+        PrecisionSource::Declared(p) => format!("{p:?}"),
+        PrecisionSource::Unspecified => "unspecified".to_string(),
+    };
+    let exp = expected();
+    let dir = common::category_dir("mount_element_type");
+    for (fixture, want) in exp["precision_sources"]
+        .as_object()
+        .expect("precision_sources")
+    {
+        let file = load_path(dir.join(fixture)).unwrap_or_else(|e| panic!("{fixture}: {e}"));
+        let reloaded = load_string(&to_json(&file).unwrap()).unwrap();
+        for doc in [&file, &reloaded] {
+            for (key, want) in want.as_object().unwrap() {
+                let variable = key
+                    .split_once('.')
+                    .map(|(model, var)| &doc.models.as_ref().unwrap()[model].variables[var]);
+                let got = spelled(precision_source(doc, variable).unwrap());
+                assert_eq!(got, want.as_str().unwrap(), "{fixture}: {key:?}");
+            }
+        }
+    }
+}
+
+/// `load_error_contains`: the refusal says what is wrong and how to fix it.
+#[test]
+fn an_uncarried_refusal_names_the_fix() {
+    let exp = expected();
+    let dir = common::category_dir("mount_element_type");
+    for (fixture, wants) in exp["load_error_contains"].as_object().unwrap() {
+        let e = load_path(dir.join(fixture)).expect_err(fixture).to_string();
+        for want in wants.as_array().unwrap() {
+            assert!(
+                e.contains(want.as_str().unwrap()),
+                "{fixture}: {want} not in {e}"
+            );
+        }
+        assert!(!e.contains("evaluates in unspecified"), "{fixture}: {e}");
+    }
+}
+
+/// esm-spec §11.3.3 P8, shared with the other four bindings
+/// (`tests/conformance/precision_source/expected.json`): validation reports an
+/// unspecified key on the non-unit `warnings` list, and a root below the
+/// version gate reports nothing.
+#[test]
+fn an_unspecified_key_warns_on_the_non_unit_channel() {
+    use earthsci_ast::{load_string, validate};
+    let dir = common::category_dir("precision_source");
+    let exp: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("expected.json")).unwrap()).unwrap();
+    for (fixture, want) in exp["warnings"].as_object().unwrap() {
+        let text = std::fs::read_to_string(dir.join(fixture)).unwrap();
+        let result = validate(&load_string(&text).unwrap());
+        assert!(result.is_valid, "{fixture}: {result:?}");
+        let mut got: Vec<(String, String)> = result
+            .warnings
+            .iter()
+            .map(|w| (w.code.clone(), w.path.clone()))
+            .collect();
+        let mut want: Vec<(String, String)> = want
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| {
+                (
+                    w["code"].as_str().unwrap().to_string(),
+                    w["path"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        got.sort();
+        want.sort();
+        assert_eq!(got, want, "{fixture}");
+        assert!(
+            !result
+                .unit_warnings
+                .iter()
+                .any(|w| w.code == "key_precision_unspecified"),
+            "{fixture}"
+        );
+        let mut doc: Value = serde_json::from_str(&text).unwrap();
+        doc["esm"] = exp["legacy_version"].clone();
+        let legacy = validate(&load_string(&doc.to_string()).unwrap());
+        assert!(
+            legacy.warnings.is_empty(),
+            "{fixture}: {:?}",
+            legacy.warnings
+        );
+    }
+}

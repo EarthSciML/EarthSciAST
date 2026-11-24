@@ -79,6 +79,7 @@ pub(crate) mod scalar_ops;
 mod session;
 mod shape_table;
 mod solve_rhs;
+pub(crate) use range::derivative_target;
 #[cfg(feature = "solve")]
 pub(crate) use session::{RunSpec, SolveSession};
 pub mod tape;
@@ -92,6 +93,8 @@ pub use compile::{
 // pipeline: `crate::prepare` runs the same check the compile path runs, so the
 // two routes cannot disagree about which names a document declares.
 pub(crate) use compile::InventedSets;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use compile::build_instances;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
 #[cfg(not(target_arch = "wasm32"))]
@@ -116,7 +119,7 @@ pub(crate) use eval::eval_observed_taped;
 pub(crate) use eval::per_cell_cells;
 pub(crate) use eval::{
     BuildEval, BuildRoute, CellWalks, ONE_CELL_NOTE, Routed, eval_buildtime_field_routed,
-    eval_scalar_expression,
+    eval_scalar_expression_in,
 };
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
@@ -374,6 +377,29 @@ enum RhsRule {
         /// false contribute the additive identity 0̄. `None` ⇒ no gating.
         filter: Option<Box<Expr>>,
     },
+}
+
+impl RhsRule {
+    /// The state variable the rule writes the derivative of.
+    fn state<'a>(&'a self, var_shapes: &'a IndexMap<String, VarShape>) -> Option<&'a str> {
+        match self {
+            RhsRule::Scalar { slot, .. } | RhsRule::IndexedScalar { slot, .. } => {
+                slot_owner(var_shapes, *slot)
+            }
+            RhsRule::ArrayLoop { var_name, .. } => Some(var_name),
+        }
+    }
+
+    /// Evaluate at the precision of the state the rule writes until the
+    /// returned guard is dropped (esm-spec §11.3.1), as
+    /// [`crate::precision::enter_variable`].
+    fn enter_precision(
+        &self,
+        var_shapes: &IndexMap<String, VarShape>,
+    ) -> Option<crate::precision::PrecisionGuard> {
+        self.state(var_shapes)
+            .and_then(crate::precision::enter_variable)
+    }
 }
 
 /// Instrumentation for one right-hand-side evaluation: which evaluator ran
@@ -903,6 +929,10 @@ pub struct ArrayCompiled {
     /// The tape programs this model has built ([`tape::TapeCache`], which says
     /// what a kept program depends on).
     tape_cache: tape::TapeCache,
+    /// The operator instances the rules' references name (esm-spec §9.6.4),
+    /// over the flattened system's registry: the interpreter evaluates a
+    /// reference as a call of one ([`eval::eval_call`]).
+    operators: std::sync::Arc<Instances>,
 }
 
 /// The rule-invariant slice of an evaluation environment: everything an
@@ -929,6 +959,8 @@ struct EvalEnv<'a> {
     const_arrays: &'a ConstArrayScope,
     /// See [`EvalCtx::declared`].
     declared: &'a HashSet<String>,
+    /// See [`EvalCtx::ops`].
+    ops: &'a Instances,
 }
 
 impl<'a> EvalEnv<'a> {
@@ -948,6 +980,8 @@ impl<'a> EvalEnv<'a> {
             recur: None,
             declared: self.declared,
             walks: CellWalks::default(),
+            ops: self.ops,
+            frames: Vec::new(),
         }
     }
 }
@@ -1035,7 +1069,26 @@ struct EvalCtx<'a> {
     /// path but the build-time ones that read it
     /// ([`StandaloneScope::eval_routed`], the build pipeline).
     walks: CellWalks,
+    /// The operator instances the references evaluated here name (esm-spec
+    /// §9.6.4): a reference is evaluated as a call of its instance body
+    /// ([`eval::eval_call`]). [`Instances::empty`] where nothing can hold a
+    /// reference.
+    ops: &'a Instances,
+    /// The calls in progress, innermost last ([`CallFrame`]).
+    frames: Vec<CallFrame>,
 }
+
+/// One call in progress: the reference node and the instance it names. A
+/// parameter the instance body reads is the reference's binding, evaluated in
+/// the caller's frame (call by name) with the loop symbols in scope where it
+/// is read.
+#[derive(Clone)]
+struct CallFrame {
+    node: std::sync::Arc<crate::types::ExpressionNode>,
+    instance: std::sync::Arc<crate::operator_refs::CallInstance>,
+}
+
+use crate::operator_refs::Instances;
 
 /// The shared empty declared-name set (see [`EvalCtx::declared`]).
 ///
@@ -1094,6 +1147,15 @@ impl ConstArrayScope {
         self.names.insert(name.clone());
         self.boundaries.insert(name, dims);
         self
+    }
+
+    /// This scope with `alias` a const array too, with no declared policy (an
+    /// inline `const` literal's): how a called function reads an inline
+    /// constant it is passed by reference (esm-spec §9.6.4 rule 2).
+    pub(crate) fn with_alias(&self, alias: &str) -> ConstArrayScope {
+        let mut out = self.clone();
+        out.names.insert(alias.to_string());
+        out
     }
 
     /// Is this scope empty (nothing is a const array)?

@@ -483,11 +483,22 @@ impl std::ops::Index<&str> for Solution {
     }
 }
 
+/// Arithmetic used by the integrator for each class of quantities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IntegratorPrecision {
+    pub state: crate::precision::Precision,
+    pub time: crate::precision::Precision,
+    pub norms: crate::precision::Precision,
+    pub linear_algebra: crate::precision::Precision,
+}
+
 /// Provenance metadata for a [`Solution`].
 #[derive(Debug, Clone, Default)]
 pub struct SolutionMetadata {
     /// Solver algorithm name (e.g. `"Bdf"`, `"Sdirk"`, `"Erk"`).
     pub alg: String,
+    /// Arithmetic used for integration, if the model has differential equations.
+    pub integrator_precision: Option<IntegratorPrecision>,
     /// Number of RHS function evaluations performed (best-effort, may be
     /// zero in v1 if diffsol does not expose it).
     pub n_rhs_calls: usize,

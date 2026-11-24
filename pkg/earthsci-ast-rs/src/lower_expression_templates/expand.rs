@@ -43,7 +43,7 @@ pub(crate) fn strip_component_template_blocks(value: &mut Value) {
 /// The typed `EsmFile` deliberately never sees an `expression_templates` block
 /// — the build path is Expand-at-build (RFC out-of-line-expression-templates
 /// §7.7) — so this is the only place the per-component registries survive to
-/// reach [`crate::flatten::merged_template_registry`], which needs them to
+/// reach `crate::flatten_refs::prepare`, which needs them to
 /// build the step-4 merged registry. Components whose materialized block is
 /// empty are omitted; returns `None` when none remains, so a document without
 /// templates costs nothing.
@@ -141,18 +141,9 @@ pub(crate) fn template_origins_placed() -> u64 {
     MARKS_PLACED.with(std::cell::Cell::get)
 }
 
-/// The private JSON key on which a load records, beside a
-/// [`TEMPLATE_ORIGIN_KEY`] mark, what the dimensional checker needs from the
-/// definition the expanded reference named
-/// ([`crate::types::ExpressionNode::definition_units`]). Placed only with a
-/// mark, and removed with it.
-pub(crate) const DEFINITION_UNITS_KEY: &str = "__esm_definition_units";
-
 /// `expansion` marked as the root of an expansion of `name`, when marking is
-/// on and it is an object; otherwise unchanged. `units` is the definition's
-/// [`DEFINITION_UNITS_KEY`] record, when it has one
-/// ([`definition_units_mark`]).
-pub(super) fn mark_template_origin(expansion: Sv, name: &str, units: Option<Sv>) -> Sv {
+/// on and it is an object; otherwise unchanged.
+pub(super) fn mark_template_origin(expansion: Sv, name: &str) -> Sv {
     if !MARKING.with(std::cell::Cell::get) {
         return expansion;
     }
@@ -161,57 +152,15 @@ pub(super) fn mark_template_origin(expansion: Sv, name: &str, units: Option<Sv>)
     };
     let mut out: Vec<(String, Sv)> = fields
         .iter()
-        .filter(|(k, _)| k != TEMPLATE_ORIGIN_KEY && (units.is_none() || k != DEFINITION_UNITS_KEY))
+        .filter(|(k, _)| k != TEMPLATE_ORIGIN_KEY)
         .cloned()
         .collect();
     out.push((
         TEMPLATE_ORIGIN_KEY.to_string(),
         Rc::new(SNode::Str(format!("{}{name}", template_origin_nonce()))),
     ));
-    if let Some(units) = units {
-        out.push((DEFINITION_UNITS_KEY.to_string(), units));
-    }
     MARKS_PLACED.with(|c| c.set(c.get() + 1));
     Rc::new(SNode::Obj(out))
-}
-
-/// The [`DEFINITION_UNITS_KEY`] record of a reference to `name` (esm-spec
-/// §9.6.12 "Units"), when marking is on and its definition `decl` carries a
-/// unit expression or is a definition of `partial` / `integral`: the
-/// definition's name and `defines`, what the reference bound to each
-/// parameter (`bindings`, already expanded), its unit expression, and the
-/// fixed unit expression its `match` gives (the operand over, or times, the
-/// axis field). `None` otherwise.
-pub(super) fn definition_units_mark(
-    name: &str,
-    decl: Option<&Sv>,
-    bindings: Option<&Sv>,
-) -> Option<Sv> {
-    if !MARKING.with(std::cell::Cell::get) {
-        return None;
-    }
-    let SNode::Obj(fields) = &**decl? else {
-        return None;
-    };
-    let units = obj_get(fields, "units").cloned();
-    let fixed = kept_fixed_units(fields).or_else(|| match_fixed_units(fields));
-    if units.is_none() && fixed.is_none() {
-        return None;
-    }
-    let mut rec = vec![("name".to_string(), Rc::new(SNode::Str(name.to_string())))];
-    if let Some(d) = obj_get(fields, "defines") {
-        rec.push(("defines".to_string(), d.clone()));
-    }
-    if let Some(b) = bindings {
-        rec.push(("bindings".to_string(), b.clone()));
-    }
-    if let Some(u) = units {
-        rec.push(("units".to_string(), u));
-    }
-    if let Some(f) = fixed {
-        rec.push(("fixed".to_string(), f));
-    }
-    Some(Rc::new(SNode::Obj(rec)))
 }
 
 /// The private JSON key on which a materialized `partial` / `integral` rule
@@ -257,25 +206,24 @@ pub(super) fn fixed_units_field(fixed: Sv) -> (String, Sv) {
     )
 }
 
-/// The fixed unit expression a materialized rule kept ([`FIXED_UNITS_KEY`]).
-fn kept_fixed_units(fields: &[(String, Sv)]) -> Option<Sv> {
-    let SNode::Arr(v) = &**obj_get(fields, FIXED_UNITS_KEY)? else {
-        return None;
-    };
-    match v.as_slice() {
-        [n, fixed] if matches!(&**n, SNode::Str(s) if s == template_origin_nonce()) => {
-            Some(fixed.clone())
-        }
-        _ => None,
-    }
-}
-
 /// Whether `v` is a [`FIXED_UNITS_KEY`] value this process wrote.
 fn is_kept_fixed_units(v: &Value) -> bool {
     v.as_array()
         .and_then(|a| a.first())
         .and_then(Value::as_str)
         .is_some_and(|s| s == template_origin_nonce())
+}
+
+/// The fixed unit expression a materialized rule kept ([`FIXED_UNITS_KEY`]),
+/// read off a registry entry in its wire form: what
+/// [`crate::operator_refs::Definition::fixed_units`] reads for a rule a firing
+/// materialized without its `match`.
+pub(crate) fn kept_fixed_units_json(decl: &Value) -> Option<&Value> {
+    let v = decl.get(FIXED_UNITS_KEY)?;
+    if !is_kept_fixed_units(v) {
+        return None;
+    }
+    v.as_array()?.get(1)
 }
 
 /// `value` with every [`FIXED_UNITS_KEY`] field this process wrote removed:
@@ -305,7 +253,6 @@ pub(crate) fn strip_template_origins(value: &mut Value) {
                 .is_some_and(|s| s.starts_with(template_origin_nonce()))
             {
                 map.remove(TEMPLATE_ORIGIN_KEY);
-                map.remove(DEFINITION_UNITS_KEY);
             }
             if map.get(FIXED_UNITS_KEY).is_some_and(is_kept_fixed_units) {
                 map.shift_remove(FIXED_UNITS_KEY);

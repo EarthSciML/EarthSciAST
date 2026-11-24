@@ -65,8 +65,8 @@ One line of JSON, followed by a newline:
 
 - `equations` holds the flattened equations in order. Each `lhs` and `rhs` is the
   binding's wire serialization of the expression, with every surviving template
-  reference expanded. The Julia binding keeps references through flatten, so its
-  test calls `expand_flattened_refs` first, as the planner does.
+  reference expanded. Both bindings keep references through flatten, so each
+  test expands first, as the planner does.
 - `field_ics` holds the field initial conditions in order, each its target
   state and its right-hand side, serialized the same way.
 - `shapes` maps every state, parameter and observed to its declared `shape`
@@ -89,6 +89,8 @@ refuses `field_ic_application`'s initial condition, whose per-cell `faq` its
 setup overlay does not take, and refuses the read-back system the same way.
 
 The goldens are written by either binding and checked equal to the other's
-bytes. The Rust binding expands every reference at load, so it checks `golden`
-only; the `refs_golden` files are written and checked by the Julia binding. The
-Python, TypeScript and Go bindings do not run these cases yet.
+bytes. Both the Julia and the Rust binding keep references through flatten and
+check `refs_golden` and `golden`; each expands for the `golden` comparison only
+inside its test (Julia with `expand_flattened_refs`, Rust with a test-local
+expansion), never in flatten or the build. The Python, TypeScript and Go
+bindings do not run these cases yet.

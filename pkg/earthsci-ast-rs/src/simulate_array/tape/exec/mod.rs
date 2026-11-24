@@ -283,6 +283,9 @@ pub(super) struct Scratch {
     /// only), sized by the first split so steady calls do not allocate.
     #[cfg(not(target_arch = "wasm32"))]
     asm_parts: Vec<par::AsmPart>,
+    /// This thread's execution context of each function the program calls
+    /// ([`TapeProgram::funcs`]), made by its first call on this thread.
+    pub(super) funcs: Vec<Option<Box<TapeCtx>>>,
 }
 
 impl TapeExec {
@@ -327,6 +330,7 @@ impl TapeExec {
                 fscratch: fused::FusedScratch::for_program(prog),
                 #[cfg(not(target_arch = "wasm32"))]
                 asm_parts: Vec::new(),
+                funcs: Vec::new(),
             },
             idx_tables: fused::index_tables_for(prog),
             lscratch: lanes::LaneScratch::for_program(prog),
@@ -374,7 +378,9 @@ impl StateMirror {
         let mirror: Vec<bool> = prog
             .state_vars
             .iter()
-            .map(|sv| !prog.col_major && !super::layout::order_free(&sv.shape))
+            // A function's state variables are its array arguments, which the
+            // call resolves to the caller's row-major views.
+            .map(|sv| !prog.is_function && !prog.col_major && !super::layout::order_free(&sv.shape))
             .collect();
         let n_state: usize = prog
             .state_vars
@@ -445,6 +451,11 @@ impl TapeCtx {
         self.last_params = None;
         self.exec.primed_param_epoch = 0;
         self.exec.primed_forcing_epoch = 0;
+        self.exec.scratch.funcs.clear();
+        #[cfg(not(target_arch = "wasm32"))]
+        for p in &mut self.exec.peers {
+            p.funcs.clear();
+        }
     }
 
     /// Force `Export` instructions on/off (off by default; a harvesting
@@ -484,6 +495,10 @@ struct Env<'a> {
     /// The model's declared-name set (see `EvalCtx::declared`), for the
     /// forcing load's missing-entry fault.
     declared: &'a HashSet<String>,
+    /// In a function program ([`TapeProgram::is_function`]): where each of
+    /// its state variables (the running call's array arguments) starts.
+    /// Empty otherwise.
+    arrays: &'a [*const f64],
 }
 
 /// [`Instr::LoadForcing`]'s element semantics, shared by the fast and the
@@ -626,6 +641,73 @@ pub(crate) fn section_primes() -> (u64, u64) {
 
 /// Whether `params` is, bit for bit, the slice `last` recorded (so `-0.0`
 /// and `0.0` differ and a NaN equals only the same NaN).
+/// Run function program `ctx.prog` ([`TapeProgram::is_function`]) for one
+/// [`Instr::Call`]: its state variables read `arrays` in place, its
+/// parameters are `scalars`. Returns where its result (its one export)
+/// starts in its slab. The function writes no `dy` and publishes nothing; it
+/// runs on the calling thread.
+pub(super) fn run_function(
+    ctx: &mut TapeCtx,
+    arrays: &[*const f64],
+    scalars: &[f64],
+    t: f64,
+    forcing: ForcingView,
+    declared: &HashSet<String>,
+) -> *const f64 {
+    match &mut ctx.last_params {
+        Some(last) if same_params(last, scalars) => {}
+        slot => {
+            let last = slot.get_or_insert_with(Vec::new);
+            last.clear();
+            last.extend_from_slice(scalars);
+            ctx.param_epoch += 1;
+        }
+    }
+    let param_epoch = ctx.param_epoch;
+    let TapeCtx {
+        prog, exec, mirror, ..
+    } = ctx;
+    let prog = &**prog;
+    let prep = prog.prepared();
+    let env = Env {
+        prog,
+        prep,
+        forcing,
+        state: &[],
+        state_rm: &mirror.state_rm,
+        mirror: &mirror.mirror,
+        params: scalars,
+        t,
+        declared,
+        arrays,
+    };
+    // A function's array work splits across the process-wide pool as the
+    // caller's does: a call runs on the calling thread, between the caller's
+    // own phases.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (ways, threads) = if exec.serial {
+            (1, 1)
+        } else {
+            (par::call_ways(exec.call_work), par::thread_budget())
+        };
+        exec.scratch.fscratch.workers.call_ways = ways;
+        exec.scratch.fscratch.workers.threads = threads;
+    }
+    let prime_end = (prog.n_const + prog.n_segment) as usize;
+    let mut no_dy: [f64; 0] = [];
+    if exec.primed_param_epoch != param_epoch {
+        exec.primed_param_epoch = param_epoch;
+        interp::run_range(&env, 0..prime_end, exec, &mut no_dy);
+        refill_primed(prog, exec);
+    }
+    run_continuous(&env, prime_end..prog.instrs.len(), exec, &mut no_dy);
+    let (_, result) = prog.exports[0];
+    exec.slab
+        .as_ptr()
+        .wrapping_add(exec.slot_off[result as usize])
+}
+
 fn same_params(last: &[f64], params: &[f64]) -> bool {
     last.len() == params.len()
         && last
@@ -796,6 +878,7 @@ pub(in crate::simulate_array) fn run_tape_inputs(
         params,
         t,
         declared,
+        arrays: &[],
     };
 
     // Section invalidation: two integer compares per steady-state call.

@@ -44,8 +44,8 @@
 # node it stands for (or `nothing`).
 const _DE_SUB_LIMIT = 2.0^52
 
-function _de_subrange(nd::_E._Node, cached::F)::Union{Nothing, NTuple{2, Float64}} where {F}
-    r = _de_subrange_raw(nd, cached)
+function _de_subrange(ctx::_DECtx, nd::_E._Node, cached::F)::Union{Nothing, NTuple{2, Float64}} where {F}
+    r = _de_subrange_raw(ctx, nd, cached)
     r === nothing && return nothing
     lo, hi = r
     (isfinite(lo) && isfinite(hi) && -_DE_SUB_LIMIT <= lo <= hi <= _DE_SUB_LIMIT) ||
@@ -53,22 +53,22 @@ function _de_subrange(nd::_E._Node, cached::F)::Union{Nothing, NTuple{2, Float64
     return r
 end
 
-function _de_subrange_raw(nd::_E._Node, cached::F) where {F}
+function _de_subrange_raw(ctx::_DECtx, nd::_E._Node, cached::F) where {F}
     k = nd.kind
     if k === _E._NK_LITERAL
         v = nd.literal
         return isnan(v) ? nothing : (v, v)
     elseif k === _E._NK_LOOPVAR
-        v = Float64((nd.payload::Base.RefValue{Int})[])
+        v = Float64(_de_counter(ctx, nd.payload::Base.RefValue{Int}))
         return (v, v)
     elseif k === _E._NK_CACHED
         c = cached(nd)
-        return c === nothing ? nothing : _de_subrange(c, cached)
+        return c === nothing ? nothing : _de_subrange(ctx, c, cached)
     elseif k === _E._NK_CONTRACTION
         nd.op === :+ || return nothing
         s = (nd.literal, nd.literal)
         for ch in nd.children
-            r = _de_subrange(ch, cached)
+            r = _de_subrange(ctx, ch, cached)
             r === nothing && return nothing
             s = (s[1] + r[1], s[2] + r[2])
         end
@@ -78,8 +78,8 @@ function _de_subrange_raw(nd::_E._Node, cached::F) where {F}
         spec = nd.payload::_E._ContractLoop
         s = (nd.literal, nd.literal)
         for kk in spec.lo:spec.step:spec.hi
-            spec.ref[] = kk
-            r = _de_subrange(nd.children[1], cached)
+            _de_set_counter!(ctx, spec.ref, kk)
+            r = _de_subrange(ctx, nd.children[1], cached)
             r === nothing && return nothing
             s = (s[1] + r[1], s[2] + r[2])
         end
@@ -90,14 +90,14 @@ function _de_subrange_raw(nd::_E._Node, cached::F) where {F}
         if haskey(_DE_COMPARE, op) || op === :not || op === :and || op === :or
             return (0.0, 1.0)
         elseif op === :ifelse && length(c) == 3
-            a = _de_subrange(c[2], cached)
-            b = _de_subrange(c[3], cached)
+            a = _de_subrange(ctx, c[2], cached)
+            b = _de_subrange(ctx, c[3], cached)
             (a === nothing || b === nothing) && return nothing
             return (min(a[1], b[1]), max(a[2], b[2]))
         end
         rs = NTuple{2, Float64}[]
         for ch in c
-            r = _de_subrange(ch, cached)
+            r = _de_subrange(ctx, ch, cached)
             r === nothing && return nothing
             push!(rs, r)
         end
@@ -136,10 +136,11 @@ _de_is_cgather(nd::_E._Node) =
 function _de_cgather(ctx::_DECtx, nd::_E._Node, ev::F, cached::G)::_DEVal where {F, G}
     cg = nd.payload::_E._ConstGatherArray
     nm = isempty(cg.name) ? "a const array" : "the const array `$(cg.name)`"
-    off = nothing
+    subs = _DEVal[]
+    wraps = Symbol[]
     for d in eachindex(nd.children)
         ch = nd.children[d]
-        r = _de_subrange(ch, cached)
+        r = _de_subrange(ctx, ch, cached)
         r === nothing && _de_refuse(
             ctx,
             "a read of $nm at a computed subscript",
@@ -152,48 +153,56 @@ function _de_cgather(ctx::_DECtx, nd::_E._Node, ev::F, cached::G)::_DEVal where 
         # The extremes as the interpreter rounds them (ties to even).
         rlo, rhi = round(r[1]), round(r[2])
         inside = 1 <= rlo && rhi <= n
-        wraps = n >= 1 && (pol === :periodic || pol === :clamp)
-        (inside || wraps) || _de_refuse(
+        wrapping = n >= 1 && (pol === :periodic || pol === :clamp)
+        (inside || wrapping) || _de_refuse(
             ctx,
             "a read of $nm at a computed subscript",
             "the subscript on dimension $d can take values in [$(r[1]), $(r[2])], " *
                 "outside 1..$n, where the `$(pol)` boundary policy raises at run time; " *
                 "a compiled program has no channel to report it."
         )
-        s = _de_un(ctx, _hlo.round_nearest_even, _de_bcast_any(ev(ch)))
-        if !inside && pol === :periodic
-            # mod1(s, n) = rem(s - 1, n) taken non-negative, plus 1: exact on
-            # integer-valued Float64s of this size.
-            one = _de_const(ctx, 1.0); nn = _de_const(ctx, Float64(n))
-            m = _de_bin(ctx, _hlo.remainder, _de_bin(ctx, _hlo.subtract, s, one), nn)
-            pred, L = _de_pred(ctx, "LT", m, _de_const(ctx, 0.0))
-            m = _de_select(ctx, pred, L, _de_bin(ctx, _hlo.add, m, nn), m)
-            s = _de_bin(ctx, _hlo.add, m, one)
-        elseif !inside
-            s = _de_bin(
-                ctx, _hlo.minimum,
-                _de_bin(ctx, _hlo.maximum, s, _de_const(ctx, 1.0)),
-                _de_const(ctx, Float64(n))
-            )
-        end
-        term = _de_bin(
-            ctx, _hlo.multiply,
-            _de_bin(ctx, _hlo.subtract, s, _de_const(ctx, 1.0)),
-            _de_const(ctx, Float64(cg.strides[d]))
-        )
-        off = off === nothing ? term : _de_bin(ctx, _hlo.add, off, term)
+        push!(subs, _de_un(ctx, _hlo.round_nearest_even, _de_bcast_any(ev(ch))))
+        push!(wraps, inside ? :none : pol)
     end
-    off === nothing && return _de_const(ctx, cg.flat[1])
-    lin = _de_bin(ctx, _hlo.add, off, _de_const(ctx, 1.0))
+    isempty(subs) && return _de_const(ctx, cg.flat[1])
+    # The rounded subscripts are integers in the working precision. Everything
+    # after the rounding is index arithmetic, done in Int64: binary32 holds
+    # integers exactly only up to 2^24, so a periodic wrap, a stride multiply
+    # or an offset sum done in it would address the wrong element of a larger
+    # table.
+    L = maximum(s -> s.len, subs)
+    lanes = map(s -> _de_traced(_de_cast(_de_bcast(ctx, s, L), ctx.precision, Float64)), subs)
     _de_tally!(ctx, :const_gather_computed)
-    return _de_untraced(
-        Reactant.call_with_reactant(_de_cg_take, cg.flat, _de_traced(lin))
+    value = _de_untraced(
+        Reactant.call_with_reactant(
+            _de_cg_take, cg.flat, Tuple(cg.dims), Tuple(cg.strides), Tuple(wraps), lanes...
+        )
     )
+    return _de_cast(value, Float64, ctx.precision)
 end
 
+# The 1-based linear index of a computed-subscript const read from its rounded
+# 1-based subscripts `subs`: each wrapped by its axis policy (`:periodic`,
+# `:clamp`, or `:none` for a subscript proven in range), then combined with the
+# array's strides. Integer arithmetic on plain or traced integer vectors.
+function _de_cg_linear(subs, dims, strides, wraps)
+    lin = 1
+    for d in eachindex(subs)
+        s, n = subs[d], dims[d]
+        if wraps[d] === :periodic
+            s = mod.(s .- 1, n) .+ 1
+        elseif wraps[d] === :clamp
+            s = clamp.(s, 1, n)
+        end
+        lin = lin .+ (s .- 1) .* strides[d]
+    end
+    return lin
+end
+
+_de_cg_take(flat::Vector{Float64}, dims, strides, wraps, subs::TracedRArray{Float64, 1}...) =
+    _rx_take(flat, _de_cg_linear(map(_rx_int, subs), dims, strides, wraps))
+
 _de_bcast_any(v::_DEVal) = v
-_de_cg_take(flat::Vector{Float64}, lin::TracedRArray{Float64, 1}) =
-    _rx_take(flat, _rx_int(lin))
 
 # ---- the count ---------------------------------------------------------------
 
@@ -291,7 +300,7 @@ function _de_count_loop(ctx::_DECtx, nd::_E._Node)
     keys = Float64[]
     rel = :none; neg = false; q = nothing
     for kk in rng
-        spec.ref[] = kk
+        _de_set_counter!(ctx, spec.ref, kk)
         m = _de_count_term(body, keyval)
         m === nothing && return nothing
         push!(keys, m[1]); rel = m[2]; neg = m[3]; q = m[4]
@@ -311,10 +320,11 @@ function _de_emit_count(ctx::_DECtx, c::_DECount, qv::_DEVal)::_DEVal
         cmp = (c.rel === :<= || c.rel === :>) ? (<=) : (<)
         k = _de_untraced(
             Reactant.call_with_reactant(
-                _de_knot_count, ks, _de_traced(qv), cmp,
+                _de_knot_count, ks, _de_traced(_de_cast(qv, ctx.precision, Float64)), cmp,
                 ctx.opts.locate, ctx.opts.locate_ladder_max
             )
         )
+        k = _de_cast(k, Float64, ctx.precision)
         if prefix
             k
         else
@@ -360,7 +370,7 @@ end
 
 # A key's host value inside an access kernel: a literal, a frozen lane table holding one value in every lane, or an
 # operator over those.
-function _de_acck_keyval(nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan)
+function _de_acck_keyval(ctx::_DECtx, nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan)
     k = nd.kind
     if k === _E._NK_LITERAL
         return nd.literal
@@ -377,13 +387,13 @@ function _de_acck_keyval(nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan)
             return nothing
         cg = nd.payload::_E._ConstGatherArray
         off = _E._const_gather_offset(
-            cg, length(nd.children), d -> _de_index_int(nd.children[d])
+            cg, length(nd.children), d -> _de_index_int(ctx, nd.children[d])
         )
         return Float64(cg.flat[off])
     elseif k === _E._NK_OP && nd.op !== Symbol("")
         c = Any[]
         for ch in nd.children
-            v = _de_acck_keyval(ch, K, plan)
+            v = _de_acck_keyval(ctx, ch, K, plan)
             v === nothing && return nothing
             push!(c, v)
         end

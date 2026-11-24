@@ -54,7 +54,7 @@ impl<'m> TapeBuilder<'m> {
     /// forcing or the NaN sentinel — the interpreter handles both).
     pub(super) fn resolve_wholesale_var(&mut self, name: &str) -> LResult<LV> {
         if name == "t" {
-            return Ok(LV::Time);
+            return Ok(self.lower_time());
         }
         if let Some(&ix) = self.state_ix.get(name) {
             return Ok(LV::State(tape_index(ix, "state variables")?));
@@ -174,7 +174,8 @@ impl<'m> TapeBuilder<'m> {
             CoreOp::Other(O::Index) => self.lower_wholesale_index(node),
             CoreOp::Other(O::Faq) => self.lower_wholesale_aggregate(node),
             CoreOp::Other(O::Makearray) => self.lower_wholesale_makearray(node),
-            CoreOp::Other(O::Ic | O::Enum | O::ApplyExpressionTemplate | O::Distinct) => {
+            CoreOp::Other(O::ApplyExpressionTemplate) => self.lower_call_wholesale(node),
+            CoreOp::Other(O::Ic | O::Enum | O::Distinct) => {
                 bail_tape!("wholesale: unsupported op `{op}`")
             }
         }
@@ -1025,7 +1026,11 @@ impl<'m> TapeBuilder<'m> {
                 .map(|v| v[start as usize..(start + n) as usize].to_vec()),
             _ => None,
         };
+        // A constant array a called function is passed by reference, known at
+        // the call to be non-decreasing ([`TapeBuilder::sorted_states`]).
+        let known_sorted = matches!(&axis, LV::State(ix) if self.sorted_states.contains(ix));
         let (axis, start, count_n, sorted) = match window {
+            _ if known_sorted => (axis, start, n, true),
             Some(w) if non_decreasing(w.len(), |j| w[j]) => (axis, start, n, true),
             Some(w) => {
                 let mut keys: Vec<f64> = w.into_iter().filter(|v| !v.is_nan()).collect();

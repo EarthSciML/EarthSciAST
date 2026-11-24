@@ -26,6 +26,17 @@ pub enum SimulateError {
         details: String,
     },
 
+    /// A relative tolerance below the supported floor for a Float32 state.
+    #[error(
+        "{code}: {source_name} sets relative tolerance {reltol}, below the Float32 floor {floor}",
+        code = crate::diagnostic::codes::TOLERANCE_BELOW_WORKING_PRECISION
+    )]
+    ToleranceBelowWorkingPrecision {
+        source_name: &'static str,
+        reltol: f64,
+        floor: f64,
+    },
+
     /// The integrator could not satisfy the requested tolerances.
     #[error("Tolerance not met")]
     ToleranceNotMet,
@@ -363,6 +374,9 @@ impl SimulateError {
             }
             SimulateError::DataSourceUnbound { .. } => Some(codes::DATA_SOURCE_UNBOUND),
             SimulateError::IcReadsState { .. } => Some("ic_reads_state"),
+            SimulateError::ToleranceBelowWorkingPrecision { .. } => {
+                Some(codes::TOLERANCE_BELOW_WORKING_PRECISION)
+            }
             _ => None,
         }
     }

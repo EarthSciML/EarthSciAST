@@ -310,6 +310,11 @@ pub(super) fn run_range(
                     pc += *n_true as usize; // skip straight to the false region
                 }
             }
+            Instr::Call { call, out } => {
+                // SAFETY: as for the instruction loop: this thread alone runs
+                // the call now.
+                unsafe { exec_call(env, slab, *call, *out, &mut scratch.funcs) };
+            }
             Instr::Export { slot, export } => {
                 // Step 4 export demotion: no explicit request ⇒ nothing can
                 // read the published array — skip the publish memcpy.
@@ -1192,6 +1197,50 @@ pub(super) struct Cx<'a> {
 /// # Safety
 /// `cx` must describe the current call, and every instruction this one
 /// depends on must have run.
+/// Run [`Instr::Call`] `call` into `out` with this thread's function
+/// contexts `funcs`: resolve the arguments to the caller's views and values,
+/// run the function, and copy its result into `out`.
+///
+/// # Safety
+/// As for [`exec_straight`]: nothing another thread runs meanwhile writes
+/// `out` or the arguments.
+pub(super) unsafe fn exec_call(
+    env: &Env,
+    slab: Slab,
+    call: u32,
+    out: SlotId,
+    funcs: &mut Vec<Option<Box<super::TapeCtx>>>,
+) {
+    let prog = env.prog;
+    let spec = &prog.tables.calls[call as usize];
+    let arrays: SmallVec<[*const f64; 8]> = spec
+        .arrays
+        .iter()
+        .map(|s| src_base(s, env, slab).0)
+        .collect();
+    let scalars: SmallVec<[f64; 8]> = spec
+        .scalars
+        .iter()
+        .map(|o| resolve_scalar(o, env, slab))
+        .collect();
+    let f = spec.func as usize;
+    if funcs.len() <= f {
+        funcs.resize_with(prog.funcs.len().max(f + 1), || None);
+    }
+    let fctx = funcs[f].get_or_insert_with(|| {
+        // A function runs whole on the thread that calls it: independent
+        // calls are what a call plan runs side by side.
+        let mut c = super::TapeCtx::new(std::sync::Arc::clone(&prog.funcs[f]));
+        c.set_serial();
+        Box::new(c)
+    });
+    let res = super::run_function(fctx, &arrays, &scalars, env.t, env.forcing, env.declared);
+    let n = prog.tables.slots[out as usize].elems().max(1);
+    // SAFETY: the result is the function's slot of the same box, in its own
+    // slab; `out` is this program's slot, written by this instruction alone.
+    unsafe { std::ptr::copy_nonoverlapping(res, slab.slot(out), n) };
+}
+
 pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, call_split: usize) {
     // SAFETY (every slab, state and `dy` access below): each pointer comes
     // from the call's slab handle, its state or its `dy` at a slot,
@@ -1746,6 +1795,10 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                 }
             }
         }
+        // SAFETY: the caller's contract.
+        Instr::Call { call, out } => unsafe {
+            exec_call(env, slab, *call, *out, &mut scratch.funcs)
+        },
         _ => unreachable!("not a straight-line instruction: {}", ins.opcode()),
     }
 }

@@ -279,8 +279,112 @@ function validate(file::EsmFile)::ValidationResult
             for e in structural_errors if e.error_type == ERROR_CODES.UNIT_INCONSISTENCY
     ]
     _push_dimensionless_literal_warnings!(unit_warnings, units)
+    # An unspecified variable used directly as an equality or join key
+    # (esm-spec §11.3.3 P8): advisory.
+    warnings = ValidationWarning[
+        ValidationWarning(ERROR_CODES.KEY_PRECISION_UNSPECIFIED, path, message)
+            for (path, message) in _unspecified_keys(file)
+    ]
 
-    return ValidationResult(schema_errors, structural_errors, unit_warnings = unit_warnings)
+    return ValidationResult(
+        schema_errors, structural_errors; unit_warnings = unit_warnings, warnings = warnings
+    )
+end
+
+_pointer_token(name) = replace(String(name), "~" => "~0", "/" => "~1")
+
+"""
+    _unspecified_keys(file::EsmFile) -> Vector{Tuple{String, String}}
+
+`(pointer, message)` for every unspecified variable used directly as an operand
+of `==` / `!=` or as a `join.on` key (esm-spec §11.3.3 P8). Empty unless the
+document's own precision is unspecified. An indexed read is its array; a loop
+or binder symbol is not a variable.
+"""
+function _unspecified_keys(file::EsmFile)
+    sites = Tuple{String, String}[]
+    precision_source(file) == "unspecified" || return sites
+    unspecified = Dict{String, Bool}()
+    exprs = Tuple{String, String, Any}[]
+    function equations!(scope, pointer, block, eqs)
+        for (i, eq) in enumerate(eqs)
+            push!(exprs, (scope, "$(pointer)/$(block)/$(i - 1)/lhs", eq.lhs))
+            push!(exprs, (scope, "$(pointer)/$(block)/$(i - 1)/rhs", eq.rhs))
+        end
+        return nothing
+    end
+    function model!(scope, pointer, m::Model)
+        for (name, var) in m.variables
+            unspecified["$(scope).$(name)"] = var.element_type === nothing
+        end
+        equations!(scope, pointer, "equations", m.equations)
+        equations!(scope, pointer, "initialization_equations", m.initialization_equations)
+        for (key, sub) in m.subsystems
+            sub isa Model && model!("$(scope).$(key)", "$(pointer)/subsystems/$(key)", sub)
+        end
+        return nothing
+    end
+    function reaction_system!(scope, pointer, rs::ReactionSystem)
+        for entry in Iterators.flatten((rs.species, rs.parameters))
+            unspecified["$(scope).$(entry.name)"] = true
+        end
+        for (i, r) in enumerate(rs.reactions)
+            push!(exprs, (scope, "$(pointer)/reactions/$(i - 1)/rate", r.rate))
+        end
+        equations!(scope, pointer, "constraint_equations", rs.constraint_equations)
+        for (key, sub) in rs.subsystems
+            reaction_system!("$(scope).$(key)", "$(pointer)/subsystems/$(key)", sub)
+        end
+        return nothing
+    end
+    for (name, m) in something(file.models, Dict{String, Model}())
+        m isa Model && model!(name, "/models/$(_pointer_token(name))", m)
+    end
+    for (name, rs) in something(file.reaction_systems, Dict{String, ReactionSystem}())
+        rs isa ReactionSystem &&
+            reaction_system!(name, "/reaction_systems/$(_pointer_token(name))", rs)
+    end
+    for (scope, pointer, expr) in exprs
+        _visit_keys(expr, String[]) do key, op
+            for variable in ("$(scope).$(key)", key)
+                haskey(unspecified, variable) || continue
+                unspecified[variable] && push!(
+                    sites,
+                    (pointer, "$(variable) has unspecified precision in $(op) at $(pointer)")
+                )
+                return
+            end
+        end
+    end
+    return sites
+end
+
+_visit_keys(found, ::ASTExpr, ::Vector{String}) = nothing
+function _visit_keys(found, e::OpExpr, bound::Vector{String})
+    outer = length(bound)
+    e.ranges === nothing || append!(bound, keys(e.ranges))
+    for i in something(e.output_idx, Any[])
+        i isa AbstractString && push!(bound, String(i))
+    end
+    e.int_var === nothing || push!(bound, e.int_var)
+    if e.op == "==" || e.op == "!="
+        for arg in e.args
+            while arg isa OpExpr && arg.op == "index" && !isempty(arg.args)
+                arg = arg.args[1]
+            end
+            arg isa VarExpr && !(arg.name in bound) && found(arg.name, e.op)
+        end
+    end
+    for clause in something(e.join, Any[])
+        clause isa _OverlapJoinSpec && continue
+        for (left, right) in clause
+            found(String(left), "join.on")
+            found(String(right), "join.on")
+        end
+    end
+    foreach_child(child -> _visit_keys(found, child, bound), e)
+    resize!(bound, outer)
+    return nothing
 end
 
 # Bare numeric literals read as dimensionless (esm-spec §4.8.6): a WARNING at

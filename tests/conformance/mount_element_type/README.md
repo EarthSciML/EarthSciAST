@@ -10,8 +10,8 @@ document that declares no domain evaluated in binary64, and
 `0.99999994` standalone, with nothing to say so. The mount now writes the leaf's
 declared precision onto every variable of the spliced component that declares
 none, whenever it differs from the mounting document's **effective** precision —
-its own declaration, else the one it inherits from its mounter, else `"Float64"`
-at a root. A leaf that declares no precision adopts its mounter's.
+its own declaration, else the one it inherits from its mounter, else, at a root,
+`"Float64"` below esm 2.4.0 and unspecified from 2.4.0 (esm-spec §11.3.3). A leaf that declares no precision adopts its mounter's.
 
 ## The fixtures
 
@@ -27,6 +27,8 @@ at a root. A leaf that declares no precision adopts its mounter's.
 | `mid_f64.esm`, `chain_f32.esm` | A `"Float32"` root mounting a `"Float64"` assembly that mounts the `"Float32"` leaf: the inner edge writes `"Float32"`, and the outer edge's `"Float64"` lands on nothing, because every variable already declares a precision. |
 | `mixed_coupling.esm` | A binary64 model reads the mounted binary32 quantity through a `variable_map`. Loads everywhere; evaluation is `mixed_element_type`. |
 | `reaction_leaf_f32.esm`, `reaction_mount.esm`, `reaction_toplevel.esm` | A `"Float32"` reaction-system leaf, mounted under a binary64 document at a reaction system's `subsystems.<k>` and at a top-level `reaction_systems.<k>`. Species and reaction parameters have no `element_type`: `element_type_uncarried`. |
+| `root_unspecified.esm`, `root_legacy.esm` | The `"Float64"` leaf and the undeclared leaf under an undeclared root at esm 2.4.0 (unspecified: the `"Float64"` leaf's variables carry `"Float64"`) and at esm 2.3.0 (`"Float64"`: nothing is written). |
+| `reaction_leaf_f64.esm`, `reaction_f64_unspecified.esm`, `reaction_f64_legacy.esm` | A `"Float64"` reaction-system leaf at a top-level `reaction_systems.<k>` under an undeclared esm 2.4.0 root (`element_type_uncarried`, the refusal naming the unspecified mounting document and the fix) and under an undeclared esm 2.3.0 root (loads). |
 | `expected.json` | The contract. |
 
 ## What `expected.json` pins
@@ -42,6 +44,10 @@ at a root. A leaf that declares no precision adopts its mounter's.
   reaction system under a reaction system's `subsystems.<k>`, which Julia refuses
   at parse), so each fixture names who raises which code. A binding listed under
   no code must still refuse the fixture.
+- `load_error_contains` — text every binding's refusal message must contain.
+- `precision_sources` — what each binding's precision-source accessor
+  (esm-spec §11.3.3) returns on the loaded document and on its emit-then-reload:
+  `""` is the document default, `Model.var` a variable.
 - `values`, `build_errors` — asserted by the bindings in `evaluated_by` (those
   that evaluate per-variable precision; today Rust). Values are compared bit for
   bit: `0.9999999403953552` is the binary32 witness, `2265007015` the key that

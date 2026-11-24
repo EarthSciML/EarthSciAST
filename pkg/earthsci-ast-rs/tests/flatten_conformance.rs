@@ -192,7 +192,18 @@ fn kind_str(k: SystemKind) -> &'static str {
 /// as the corpus records them: each expression in canonical JSON
 /// (CONFORMANCE §5.4) and each contribution's origins in serde's untagged `{"component": …}` /
 /// `{"coupling": …}` form, which is the corpus form.
+///
+/// `flatten` keeps operator references; the corpus records the expanded
+/// image, so a system whose registry is not empty is compared after a
+/// test-local expansion (the Julia test's `expand_flattened_refs`).
 fn equations(flat: &FlattenedSystem) -> Vec<Value> {
+    let expanded;
+    let flat = if flat.template_registry.is_empty() {
+        flat
+    } else {
+        expanded = crate::flatten_wire_conformance::expanded(flat);
+        &expanded
+    };
     assert_eq!(
         flat.equation_contributions.len(),
         flat.equations.len(),
@@ -395,8 +406,14 @@ fn diffs(path: &str, got: &Value, want: &Value, out: &mut Vec<String>) {
 /// source rather than left to a diff. The rest of the case is still compared in
 /// full, so a regression anywhere else still fails.
 ///
-/// None is recorded: Rust matches the corpus on every case.
-const FC_DIVERGENCES: &[(&str, &str)] = &[];
+/// * `equations` on `advection_reaction_loaded_ic_bc`: the corpus records the
+///   oracle's EXPANDED equations, where the lifted operator `makearray` carries
+///   the site's loop symbols as its `output_idx`. This binding keeps the
+///   reference (esm-spec §9.6.4 rules 1 and 7), so the lift reads it per cell as
+///   `index(<reference>, i, j)` and the shared definition body carries no
+///   site-specific `output_idx`. Julia keeps the reference too and records the
+///   same case in `_FC_DIVERGENCES`.
+const FC_DIVERGENCES: &[(&str, &str)] = &[("advection_reaction_loaded_ic_bc", "equations")];
 
 /// True when `diff` — a `diffs` line, which always begins `{path}:` — reports a
 /// field this case is recorded as diverging on. Matches the field itself and

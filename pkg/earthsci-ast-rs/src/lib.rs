@@ -111,6 +111,8 @@ mod data_binding;
 pub(crate) mod expression;
 pub mod extension;
 pub(crate) mod flatten;
+pub(crate) mod flatten_refs;
+pub(crate) mod flatten_template_dt;
 pub(crate) mod graph;
 pub(crate) mod inline_test_checks;
 pub mod intern;
@@ -121,13 +123,19 @@ pub(crate) mod lower_expression_templates;
 pub(crate) mod migration;
 pub(crate) mod observed_cone;
 pub(crate) mod op_registry;
+pub mod operator_refs;
 pub(crate) mod parse;
 /// The evaluator's working precision — `domain.element_type` (esm-spec
 /// §11.3). Public because the contract it implements (`"Float32"` means
 /// per-operation binary32 rounding) is observable, and a host embedding the
 /// evaluator needs to be able to name it.
 pub mod precision;
+pub use precision::StateScalar;
 pub mod precision_infer;
+pub use precision::{
+    GroupPrecisionRecord, PrecisionRecord, PrecisionSource, VariablePrecisionRecord,
+    precision_source,
+};
 pub mod provider;
 pub(crate) mod reactions;
 pub(crate) mod ref_loading;
@@ -260,9 +268,9 @@ pub use data_output::{
     derive_output_gridding, derive_output_meta, derive_output_plan, group_gridding_by_grid,
     parse_cell_key, plan_dimension_coordinates,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use expression::evaluate;
 pub use expression::{contains, free_parameters, free_variables, simplify};
+#[cfg(not(target_arch = "wasm32"))]
+pub use expression::{evaluate, evaluate_with_operators};
 pub use flatten::{
     Contribution, DimensionPromotionRecord, FlattenError, FlattenMetadata, FlattenedSystem,
     LoaderField, TermOrigin, capture_coupling_diagnostics, flatten, flatten_model,
@@ -338,8 +346,8 @@ pub use types::{
     Tolerance, UnitConversion, UpdateValue, VariableBound, VariableMapTransform, VariableType,
 };
 pub use validate::{
-    SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,
-    validate_text,
+    SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult,
+    ValidationWarning, validate, validate_text,
 };
 // Deprecated alias of `validate_text`, kept for one minor per API_SPEC.md §10
 // (§8 item 13 named the text convenience `validate_text`).
@@ -388,12 +396,12 @@ pub use compile_error::CompileError;
 #[cfg(feature = "solve")]
 pub use inline_tests::{
     AssertionResult, InlineTestOptions, check_assertion, ephemeral_injected_file,
-    evaluate_cellwise, field_reduce, resolve_tolerance, run_inline_tests, run_inline_tests_paths,
-    run_inline_tests_with_options, state_cells,
+    evaluate_cellwise, evaluate_cellwise_with_operators, field_reduce, resolve_tolerance,
+    run_inline_tests, run_inline_tests_paths, run_inline_tests_with_options, state_cells,
 };
 pub use simulate::{
-    Alg, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, Progress, ProgressFn, ReturnCode, SimulateError,
-    Solution, SolutionMetadata, SolveOptions, compile_array,
+    Alg, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, IntegratorPrecision, Progress, ProgressFn,
+    ReturnCode, SimulateError, Solution, SolutionMetadata, SolveOptions, compile_array,
 };
 
 // The EsmProblem / `solve` surface. `simulate` is deleted in all its forms.
@@ -410,8 +418,9 @@ pub use problem::{
 // Range-restricted and operator-restricted right-hand sides (API_SPEC §5.8).
 pub use simulate_array::range::{
     AxisCut, Decomposition, ForcingSet, ForcingSlot, HaloReport, LaneBlock, LaneInputs, LaneKind,
-    LaneLayout, LaneProgram, ParamSlot, RhsError, RhsProgram, RhsSelection, RhsWorkspace, SlotKind,
-    StateBlock, TileBlock, TileBox, TileLayout, TileProgram, forcing_from_sample, rhs_program,
+    LaneLayout, LaneProgram, ParamSlot, RhsError, RhsOptions, RhsProgram, RhsSelection,
+    RhsWorkspace, SlotKind, StateBlock, TileBlock, TileBox, TileLayout, TileProgram,
+    forcing_from_sample, rhs_program, rhs_program_with_options,
 };
 // Strip and expose (API_SPEC §5.8): stripped constructs and standalone kernels.
 pub use problem::stripped;
@@ -427,7 +436,8 @@ pub use units::{
     UNIT_FINDING_DIMENSIONAL_MISMATCH, UNIT_FINDING_DIMENSIONLESS_LITERAL,
     UNIT_FINDING_UNPARSEABLE, Unit, UnitError, UnitFinding, UnitParseFailure, UnitSeverity,
     build_unit_env, check_dimensional_consistency, check_equation_dimensions,
-    check_expression_dimensions, convert_units, equation_dimension_verdict, model_unit_env,
+    check_equation_dimensions_with_operators, check_expression_dimensions, convert_units,
+    equation_dimension_verdict, equation_dimension_verdict_with_operators, model_unit_env,
     parse_unit, validate_equation_dimensions,
 };
 

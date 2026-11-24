@@ -77,7 +77,17 @@ type ValidationResult struct {
 	SchemaErrors     []SchemaError     `json:"schema_errors"`
 	StructuralErrors []StructuralError `json:"structural_errors"`
 	UnitWarnings     []UnitWarning     `json:"unit_warnings"`
-	IsValid          bool              `json:"is_valid"`
+	// Warnings are non-unit diagnostics that do not invalidate the document.
+	Warnings []ValidationWarning `json:"warnings,omitempty"`
+	IsValid  bool                `json:"is_valid"`
+}
+
+// ValidationWarning is an advisory validation finding that is not about
+// units. It never changes IsValid.
+type ValidationWarning struct {
+	Code    string `json:"code"`    // Stable diagnostic code
+	Path    string `json:"path"`    // RFC 6901 JSON Pointer to the finding
+	Message string `json:"message"` // Human-readable description
 }
 
 // ValidationMessage represents a single validation issue in the legacy
@@ -98,7 +108,7 @@ type DetailedValidationResult struct {
 }
 
 // Validate performs semantic validation of an already-parsed ESM document and
-// returns the four-field ValidationResult of esm-libraries-spec §3.4.
+// returns the ValidationResult of esm-libraries-spec §3.4.
 //
 // Canonical `validate` (API_SPEC.md §8 items 12 and 13): the input is a TYPED
 // DOCUMENT in every binding, and the return is the four-field shape in every
@@ -152,6 +162,13 @@ func Validate(file *ESMFile) *ValidationResult {
 	structural := ValidateStructuralWithCodes(file)
 	result.StructuralErrors = structural.StructuralErrors
 	result.UnitWarnings = structural.UnitWarnings
+	// An unspecified variable used directly as an equality or join key
+	// (esm-spec §11.3.3 P8): advisory.
+	for _, site := range unspecifiedKeys(file) {
+		result.Warnings = append(result.Warnings, ValidationWarning{
+			Code: CodeKeyPrecisionUnspecified, Path: site.Path, Message: site.Message,
+		})
+	}
 	result.IsValid = countStructuralErrorLevel(result.StructuralErrors) == 0
 	return result
 }

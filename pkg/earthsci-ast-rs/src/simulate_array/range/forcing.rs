@@ -2,6 +2,7 @@
 //! sets, the parameter and state layouts, and [`RhsError`].
 
 use super::RhsProgram;
+use crate::precision::Precision;
 use crate::provider::{ProviderError, check_provider_shape};
 use ndarray::ArrayD;
 use std::sync::Arc;
@@ -11,6 +12,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RhsError {
+    /// A binary32 call supplied a binary64 state slot.
+    StatePrecision {
+        variable: String,
+        declared: crate::precision::Precision,
+    },
     /// A fail-closed evaluation fault (CONFORMANCE_SPEC §5.5.5, §5.23): `code`
     /// is its `E_TREEWALK_*` code. `du` is unspecified.
     Fault { code: &'static str, message: String },
@@ -39,6 +45,9 @@ pub enum RhsError {
 impl std::fmt::Display for RhsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            RhsError::StatePrecision { variable, declared } => {
+                write!(f, "state `{variable}` requires {}", declared.element_type())
+            }
             RhsError::Fault { code, message } => write!(f, "{code}: {message}"),
             RhsError::Shape {
                 what,
@@ -157,34 +166,40 @@ pub struct ForcingSet {
     epoch: u64,
     slots: Arc<[ForcingSlot]>,
     bufs: Arc<[Arc<[f64]>]>,
+    precisions: Arc<[Precision]>,
 }
 
 impl ForcingSet {
     /// A set for `prog`'s slots: `bufs[k]` is slot `k`'s buffer.
     pub fn new(prog: &RhsProgram, bufs: Vec<Arc<[f64]>>) -> Result<ForcingSet, RhsError> {
-        ForcingSet::for_slots(prog.slots_arc(), bufs)
+        let defaults = &prog.inner.default_set;
+        ForcingSet::for_slots(defaults.slots_arc(), Arc::clone(&defaults.precisions), bufs)
     }
 
     /// A set over `slots`, its buffers checked against them.
     pub(super) fn for_slots(
         slots: Arc<[ForcingSlot]>,
-        bufs: Vec<Arc<[f64]>>,
+        precisions: Arc<[Precision]>,
+        mut bufs: Vec<Arc<[f64]>>,
     ) -> Result<ForcingSet, RhsError> {
         if bufs.len() != slots.len() {
             return Err(shape("forcing", slots.len(), bufs.len()));
         }
-        for (slot, buf) in slots.iter().zip(&bufs) {
+        for ((slot, buf), precision) in slots.iter().zip(&mut bufs).zip(precisions.iter().copied())
+        {
             check_len(slot, buf)?;
+            round_buffer(buf, precision);
         }
         Ok(ForcingSet {
             epoch: next_epoch(),
             slots,
             bufs: bufs.into(),
+            precisions,
         })
     }
 
     /// A new set, with a new epoch, sharing every buffer but `slot`'s.
-    pub fn replace(&self, slot: usize, buf: Arc<[f64]>) -> Result<ForcingSet, RhsError> {
+    pub fn replace(&self, slot: usize, mut buf: Arc<[f64]>) -> Result<ForcingSet, RhsError> {
         let Some(s) = self.slots.get(slot) else {
             return Err(RhsError::SlotIndex {
                 slot,
@@ -193,10 +208,12 @@ impl ForcingSet {
         };
         check_len(s, &buf)?;
         let mut bufs: Vec<Arc<[f64]>> = self.bufs.to_vec();
+        round_buffer(&mut buf, self.precisions[slot]);
         bufs[slot] = buf;
         Ok(ForcingSet {
             epoch: next_epoch(),
             slots: Arc::clone(&self.slots),
+            precisions: Arc::clone(&self.precisions),
             bufs: bufs.into(),
         })
     }
@@ -225,13 +242,20 @@ impl ForcingSet {
     }
 
     /// Whether this set was made for `slots` (the same list, or an equal one).
-    pub(super) fn fits(&self, slots: &Arc<[ForcingSlot]>) -> bool {
-        Arc::ptr_eq(&self.slots, slots) || *self.slots == **slots
+    pub(super) fn fits(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.slots, &other.slots)
+            || (*self.slots == *other.slots && *self.precisions == *other.precisions)
     }
 
     /// Why this set does not fit `slots`: the first slot the two lists
     /// disagree on, or their lengths.
-    pub(super) fn mismatch(&self, slots: &[ForcingSlot]) -> RhsError {
+    pub(super) fn mismatch(&self, other: &Self) -> RhsError {
+        let slots = other.slots();
+        if self.slots() == slots {
+            return RhsError::ForcingSignature {
+                detail: "the slot element types differ".to_owned(),
+            };
+        }
         let show = |s: &ForcingSlot| format!("`{}` {:?} ({:?})", s.name, s.shape, s.kind);
         let detail = match self.slots.iter().zip(slots).position(|(a, b)| a != b) {
             Some(k) => format!(
@@ -246,6 +270,14 @@ impl ForcingSet {
             ),
         };
         RhsError::ForcingSignature { detail }
+    }
+}
+
+fn round_buffer(buf: &mut Arc<[f64]>, precision: Precision) {
+    if precision.is_f32() {
+        for value in Arc::make_mut(buf) {
+            *value = precision.round(*value);
+        }
     }
 }
 

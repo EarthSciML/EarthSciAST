@@ -126,7 +126,6 @@ fn first_non_emissible_field(n: &ExpressionNode) -> Option<&'static str> {
         bindings: _,
         // Load provenance, never on the wire (Julia lists it ignored too).
         template_origin: _,
-        definition_units: _,
         // NON-EMISSIBLE — no wire slot; a set value fails canonical emission
         // closed. Checked below in struct-declaration order.
         int_var,

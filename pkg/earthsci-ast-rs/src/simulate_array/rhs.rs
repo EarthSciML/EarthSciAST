@@ -473,20 +473,13 @@ pub(super) fn materialize_observeds_pass(
 
 /// Arm the working precision of one algebraic rule for as long as the returned
 /// guard lives (esm-spec §11.3.1).
-///
-/// `None` — no guard at all — unless the document declares a per-variable
-/// `element_type`, so the overwhelmingly common document pays one thread-local
-/// read per rule and changes nothing.
 fn precision_of_rule(rule: &AlgebraicRule) -> Option<crate::precision::PrecisionGuard> {
-    if !crate::precision::has_variable_overrides() {
-        return None;
-    }
     let var = match rule {
         AlgebraicRule::Scalar { var, .. }
         | AlgebraicRule::ArrayLoop { var, .. }
         | AlgebraicRule::Recurrence { var, .. } => var,
     };
-    Some(crate::precision::enter(crate::precision::of_variable(var)))
+    crate::precision::enter_variable(var)
 }
 
 /// Materialize one observed rule into `dst` (see [`materialize_observeds_pass`]).
@@ -623,6 +616,8 @@ pub(super) struct RhsCall<'a> {
     /// See [`EvalCtx::declared`] — the compiled model's declared-name set,
     /// carried so the evaluator's fault arm can name the right defect.
     pub(super) declared: &'a HashSet<String>,
+    /// The operator instances the rules' references name.
+    pub(super) ops: &'a Instances,
 }
 
 impl<'a> RhsCall<'a> {
@@ -640,6 +635,7 @@ impl<'a> RhsCall<'a> {
             forcing: self.forcing,
             const_arrays,
             declared: self.declared,
+            ops: self.ops,
         }
     }
 }
@@ -717,6 +713,8 @@ fn evaluate_rhs_per_cell(
 
     // (c) Evaluate each RHS rule and write into dy.
     for rule in rhs_rules {
+        // The rule's working precision is its state's (esm-spec §11.3.1).
+        let _rule_precision = rule.enter_precision(var_shapes);
         match rule {
             RhsRule::Scalar { slot, body } => {
                 let mut ctx = env.ctx(observed_arrays);

@@ -77,6 +77,7 @@
         "extension",
         "inline_tests_adapter",
         "intern",
+        "operator_refs",
         "precision",
         "precision_infer",
         "provider",
@@ -94,18 +95,18 @@
     }
   },
   "counts": {
-    "symbols": 985,
+    "symbols": 1014,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 358,
-      "typescript": 239,
-      "python": 270,
-      "rust": 394,
-      "go": 457
+      "julia": 373,
+      "typescript": 241,
+      "python": 272,
+      "rust": 408,
+      "go": 462
     },
     "by_tier": {
-      "extension": 676,
-      "stable": 309
+      "extension": 702,
+      "stable": 312
     }
   },
   "planned": [
@@ -905,6 +906,14 @@
       }
     },
     {
+      "name": "check_equation_dimensions_with_operators",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "check_equation_dimensions_with_operators"
+      }
+    },
+    {
       "name": "check_expression_dimensions",
       "kind": "function",
       "tier": "extension",
@@ -1338,6 +1347,14 @@
       }
     },
     {
+      "name": "code_key_precision_unspecified",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeKeyPrecisionUnspecified"
+      }
+    },
+    {
       "name": "code_makearray_region_inverted",
       "kind": "constant",
       "tier": "extension",
@@ -1431,6 +1448,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeParseError"
+      }
+    },
+    {
+      "name": "code_precision_choice_conflict",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodePrecisionChoiceConflict"
       }
     },
     {
@@ -1783,6 +1808,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeTimestampNoCalendarDay"
+      }
+    },
+    {
+      "name": "code_tolerance_below_working_precision",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeToleranceBelowWorkingPrecision"
       }
     },
     {
@@ -3165,6 +3198,14 @@
       }
     },
     {
+      "name": "emit_fragment",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "emit_fragment"
+      }
+    },
+    {
       "name": "emit_reference_preserving",
       "kind": "function",
       "tier": "extension",
@@ -3252,6 +3293,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "EquationDimensionVerdict"
+      }
+    },
+    {
+      "name": "equation_dimension_verdict_with_operators",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "equation_dimension_verdict_with_operators"
       }
     },
     {
@@ -3685,6 +3734,14 @@
       }
     },
     {
+      "name": "evaluate_cellwise_with_operators",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "evaluate_cellwise_with_operators"
+      }
+    },
+    {
       "name": "evaluate_expr",
       "kind": "function",
       "tier": "extension",
@@ -3706,6 +3763,14 @@
       "tier": "extension",
       "bindings": {
         "python": "evaluate_rhs"
+      }
+    },
+    {
+      "name": "evaluate_with_operators",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "evaluate_with_operators"
       }
     },
     {
@@ -4329,6 +4394,14 @@
       }
     },
     {
+      "name": "forcing_reach",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "forcing_reach"
+      }
+    },
+    {
       "name": "forcing_set",
       "kind": "function",
       "tier": "stable",
@@ -4455,6 +4528,14 @@
       }
     },
     {
+      "name": "gather_lanes",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "gather_lanes"
+      }
+    },
+    {
       "name": "generate_factored_variable_names",
       "kind": "function",
       "tier": "extension",
@@ -4533,6 +4614,14 @@
       "bindings": {
         "julia": "group_gridding_by_grid",
         "rust": "group_gridding_by_grid"
+      }
+    },
+    {
+      "name": "group_precision_record",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "GroupPrecisionRecord"
       }
     },
     {
@@ -4684,11 +4773,27 @@
       }
     },
     {
+      "name": "integrator_precision",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "IntegratorPrecision"
+      }
+    },
+    {
       "name": "invalid_derivative_order_error",
       "kind": "error",
       "tier": "extension",
       "bindings": {
         "typescript": "InvalidDerivativeOrderError"
+      }
+    },
+    {
+      "name": "ir_layout",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "ir_layout"
       }
     },
     {
@@ -4822,6 +4927,14 @@
       }
     },
     {
+      "name": "kernel_outputs",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "KernelOutputs"
+      }
+    },
+    {
       "name": "kernel_set",
       "kind": "type",
       "tier": "stable",
@@ -4926,6 +5039,14 @@
       "bindings": {
         "julia": "lanes",
         "python": "lanes"
+      }
+    },
+    {
+      "name": "lanes",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "Lanes"
       }
     },
     {
@@ -5639,6 +5760,23 @@
       }
     },
     {
+      "name": "operator_ir",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "operator_ir"
+      }
+    },
+    {
+      "name": "operator_ir",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "OperatorIR"
+      },
+      "notes": "spelling differs from the §2 rule: julia=OperatorIR (expected OperatorIr)"
+    },
+    {
       "name": "output_error",
       "kind": "error",
       "tier": "stable",
@@ -6037,6 +6175,34 @@
       "tier": "extension",
       "bindings": {
         "rust": "PlotY"
+      }
+    },
+    {
+      "name": "precision_record",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PrecisionRecord"
+      }
+    },
+    {
+      "name": "precision_source",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "PrecisionSource",
+        "julia": "precision_source",
+        "python": "precision_source",
+        "rust": "precision_source",
+        "typescript": "precisionSource"
+      }
+    },
+    {
+      "name": "precision_source",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PrecisionSource"
       }
     },
     {
@@ -6874,6 +7040,14 @@
       }
     },
     {
+      "name": "rhs_options",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "RhsOptions"
+      }
+    },
+    {
       "name": "rhs_program",
       "kind": "function",
       "tier": "stable",
@@ -6892,10 +7066,19 @@
       }
     },
     {
-      "name": "rhs_selection",
-      "kind": "type",
+      "name": "rhs_program_with_options",
+      "kind": "function",
       "tier": "extension",
       "bindings": {
+        "rust": "rhs_program_with_options"
+      }
+    },
+    {
+      "name": "rhs_selection",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "RhsSelection",
         "rust": "RhsSelection"
       }
     },
@@ -7054,6 +7237,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "scatter_grid!"
+      }
+    },
+    {
+      "name": "scatter_lanes",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "scatter_lanes"
       }
     },
     {
@@ -7477,6 +7668,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "state_layout"
+      }
+    },
+    {
+      "name": "state_scalar",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "StateScalar"
       }
     },
     {
@@ -7931,6 +8130,14 @@
       }
     },
     {
+      "name": "tile",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "Tile"
+      }
+    },
+    {
       "name": "tile_block",
       "kind": "type",
       "tier": "extension",
@@ -7944,6 +8151,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "TileBox"
+      }
+    },
+    {
+      "name": "tile_classes",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "tile_classes"
       }
     },
     {
@@ -8640,6 +8855,18 @@
       }
     },
     {
+      "name": "validation_warning",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "ValidationWarning",
+        "julia": "ValidationWarning",
+        "python": "ValidationWarning",
+        "rust": "ValidationWarning",
+        "typescript": "ValidationWarning"
+      }
+    },
+    {
       "name": "value_invention_error",
       "kind": "error",
       "tier": "stable",
@@ -8779,6 +9006,14 @@
       }
     },
     {
+      "name": "variable_precision_record",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "VariablePrecisionRecord"
+      }
+    },
+    {
       "name": "variable_type",
       "kind": "type",
       "tier": "extension",
@@ -8819,6 +9054,14 @@
       "tier": "extension",
       "bindings": {
         "go": "VertexKindNode"
+      }
+    },
+    {
+      "name": "whole",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "Whole"
       }
     },
     {

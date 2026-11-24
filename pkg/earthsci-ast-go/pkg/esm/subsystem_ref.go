@@ -60,7 +60,7 @@ func resolveSubsystemRefsWithMeta(file *ESMFile, basePath string, parentMeta, ap
 	// `parentMeta` narrows to each nested scope.
 	// esm-spec §4.7 "Working precision crosses a mount": the root's effective
 	// precision is its own declaration, else the default.
-	precision := defaultElementType
+	precision := omittedPrecision(file.ESM)
 	if file.Domain != nil && file.Domain.ElementType != nil {
 		precision = *file.Domain.ElementType
 	}
@@ -1430,7 +1430,8 @@ func inlineRootRefsRaw(view map[string]any, authored string, basePath string, ap
 	parentMeta := metaEnvFromDecls(view["metaparameters"], apiMeta)
 	// esm-spec §4.7 "Working precision crosses a mount": the root's effective
 	// precision, which every edge it carries compares its leaf against.
-	precision := defaultElementType
+	version, _ := view["esm"].(string)
+	precision := omittedPrecision(version)
 	if p, ok := declaredElementTypeRaw(view); ok {
 		precision = p
 	}
@@ -1498,12 +1499,6 @@ func applyStagedIndexSets(file *ESMFile, staged map[string]IndexSet, rootEnv map
 	return nil
 }
 
-// defaultElementType is the working precision a ROOT that declares no
-// `domain.element_type` evaluates in (esm-spec §11.3). A MOUNTED document that
-// declares none adopts its mounter's instead (esm-spec §4.7 "Working precision
-// crosses a mount").
-const defaultElementType = "Float64"
-
 // declaredElementTypeRaw is the `domain.element_type` a raw document view
 // declares, and whether it declares one.
 func declaredElementTypeRaw(view map[string]any) (string, bool) {
@@ -1532,6 +1527,25 @@ func carryMountedElementType(component any, leaf, enclosing, where string) error
 	return stampElementType(component, leaf, enclosing, where, "")
 }
 
+// elementTypeUncarriedMessage is the `element_type_uncarried` refusal: what the
+// leaf declares, why the component cannot carry it, what the mounting
+// document's precision is, and how to fix it. enclosing is a precision name or
+// "unspecified".
+func elementTypeUncarriedMessage(where, leaf, enclosing, at string) string {
+	mounter := "The document mounting it evaluates in " + enclosing
+	if enclosing == "unspecified" {
+		mounter = "The document mounting it has unspecified precision (neither it nor any " +
+			"document mounting it declares `domain.element_type`; esm-spec §11.3.3)"
+	}
+	return fmt.Sprintf(
+		"%s: the mounted document declares `domain.element_type: %q`, but the component is, "+
+			"or carries, a reaction system%s whose species and parameters cannot declare a "+
+			"precision of their own. %s, so the mount cannot keep the leaf's precision "+
+			"(esm-spec §4.7 \"Working precision crosses a mount\"). Declare "+
+			"`domain.element_type: %q` on the mounting document, or remove it from the leaf",
+		where, leaf, at, mounter, leaf)
+}
+
 func stampElementType(system any, leaf, enclosing, where, path string) error {
 	sys, ok := system.(map[string]any)
 	if !ok {
@@ -1544,13 +1558,7 @@ func stampElementType(system any, leaf, enclosing, where, path string) error {
 		if path != "" {
 			at = fmt.Sprintf(" (subsystem '%s')", path)
 		}
-		return newETErr(CodeElementTypeUncarried, fmt.Sprintf(
-			"%s: the mounted document declares `domain.element_type: %q` but the document "+
-				"mounting it evaluates in %s, and the component carries a reaction system%s whose "+
-				"species and parameters cannot declare a per-variable `element_type`; the mount "+
-				"cannot keep the leaf's precision (esm-spec §4.7 \"Working precision crosses a "+
-				"mount\"). Declare the same `domain.element_type` on the mounting document, or "+
-				"remove it from the leaf", where, leaf, enclosing, at))
+		return newETErr(CodeElementTypeUncarried, elementTypeUncarriedMessage(where, leaf, enclosing, at))
 	}
 	if vars, ok := sys["variables"].(map[string]any); ok {
 		for _, raw := range vars {

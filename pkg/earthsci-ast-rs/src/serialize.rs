@@ -36,6 +36,7 @@ use std::path::Path;
 /// ```
 pub fn to_json(esm_file: &EsmFile) -> Result<String, EsmError> {
     let mut value = serde_json::to_value(esm_file).map_err(EsmError::JsonParse)?;
+    write_component_operators(esm_file, &mut value);
     crate::version_gates::raise_emit_floors(&mut value);
     serde_json::to_string_pretty(&value).map_err(EsmError::JsonParse)
 }
@@ -58,8 +59,46 @@ pub fn to_json(esm_file: &EsmFile) -> Result<String, EsmError> {
 /// * `Err(EsmError)` - Serialization error
 pub fn to_json_compact(esm_file: &EsmFile) -> Result<String, EsmError> {
     let mut value = serde_json::to_value(esm_file).map_err(EsmError::JsonParse)?;
+    write_component_operators(esm_file, &mut value);
     crate::version_gates::raise_emit_floors(&mut value);
     serde_json::to_string(&value).map_err(EsmError::JsonParse)
+}
+
+/// `esm_file` as the JSON document it denotes, each component's operator
+/// registry written back as its `operators` block
+/// ([`write_component_operators`]), so every operator reference it keeps
+/// resolves when it is read back.
+pub(crate) fn document_value(esm_file: &EsmFile) -> Result<serde_json::Value, serde_json::Error> {
+    let mut value = serde_json::to_value(esm_file)?;
+    write_component_operators(esm_file, &mut value);
+    Ok(value)
+}
+
+/// Write each component's operator registry back as its `operators` block
+/// (esm-spec §9.6.4 rule 5): the references a loaded document keeps are
+/// written as they are, and the definitions they name travel with them, as
+/// the load materialized them ([`crate::EsmFile::component_operators`]),
+/// without the load's private records. Mirrors the Julia reference
+/// `serialize_esm_file`.
+fn write_component_operators(esm_file: &EsmFile, value: &mut serde_json::Value) {
+    let Some(blocks) = &esm_file.component_templates else {
+        return;
+    };
+    for (key, block) in blocks {
+        let Some((compkind, cname)) = key.split_once('.') else {
+            continue;
+        };
+        let Some(comp) = value
+            .get_mut(compkind)
+            .and_then(|c| c.get_mut(cname))
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            continue;
+        };
+        let mut block = block.clone();
+        crate::lower_expression_templates::strip_fixed_units(&mut block);
+        comp.insert("operators".to_string(), block);
+    }
 }
 
 /// Write an ESM file to `path` as pretty-printed JSON.

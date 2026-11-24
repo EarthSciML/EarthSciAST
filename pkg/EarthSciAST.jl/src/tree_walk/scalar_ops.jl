@@ -140,10 +140,10 @@ function _subscript_eval_op(op::Symbol, c, ev::E, quotient::Q) where {E, Q}
     return acc
 end
 
-function _index_int(n::_Node)::Int
+function _index_int(n::_Node, counter = getindex)::Int
     k = n.kind
     if k === _NK_LOOPVAR
-        return (n.payload::Base.RefValue{Int})[]
+        return counter(n.payload::Base.RefValue{Int})
     elseif k === _NK_LITERAL
         return round(Int, n.literal)
     elseif k === _NK_CONST_GATHER || k === _NK_LIVE_GATHER
@@ -153,13 +153,13 @@ function _index_int(n::_Node)::Int
         cg = n.payload::_ConstGatherArray
         off = 1
         @inbounds for d in eachindex(n.children)
-            sub = _const_gather_sub(cg, d, _index_int(n.children[d]))
+            sub = _const_gather_sub(cg, d, _index_int(n.children[d], counter))
             off += (sub - 1) * cg.strides[d]
         end
         return round(Int, @inbounds cg.flat[off])
     elseif k === _NK_OP
         v = _subscript_eval_op(
-            n.op, n.children, _index_int,
+            n.op, n.children, x -> _index_int(x, counter),
             q -> (q.kind === _NK_OP && q.op === :/ && length(q.children) == 2) ? q.children : nothing
         )
         v === nothing || return v

@@ -921,6 +921,7 @@ impl TapeBuilder<'_> {
             self.const_arrays,
             self.array_bool_reductions,
             Cadence::Const,
+            self.ops,
             |mut b| {
                 b.defer_consts = true;
                 for FoldInput { name, shape, vals } in inputs {
@@ -1389,7 +1390,19 @@ impl TapeBuilder<'_> {
                 for name in ov.src_env.iter().chain(ov.tgt_env.iter()) {
                     let Some((shape, vals)) = self.known_named(name) else {
                         bail_tape!(
-                            "aggregate: overlap join gate factor `{name}` is not build-time data"
+                            "aggregate: overlap join gate factor `{name}` is not build-time data{}",
+                            if self.is_function {
+                                format!(
+                                    " (in an operator definition's body; {})",
+                                    match self.obs_defined.get(name.as_str()) {
+                                        Some(ObsVal::Taped(lv)) => format!("bound to {lv:?}"),
+                                        Some(ObsVal::Declined) => "declined".to_string(),
+                                        None => "not an argument".to_string(),
+                                    }
+                                )
+                            } else {
+                                String::new()
+                            }
                         );
                     };
                     let a =

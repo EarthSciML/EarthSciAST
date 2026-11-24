@@ -8,8 +8,9 @@
 use crate::portable;
 
 macro_rules! scaling_family {
-    ($name:ident) => {
+    ($(#[$m:meta])* $name:ident) => {
         #[test]
+        $(#[$m])*
         fn $name() {
             let family = stringify!($name);
             let mut seen = 0;

@@ -178,6 +178,7 @@ fn detect_indicator_count<'e>(spec: &ArrayOpSpec<'e>) -> Option<IndicatorCount<'
     })
 }
 
+mod calls;
 mod contraction;
 mod index;
 mod rules;
@@ -1137,6 +1138,20 @@ pub(crate) struct TapeBuilder<'m> {
     /// not classify its positions: the rule declines with it.
     tile_violation: Option<String>,
 
+    // Operator references (`calls`) -----------------------------------------
+    /// The instances the build's references name; `None` where no reference
+    /// can occur (a standalone tape).
+    ops: Option<&'m crate::operator_refs::Instances>,
+    /// The functions this build compiles, shared with every function builder.
+    funcs: calls::SharedFuncs,
+    /// This builder lowers an operator definition's body: its state
+    /// variables and parameters are the call's arguments.
+    is_function: bool,
+    /// In a function builder: the state variables (array arguments) that are
+    /// constant arrays known at the call to be non-decreasing, so a count
+    /// over a window of one bisects it as the caller's would.
+    sorted_states: HashSet<u32>,
+
     // Diagnostics ------------------------------------------------------------
     vn_scope_hits: usize,
     vn_hoist_hits: usize,
@@ -1438,6 +1453,10 @@ impl<'m> TapeBuilder<'m> {
             tile_pending: None,
             tile_read_ok: false,
             tile_violation: None,
+            ops: None,
+            funcs: Default::default(),
+            is_function: false,
+            sorted_states: HashSet::new(),
             vn_scope_hits: 0,
             vn_hoist_hits: 0,
         }
@@ -1661,6 +1680,7 @@ impl<'m> TapeBuilder<'m> {
             data_gathers: &self.tables.data_gathers,
             lanes: &[],
             fault_scans: &self.tables.fault_scans,
+            calls: &self.tables.calls,
         }
     }
 
@@ -1717,8 +1737,9 @@ impl<'m> TapeBuilder<'m> {
                 let sv = &self.state_vars[*ix as usize];
                 if sv.shape.is_empty() {
                     None
-                } else if self.tile.is_some() {
-                    // A tile's state is its storage box, at its global origin.
+                } else if self.tile.is_some() || self.is_function {
+                    // A tile's state is its storage box, at its global origin;
+                    // a function's is its argument's box.
                     Some((sv.shape.clone(), sv.origin.clone()))
                 } else {
                     Some((sv.shape.clone(), DimI::from_elem(1, sv.shape.len())))
@@ -1729,6 +1750,8 @@ impl<'m> TapeBuilder<'m> {
 
     fn lv_cadence(&self, lv: &LV) -> Cadence {
         match lv {
+            // A function's parameter is the running call's scalar argument.
+            LV::Param(_) if self.is_function => Cadence::Continuous,
             LV::Lit(_) | LV::Param(_) => Cadence::Const,
             LV::Time | LV::State(_) => Cadence::Continuous,
             LV::Scalar(s) | LV::Arr(s) => self.tables.slots[*s as usize].cadence,
@@ -2516,12 +2539,24 @@ impl<'m> TapeBuilder<'m> {
         }
     }
 
+    /// Time crosses the RHS as binary64. Narrow it at a read whose working
+    /// precision (the rule's, re-armed per rule and at each precision
+    /// boundary) is binary32, even when the expression copies it directly to
+    /// an observed or a branch (esm-spec §11.3.2).
+    fn lower_time(&mut self) -> LV {
+        if crate::precision::is_f32() {
+            self.emit_un(UnCode::RoundF32, LV::Time)
+        } else {
+            LV::Time
+        }
+    }
+
     /// Resolve a variable over the box, in this order: `t`, bound
     /// contraction index, output box symbol (ramp), state, observed, param,
     /// bail (forcing / unknown loop bind).
     fn resolve_var(&mut self, name: &str, bx: &LBox) -> LResult<LV> {
         if name == "t" {
-            return Ok(LV::Time);
+            return Ok(self.lower_time());
         }
         if let Some(v) = bx.cbind(name) {
             return Ok(LV::Lit(v as f64));
@@ -2587,6 +2622,13 @@ impl<'m> TapeBuilder<'m> {
         }
         if let Some(lv) = self.forcing_read(name)? {
             return Ok(lv);
+        }
+        if self.is_function {
+            bail_tape!(
+                "variable: unresolved symbol (forcing/loop-bind?): {name} (in an operator \
+                 definition's body, box {:?})",
+                bx.syms
+            )
         }
         bail_tape!("variable: unresolved symbol (forcing/loop-bind?): {name}")
     }
@@ -2672,6 +2714,9 @@ impl<'m> TapeBuilder<'m> {
                     bail_tape!("op: broadcast fn `{fn_name}` is not a scalar operator");
                 }
                 self.lower_op_code(vec_op_code(fn_name), node, bx)
+            }
+            VecOp::Unsupported if node.op == crate::operator_refs::APPLY_OP => {
+                self.lower_call(node, bx)
             }
             VecOp::Unsupported => {
                 bail_tape!("op: unsupported operator `{}`/{}", node.op, node.args.len())
@@ -4090,11 +4135,21 @@ fn baked_join_key_params(compiled: &ArrayCompiled) -> FxHashMap<String, f64> {
             | RhsRule::ArrayLoop { body, .. } => body,
         }
     }
-    let roots = compiled
+    let rule_roots: Vec<&Expr> = compiled
         .observed_rules
         .iter()
         .map(observed_rule_body)
-        .chain(compiled.rhs_rules.iter().map(rhs_body));
+        .chain(compiled.rhs_rules.iter().map(rhs_body))
+        .collect();
+    // A join inside a definition the rules reach names its key columns in
+    // the instance body: each reached instance body is a root too.
+    let instances = compiled
+        .operators
+        .reachable(rule_roots.iter().copied())
+        .unwrap_or_default();
+    let roots = rule_roots
+        .into_iter()
+        .chain(instances.iter().map(|i| &i.body));
     let cone = crate::join::join_key_cone(roots, |n| bodies.get(n).copied());
     compiled
         .param_names
@@ -4144,6 +4199,7 @@ pub(super) fn build_tape_program(
     b.tile = tile;
     b.baked_params = baked_join_key_params(compiled);
     b.count_fold = compiled.rewrites.count_fold;
+    b.ops = Some(&*compiled.operators);
 
     // ---- observed rules, in dependency order -------------------------------
     for (i, rule) in observed_rules.iter().enumerate() {
@@ -4157,8 +4213,7 @@ pub(super) fn build_tape_program(
         let txn = b.txn();
         // The rule's own working precision, as `materialize_observeds_pass`
         // arms it: every instruction it emits is tagged with it.
-        let _rule_precision = crate::precision::has_variable_overrides()
-            .then(|| crate::precision::enter(crate::precision::of_variable(&name)));
+        let _rule_precision = crate::precision::enter_variable(&name);
         let lowered = b
             .lower_observed_rule(rule)
             .and_then(|v| b.flush_rule_fault().map(|()| v))
@@ -4203,6 +4258,9 @@ pub(super) fn build_tape_program(
             cadence: Cadence::Continuous,
         });
         let txn = b.txn();
+        // The rule's working precision is its state's, as the per-cell
+        // oracle arms it: every instruction it emits is tagged with it.
+        let _rule_precision = rule.enter_precision(&compiled.var_shapes);
         match b
             .lower_rhs_rule(rule)
             .and_then(|()| b.flush_rule_fault())
@@ -4231,7 +4289,26 @@ pub(super) fn build_tape_program(
     let exports = b.compute_exports(observed_rules, compiled.tape_serves_passes());
 
     // ---- flatten + fusion + liveness + coloring ----------------------------
-    (Ok(b.finish(exports, fuse, align_layout)), vn_hits)
+    let rules_for_refusal: Vec<RuleInfo> = b.rules.clone();
+    match b.finish(exports, fuse, align_layout) {
+        Ok(prog) => (Ok(prog), vn_hits),
+        Err(why) => {
+            // A function the program calls cannot be laid out like it: the
+            // program is refused, naming every rule (no rule ran per cell).
+            let n = rules_for_refusal.len();
+            let mut reasons: Vec<Option<Bail>> = (0..n).map(|_| None).collect();
+            if let Some(r) = reasons.first_mut() {
+                *r = Some(Bail::new(why));
+            }
+            (
+                Err(DeclinedTape {
+                    rules: rules_for_refusal,
+                    reasons,
+                }),
+                vn_hits,
+            )
+        }
+    }
 }
 
 /// How a subscript of a makearray read in a box reads it
@@ -4296,6 +4373,9 @@ fn mentions_unshadowed(e: &Expr, name: &str) -> bool {
                 || n.values
                     .as_ref()
                     .is_some_and(|vs| vs.iter().any(|x| mentions_unshadowed(x, name)))
+                || n.bindings
+                    .as_ref()
+                    .is_some_and(|bs| bs.values().any(|x| mentions_unshadowed(x, name)))
         }
     }
 }

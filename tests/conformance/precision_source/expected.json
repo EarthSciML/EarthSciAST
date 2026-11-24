@@ -1,0 +1,10 @@
+{
+  "description": "Validation warnings for the precision-source fixtures (esm-spec §11.3.3 P8). `warnings` maps a fixture to the `(code, path)` of every entry of the validation result's non-unit `warnings` list, in any order; `unit_warnings` carries none of them. `legacy_version` is an esm version below the §11.3.3 gate: the same document declaring it has declared binary64 precision and draws no warning. All five bindings assert both.",
+  "legacy_version": "2.3.0",
+  "warnings": {
+    "key_comparison.esm": [
+      { "code": "key_precision_unspecified", "path": "/models/M/equations/0/rhs" },
+      { "code": "key_precision_unspecified", "path": "/models/M/equations/0/rhs" }
+    ]
+  }
+}

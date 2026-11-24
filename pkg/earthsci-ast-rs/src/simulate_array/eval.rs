@@ -41,8 +41,210 @@ pub(super) fn eval(expr: &Expr, ctx: &mut EvalCtx) -> Value {
         // under Float64.
         Expr::Number(n) => Value::Scalar(crate::precision::round(*n)),
         Expr::Integer(n) => Value::Scalar(crate::precision::round(*n as f64)),
-        Expr::Variable(name) => lookup_variable(name, ctx),
+        Expr::Variable(name) => match ctx.param_binding(name) {
+            Some(b) => ctx.in_caller(|ctx| eval(&b, ctx)),
+            None => lookup_variable(name, ctx),
+        },
+        Expr::Operator(node) if node.op == crate::operator_refs::APPLY_OP => eval_call(node, ctx),
         Expr::Operator(node) => eval_op(node, ctx),
+    }
+}
+
+/// Evaluate an operator reference (esm-spec §9.6.4) as a call: the body of
+/// the instance it names, with each parameter the body reads standing for the
+/// reference's binding, evaluated in the caller's frame where the body reads
+/// it (call by name), with the loop symbols bound there. That is the value,
+/// and the operations in the order, the reference's expansion denotes.
+pub(super) fn eval_call(node: &std::sync::Arc<ExpressionNode>, ctx: &mut EvalCtx) -> Value {
+    let instance = match ctx.ops.instance_of_node(node) {
+        Ok(i) => i,
+        Err(e) => {
+            latch_fault(fault_code::UNCODED, e.to_string());
+            return Value::Scalar(f64::NAN);
+        }
+    };
+    ctx.frames.push(CallFrame {
+        node: std::sync::Arc::clone(node),
+        instance: std::sync::Arc::clone(&instance),
+    });
+    let v = eval(&instance.body, ctx);
+    ctx.frames.pop();
+    v
+}
+
+/// The cell `raw` (1-based) of the array the reference `rn` denotes, read
+/// through its body without assembling the array, when its instance body is a
+/// `makearray` whose region holding the cell has a pointwise `faq` value over
+/// exactly that region (written in place or as a reference to one): the value
+/// is that `faq`'s body evaluated with its output symbols bound to the cell's
+/// coordinate (element `raw` of an array whose regions start at `lo` sits at
+/// `lo + raw - 1`), as the build reads a stencil region it gathers per cell (the region value
+/// inlined onto the cell's loop symbols, `inline_region_aggregates`). A cell in
+/// no region is the fill, `0.0`. `None` where this does not apply; the caller
+/// then gathers from the whole value.
+fn eval_reference_cell(
+    rn: &std::sync::Arc<ExpressionNode>,
+    raw: &[i64],
+    ctx: &mut EvalCtx,
+) -> Option<Value> {
+    let inst = ctx.ops.instance_of_node(rn).ok()?;
+    let Expr::Operator(body) = &inst.body else {
+        return None;
+    };
+    if body.op != "makearray" || crate::op_registry::check_makearray_regions(body).is_err() {
+        return None;
+    }
+    let regions = body.regions.as_deref()?;
+    let values = body.values.as_deref()?;
+    if regions.is_empty() || values.len() != regions.len() || regions[0].len() != raw.len() {
+        return None;
+    }
+    let ndim = raw.len();
+    let mut lo = vec![i64::MAX; ndim];
+    let mut hi = vec![i64::MIN; ndim];
+    let mut bounds: Vec<Vec<[i64; 2]>> = Vec::with_capacity(regions.len());
+    for region in regions {
+        let mut b = Vec::with_capacity(ndim);
+        for (d, r) in region.iter().enumerate() {
+            let [r_lo, r_hi] = crate::types::region_bounds(r)?;
+            lo[d] = lo[d].min(r_lo);
+            hi[d] = hi[d].max(r_hi);
+            b.push([r_lo, r_hi]);
+        }
+        bounds.push(b);
+    }
+    // The array's element `raw - 1` sits at coordinate `lo + raw - 1`.
+    let at: Vec<i64> = (0..ndim).map(|d| lo[d] + raw[d] - 1).collect();
+    if (0..ndim).any(|d| at[d] < lo[d] || at[d] > hi[d]) {
+        return Some(Value::Scalar(0.0));
+    }
+    let Some(r) = (0..regions.len())
+        .rev()
+        .find(|&r| (0..ndim).all(|d| bounds[r][d][0] <= at[d] && at[d] <= bounds[r][d][1]))
+    else {
+        return Some(Value::Scalar(0.0));
+    };
+    // The region value: a pointwise `faq` over exactly the region, in the
+    // body or as the body of the instance a reference names.
+    let value = &values[r];
+    let inner = match value {
+        Expr::Operator(v) if v.op == crate::operator_refs::APPLY_OP => {
+            let vi = ctx.ops.instance_of_node(v).ok()?;
+            Some((std::sync::Arc::clone(v), vi))
+        }
+        _ => None,
+    };
+    let faq: &Expr = match &inner {
+        Some((_, vi)) => &vi.body,
+        None => value,
+    };
+    let Expr::Operator(f) = faq else {
+        return None;
+    };
+    let (Some(idx), Some(ranges), Some(fbody)) = (&f.output_idx, &f.ranges, &f.expr) else {
+        return None;
+    };
+    if !crate::faq::is_faq_op(&f.op)
+        || f.filter.is_some()
+        || idx.len() != ndim
+        || ranges.len() != ndim
+        || (0..ndim).any(|d| ranges.get(&idx[d]).and_then(|s| s.bounds()) != Some(bounds[r][d]))
+    {
+        return None;
+    }
+    let fbody = fbody.clone();
+    ctx.frames.push(CallFrame {
+        node: std::sync::Arc::clone(rn),
+        instance: std::sync::Arc::clone(&inst),
+    });
+    if let Some((vn, vi)) = &inner {
+        ctx.frames.push(CallFrame {
+            node: std::sync::Arc::clone(vn),
+            instance: std::sync::Arc::clone(vi),
+        });
+    }
+    // The output symbols take the cell's coordinates, as the region value
+    // inlined onto the gather's loop symbols reads them.
+    let saved: Vec<Option<i64>> = idx.iter().map(|n| ctx.loop_binds.get(n).copied()).collect();
+    for (n, &v) in idx.iter().zip(&at) {
+        set_bind(&mut ctx.loop_binds, n, v);
+    }
+    let v = eval(&fbody, ctx);
+    for (n, old) in idx.iter().zip(saved) {
+        match old {
+            Some(o) => set_bind(&mut ctx.loop_binds, n, o),
+            None => {
+                ctx.loop_binds.remove(n);
+            }
+        }
+    }
+    if inner.is_some() {
+        ctx.frames.pop();
+    }
+    ctx.frames.pop();
+    match v {
+        Value::Scalar(x) => Some(Value::Scalar(x)),
+        Value::Array(a) if a.ndim() == 0 => Some(Value::Scalar(a[IxDyn(&[])])),
+        Value::Array(_) => None,
+    }
+}
+
+impl EvalCtx<'_> {
+    /// The binding of `name` when it is a parameter of the innermost call in
+    /// progress ([`eval_call`]).
+    fn param_binding(&self, name: &str) -> Option<Expr> {
+        let f = self.frames.last()?;
+        if !f.instance.is_param(name) {
+            return None;
+        }
+        f.node.bindings.as_ref()?.get(name).cloned()
+    }
+
+    /// Run `f` in the frame of the innermost call's caller.
+    fn in_caller<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let top = self.frames.pop();
+        let r = f(self);
+        if let Some(t) = top {
+            self.frames.push(t);
+        }
+        r
+    }
+
+    /// `e` read through the calls in progress: when it is a parameter of the
+    /// innermost call, its binding (followed while that is itself a parameter
+    /// of the caller), with how many innermost frames to leave to read it.
+    /// `None` when `e` is not a parameter.
+    fn through_params(&self, e: &Expr) -> Option<(Expr, usize)> {
+        let mut cur = match e {
+            Expr::Variable(_) => e.clone(),
+            _ => return None,
+        };
+        let mut depth = self.frames.len();
+        let mut up = 0;
+        while let Expr::Variable(name) = &cur
+            && depth > 0
+        {
+            let f = &self.frames[depth - 1];
+            if !f.instance.is_param(name) {
+                break;
+            }
+            let Some(b) = f.node.bindings.as_ref().and_then(|b| b.get(name)) else {
+                break;
+            };
+            cur = b.clone();
+            depth -= 1;
+            up += 1;
+        }
+        (up > 0).then_some((cur, up))
+    }
+
+    /// Run `f` with the `up` innermost call frames left.
+    fn up_frames<R>(&mut self, up: usize, f: impl FnOnce(&mut Self) -> R) -> R {
+        let keep = self.frames.len() - up;
+        let saved = self.frames.split_off(keep);
+        let r = f(self);
+        self.frames.extend(saved);
+        r
     }
 }
 
@@ -227,7 +429,7 @@ pub(super) fn set_bind(binds: &mut IdxMap, name: &str, val: i64) {
 /// It is NOT the same set as `crate::op_registry::is_core_op`. The registry
 /// answers "may this op appear in a legal AST"; this answers "can the per-cell
 /// evaluator produce a number for it". The gap between them is real and is
-/// exactly what [`check_evaluable`] rejects:
+/// exactly what [`check_evaluable_all`] rejects:
 ///
 /// * the build-time query op `distinct` — resolved by
 ///   [`crate::value_invention`] before evaluation;
@@ -263,9 +465,12 @@ pub fn is_evaluable_op(op: &str) -> bool {
             // A transparent wrapper that evaluates its one operand at a stated
             // element type. Never authored.
             O::Precision => true,
+            // An operator reference is evaluated as a call of its instance
+            // ([`eval_call`]); the gates check that it names one.
+            O::ApplyExpressionTemplate => true,
             // Consumed before evaluation: the load-time ops and the build-time
             // query op.
-            O::Ic | O::Enum | O::ApplyExpressionTemplate | O::Distinct => false,
+            O::Ic | O::Enum | O::Distinct => false,
         },
     }
 }
@@ -291,18 +496,70 @@ pub fn is_evaluable_op(op: &str) -> bool {
 /// [`CompileError::UnloweredOperatorError`], [`CompileError::InvalidOperatorArity`],
 /// [`CompileError::MakearrayRegionInvalid`] (from the registry gate), or
 /// [`CompileError::UnevaluableOperatorError`].
-pub fn check_evaluable(expr: &Expr) -> Result<(), CompileError> {
-    check_no_spatial_ops(expr)?;
-    check_evaluable_ops(expr)
+///
+/// It checks every expression of `roots` and, once each, the body of every
+/// operator instance they reach through `ops` (esm-spec §9.6.3 constraint 6:
+/// an operator a reference's body holds reaches evaluation as surely as one
+/// written in place). A reference that names no instance is refused as an
+/// unevaluable `apply_operator`.
+pub(crate) fn check_evaluable_all<'a>(
+    roots: impl IntoIterator<Item = &'a Expr>,
+    ops: &Instances,
+) -> Result<(), CompileError> {
+    let roots: Vec<&Expr> = roots.into_iter().collect();
+    for e in &roots {
+        check_no_spatial_ops(e)?;
+        check_evaluable_ops(e)?;
+    }
+    for i in reachable_instances(roots, ops)? {
+        check_no_spatial_ops(&i.body)?;
+        check_evaluable_ops(&i.body)?;
+        // Flatten resolves a time derivative in a body (step 3a); one still
+        // standing is one it could not answer (`<name>.unresolved`), which
+        // the expansion would leave standing too: refused as unlowered.
+        if contains_d(&i.body) {
+            return Err(CompileError::UnloweredOperatorError {
+                op: "D".to_string(),
+                why: String::new(),
+            });
+        }
+    }
+    Ok(())
 }
 
-/// The [`is_evaluable_op`] half of [`check_evaluable`], applied over the whole
+/// Whether `e` holds a `D` node anywhere.
+fn contains_d(e: &Expr) -> bool {
+    match e {
+        Expr::Operator(n) => n.op == "D" || n.any_child(&mut contains_d),
+        _ => false,
+    }
+}
+
+/// Every operator instance `roots` reach through `ops`, each once; a reference
+/// that names none is refused as an unevaluable `apply_operator`.
+pub(crate) fn reachable_instances<'a>(
+    roots: impl IntoIterator<Item = &'a Expr>,
+    ops: &Instances,
+) -> Result<Vec<std::sync::Arc<crate::operator_refs::CallInstance>>, CompileError> {
+    ops.reachable(roots).map_err(|e| match e {
+        crate::operator_refs::InstanceError::Unknown(_) => CompileError::UnevaluableOperatorError {
+            op: crate::operator_refs::APPLY_OP.to_string(),
+        },
+        other => CompileError::build_err(other.to_string()),
+    })
+}
+
+/// The [`is_evaluable_op`] half of [`check_evaluable_all`], applied over the whole
 /// tree (including sidecar expression fields via `for_each_child`).
 fn check_evaluable_ops(expr: &Expr) -> Result<(), CompileError> {
     let Expr::Operator(node) = expr else {
         return Ok(());
     };
-    if !is_evaluable_op(&node.op) {
+    // A reference is evaluable when it names a definition; which one, and
+    // its body, the instance walk checks ([`check_evaluable_all`]).
+    let nameless_reference = node.op == crate::operator_refs::APPLY_OP
+        && crate::operator_refs::reference_node(node).is_none();
+    if !is_evaluable_op(&node.op) || nameless_reference {
         return Err(CompileError::UnevaluableOperatorError {
             op: node.op.clone(),
         });
@@ -334,14 +591,27 @@ fn check_evaluable_ops(expr: &Expr) -> Result<(), CompileError> {
 /// Everything [`check_scalar_evaluable`] reports, and the evaluator's own
 /// fail-closed faults (an unbound name, an out-of-range const-array gather) as
 /// [`CompileError::InterpreterBuildError`].
-pub(crate) fn eval_scalar_expression(
+///
+/// `ops` holds the operator instances the references in `expr` name.
+pub(crate) fn eval_scalar_expression_in(
     expr: &Expr,
     params: &[f64],
     param_names: &[String],
     t: f64,
+    ops: &Instances,
 ) -> Result<f64, CompileError> {
-    check_scalar_evaluable(expr)?;
-    let value = eval_expression(expr, &HashMap::new(), params, param_names, t)?;
+    check_scalar_evaluable_in(expr, ops)?;
+    let inputs = ArrMap::default();
+    let value = StandaloneScope {
+        inputs: &inputs,
+        params,
+        param_names,
+        t,
+        derived_extents: crate::faq::empty_derived_extents(),
+        const_arrays: ConstArrayScope::empty(),
+        ops,
+    }
+    .eval_fast(expr)?;
     value
         .as_scalar()
         .ok_or_else(|| CompileError::InterpreterBuildError {
@@ -351,18 +621,28 @@ pub(crate) fn eval_scalar_expression(
         })
 }
 
-/// [`check_evaluable`] for an entry point whose answer is ONE NUMBER computed
-/// from scalar bindings ([`eval_scalar_expression`]).
+/// [`check_evaluable_all`] for an entry point whose answer is ONE NUMBER computed
+/// from scalar bindings ([`eval_scalar_expression_in`]).
 ///
 /// On top of the runtime gate it refuses, naming the operator, what has no
 /// scalar value over scalar operands: the array / tensor ops, an array-valued
 /// `const`, and a structural `D`, which [`eval_op_named`] answers with the
 /// `NaN` sentinel because a right-hand-side `D` never legitimately reaches
 /// evaluation (esm-spec §4.2).
+#[cfg(test)]
 pub(crate) fn check_scalar_evaluable(expr: &Expr) -> Result<(), CompileError> {
-    check_no_spatial_ops(expr)?;
-    check_evaluable_ops(expr)?;
-    check_scalar_ops(expr)
+    check_scalar_evaluable_in(expr, Instances::empty())
+}
+
+/// [`check_scalar_evaluable`] with the operator instances a reference in
+/// `expr` names: each body it reaches is checked once, as `expr` is.
+pub(crate) fn check_scalar_evaluable_in(expr: &Expr, ops: &Instances) -> Result<(), CompileError> {
+    check_evaluable_all([expr], ops)?;
+    check_scalar_ops(expr)?;
+    for i in reachable_instances([expr], ops)? {
+        check_scalar_ops(&i.body)?;
+    }
+    Ok(())
 }
 
 /// The [`check_scalar_evaluable`] layer that refuses the ops with no scalar
@@ -452,7 +732,7 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     let unreachable_op = || -> ! {
         unreachable!(
             "operator '{op}' reached eval_op without an evaluation rule; \
-             every entry point must gate with check_evaluable() first"
+             every entry point must gate with check_evaluable_all() first"
         )
     };
     let Some(core) = CoreOp::from_name(op) else {
@@ -586,6 +866,8 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         CoreOp::Other(O::False) => Value::Scalar(0.0),
 
         // Consumed before evaluation; `check_evaluable` refuses them.
+        // A reference is evaluated by [`eval`] as a call; one reaching here
+        // came through `broadcast`'s `fn`, which names no reference.
         CoreOp::Other(O::Ic | O::Enum | O::ApplyExpressionTemplate | O::Distinct) => {
             unreachable_op()
         }
@@ -1057,6 +1339,8 @@ pub(crate) enum UnCode {
     Acosh,
     Atanh,
     Not,
+    /// Narrow a context-adopting value at a binary32 read in the tape.
+    RoundF32,
     Unknown,
 }
 
@@ -2008,6 +2292,42 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     if node.args.is_empty() {
         return Value::Scalar(f64::NAN);
     }
+    // A base that is a parameter of the call in progress is the reference's
+    // binding, read in the caller's frame: the subscripts are evaluated here,
+    // then the gather runs there on their values, as the expansion gathers
+    // the binding at them.
+    if let Some((base, up)) = ctx.through_params(&node.args[0]) {
+        let (raw, _) = eval_index_args(&node.args[1..], ctx);
+        let mut args = Vec::with_capacity(node.args.len());
+        args.push(base);
+        args.extend(raw.iter().map(|&i| Expr::Integer(i)));
+        let gather = ExpressionNode {
+            op: "index".to_string(),
+            args,
+            ..Default::default()
+        };
+        return ctx.up_frames(up, |ctx| eval_index(&gather, ctx));
+    }
+    // A gather of the array an operator reference denotes: the subscripts are
+    // evaluated, then the cell is read through the reference's body
+    // ([`eval_reference_cell`]), or, where that does not apply, from the
+    // whole value.
+    if let Expr::Operator(rn) = &node.args[0]
+        && rn.op == crate::operator_refs::APPLY_OP
+    {
+        let (raw, in_bounds) = eval_index_args(&node.args[1..], ctx);
+        if in_bounds && let Some(v) = eval_reference_cell(rn, &raw, ctx) {
+            return v;
+        }
+        return match eval(&node.args[0], ctx) {
+            Value::Array(arr) => index_into(&arr, &raw, in_bounds, GatherKind::ZeroGhost),
+            Value::Scalar(s) if node.args.len() == 1 => Value::Scalar(s),
+            Value::Scalar(_) => {
+                latch_index_on_scalar(&node.args[0], node.args.len() - 1);
+                Value::Scalar(f64::NAN)
+            }
+        };
+    }
     // CAUSAL SELF-READ (esm-spec §4.3.1.1). Checked before every other channel:
     // during the sweep the array being defined exists nowhere else, and unlike
     // every other gather this one FAILS CLOSED out of range rather than
@@ -2147,7 +2467,7 @@ pub(super) fn eval_const(node: &ExpressionNode) -> Value {
 ///
 /// This is the crate's one UNGATED evaluation entry point — it takes a raw
 /// [`Expr`] that never passed through `from_model`'s compile-time gate — so it
-/// applies [`check_evaluable`] itself. An operator the interpreter cannot
+/// applies [`check_evaluable_all`] itself. An operator the interpreter cannot
 /// evaluate (a typo, an unlowered spatial `D`, or an `ic`/`enum` that an earlier
 /// pipeline stage should have eliminated) is reported here rather
 /// than silently evaluating to `NaN`.
@@ -2166,6 +2486,7 @@ pub fn eval_expression(
         t,
         derived_extents: crate::faq::empty_derived_extents(),
         const_arrays: ConstArrayScope::empty(),
+        ops: Instances::empty(),
     }
     .eval_fast(expr)
 }
@@ -2220,6 +2541,7 @@ pub fn eval_expression_with_extents(
         t,
         derived_extents,
         const_arrays: ConstArrayScope::empty(),
+        ops: Instances::empty(),
     }
     .eval_fast(expr)
 }
@@ -2260,6 +2582,7 @@ pub fn eval_expression_with_extents_and_consts(
         t,
         derived_extents,
         const_arrays,
+        ops: Instances::empty(),
     }
     .eval_fast(expr)
 }
@@ -2281,6 +2604,7 @@ pub(crate) fn eval_buildtime_field_routed(
     params: &HashMap<String, f64>,
     scope: &HashMap<String, ArrayD<f64>>,
     mode: BuildEval,
+    ops: &Instances,
 ) -> Result<Routed, CompileError> {
     let mut resolved = expr.clone();
     crate::faq::resolve_expr_ranges(&mut resolved, index_sets)?;
@@ -2295,6 +2619,7 @@ pub(crate) fn eval_buildtime_field_routed(
         t,
         derived_extents: crate::faq::empty_derived_extents(),
         const_arrays: ConstArrayScope::empty(),
+        ops,
     }
     .eval_routed(name.unwrap_or(STANDALONE_EXPRESSION), &resolved, None, mode)
 }
@@ -2312,6 +2637,8 @@ pub(crate) struct StandaloneScope<'a> {
     pub(crate) t: f64,
     pub(crate) derived_extents: &'a HashMap<String, i64>,
     pub(crate) const_arrays: &'a ConstArrayScope,
+    /// The operator instances a reference in the expression names.
+    pub(crate) ops: &'a Instances,
 }
 
 impl StandaloneScope<'_> {
@@ -2328,6 +2655,7 @@ impl StandaloneScope<'_> {
             forcing: &forcing,
             const_arrays: self.const_arrays,
             declared: empty_declared_names(),
+            ops: self.ops,
         })
     }
 
@@ -2339,7 +2667,7 @@ impl StandaloneScope<'_> {
         expr: &Expr,
         walks: &mut CellWalks,
     ) -> Result<Value, CompileError> {
-        check_evaluable(expr)?;
+        check_evaluable_all([expr], self.ops)?;
         // A derived range over an unsized producer is refused rather than
         // contracted as empty.
         if let Some(from_faq) =
@@ -2655,6 +2983,7 @@ pub(crate) fn eval_observed_taped(
         scope.t,
         scope.const_arrays,
         true,
+        Some(scope.ops),
     ))
 }
 
@@ -2669,21 +2998,9 @@ fn expr_reads_self(expr: &Expr, name: &str) -> bool {
     if node.op == "index" && matches!(node.args.first(), Some(Expr::Variable(v)) if v == name) {
         return true;
     }
-    node.args.iter().any(|a| expr_reads_self(a, name))
-        || [
-            node.expr.as_deref(),
-            node.filter.as_deref(),
-            node.key.as_deref(),
-            node.lower.as_deref(),
-            node.upper.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .any(|c| expr_reads_self(c, name))
-        || node
-            .values
-            .as_ref()
-            .is_some_and(|vs| vs.iter().any(|v| expr_reads_self(v, name)))
+    // Every expression child, an operator reference's bindings included: a
+    // binding is read where the definition's body reads its parameter.
+    node.any_child(&mut |c| expr_reads_self(c, name))
 }
 
 /// The output-index box of the aggregate currently being evaluated: the index
@@ -5501,14 +5818,15 @@ mod evaluability_gate_tests {
     }
 
     /// The §4.2 core set minus this evaluator's rules, pinned member by member.
-    /// Four ops, each eliminated by an earlier stage — and NOTHING else, which
+    /// Three ops, each eliminated by an earlier stage — and NOTHING else, which
     /// is what makes the build-time gate in `compile.rs` a complete answer to
     /// the `unreachable!` backstop rather than a patch for the op that was
-    /// reported. A fifth entry appearing here means a new op reached the
+    /// reported. (An operator reference is evaluated as a call, esm-spec
+    /// §9.6.4.) A fourth entry appearing here means a new op reached the
     /// registry without an evaluation rule and can panic; it must be given a
     /// rule or added to this list deliberately.
     #[test]
-    fn the_core_minus_evaluable_gap_is_exactly_four_ops() {
+    fn the_core_minus_evaluable_gap_is_exactly_three_ops() {
         const CORE: &[&str] = &[
             "+",
             "-",
@@ -5577,7 +5895,7 @@ mod evaluability_gate_tests {
             .filter(|op| !is_evaluable_op(op))
             .collect();
         gap.sort_unstable();
-        assert_eq!(gap, vec!["apply_operator", "distinct", "enum", "ic"]);
+        assert_eq!(gap, vec!["distinct", "enum", "ic"]);
     }
 
     /// Small helper: `Result::unwrap_err` with the op name in the panic message.
@@ -5706,6 +6024,7 @@ mod unbound_name_fault_tests {
             forcing: &forcing,
             const_arrays: ConstArrayScope::empty(),
             declared: &declared,
+            ops: crate::operator_refs::Instances::empty(),
         };
         let ctx = env.ctx(&empty_arrays);
         take_const_array_oob(); // discard anything an earlier test left
@@ -6315,6 +6634,46 @@ mod saturated_subscript_tests {
                 Value::Scalar(v) => assert_eq!(v.to_bits(), 0.0f64.to_bits(), "{raw}"),
                 _ => panic!("scalar expected"),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod reference_cell_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A gather of the array a reference denotes, read cell by cell through
+    /// its body: element 1 of a `makearray` whose only region starts at 2 is
+    /// the region value at coordinate 2, so the `faq`'s output symbol is 2
+    /// there, as in the assembled array.
+    #[test]
+    fn a_reference_cell_binds_the_output_symbol_to_the_coordinate() {
+        let reg = crate::operator_refs::OperatorRegistry::from_json(
+            json!({"mk": {"params": [], "body": {
+                "op": "makearray", "args": [], "regions": [[[2, 9]]],
+                "values": [{"op": "faq", "args": [], "output_idx": ["i"],
+                            "ranges": {"i": [2, 9]}, "expr": "i"}]}}})
+            .as_object()
+            .unwrap(),
+        );
+        let ops = Instances::new(reg);
+        let inputs = ArrMap::default();
+        let scope = StandaloneScope {
+            inputs: &inputs,
+            params: &[],
+            param_names: &[],
+            t: 0.0,
+            derived_extents: crate::faq::empty_derived_extents(),
+            const_arrays: ConstArrayScope::empty(),
+            ops: &ops,
+        };
+        let r = json!({"op": "apply_operator", "args": [], "name": "mk"});
+        for (k, want) in [(1, 2.0), (3, 4.0), (8, 9.0)] {
+            let e: Expr =
+                serde_json::from_value(json!({"op": "index", "args": [r.clone(), k]})).unwrap();
+            let got = scope.eval_fast(&e).expect("evaluates").as_scalar();
+            assert_eq!(got, Some(want), "element {k}");
         }
     }
 }

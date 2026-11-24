@@ -30,8 +30,56 @@ pub struct ValidationResult {
     /// Dimensional-analysis findings that did not invalidate the document
     /// (see [`UnitWarning`]).
     pub unit_warnings: Vec<UnitWarning>,
+    /// Non-unit diagnostics that do not invalidate the document.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ValidationWarning>,
     /// Whether validation passed (no schema or structural errors)
     pub is_valid: bool,
+}
+
+/// Whether some differential state of `file` integrates in binary32: its own
+/// `element_type`, else the document's (esm-spec §11.3.2). A mounted leaf's
+/// precision arrives stamped onto its variables (§4.7), so it is read the
+/// same way.
+fn has_float32_state(file: &EsmFile) -> bool {
+    use crate::types::{TreeOrder, component_tree};
+    let document = file
+        .domain
+        .as_ref()
+        .and_then(|d| d.element_type.as_deref())
+        .unwrap_or("Float64");
+    let models = file.models.iter().flat_map(|models| models.values());
+    let model_state = models
+        .flat_map(|model| component_tree(model, "", "", TreeOrder::Declared))
+        .any(|visit| {
+            let component = visit.component;
+            component
+                .equations
+                .iter()
+                .filter_map(|eq| crate::simulate_array::derivative_target(&eq.lhs))
+                .filter_map(|name| component.variables.get(name))
+                .any(|v| v.element_type.as_deref().unwrap_or(document) == "Float32")
+        });
+    // A species has no `element_type` of its own.
+    let species = || {
+        file.reaction_systems
+            .iter()
+            .flat_map(|systems| systems.values())
+            .flat_map(|rs| component_tree(rs, "", "", TreeOrder::Declared))
+            .any(|visit| !visit.component.species.is_empty())
+    };
+    model_state || (document == "Float32" && species())
+}
+
+/// An advisory validation finding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationWarning {
+    /// Stable diagnostic code.
+    pub code: String,
+    /// JSON pointer to the declaration.
+    pub path: String,
+    /// Human-readable diagnostic.
+    pub message: String,
 }
 
 impl ValidationResult {
@@ -216,6 +264,7 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
         // Check for circular dependencies between models
         if scope == ValidationScope::Full {
             crate::structural::check_circular_dependencies_in_models(
+                esm_file,
                 models,
                 &mut structural_errors,
             );
@@ -261,6 +310,21 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
         }
     }
 
+    // esm-spec §11.3.3 P8: an unspecified variable used directly as an
+    // equality or join key cannot be evaluated in binary32.
+    let mut warnings = Vec::new();
+    if scope == ValidationScope::Full {
+        warnings.extend(
+            crate::precision_infer::unspecified_keys(esm_file)
+                .into_iter()
+                .map(|site| ValidationWarning {
+                    code: crate::diagnostic::codes::KEY_PRECISION_UNSPECIFIED.to_string(),
+                    path: site.path,
+                    message: site.message,
+                }),
+        );
+    }
+
     // An inline test's assertion targets, override keys and assertion ranks
     // (esm-spec §6.6.2, §6.6.3, §6.6.5).
     crate::inline_test_checks::validate_inline_tests(esm_file, &mut structural_errors);
@@ -288,12 +352,25 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
     // coupled-system reference check MUST see the expanded edges.
     crate::coupling::validate_imported_coupling(esm_file, &system_refs, &mut structural_errors);
 
+    let floor = crate::precision::FLOAT32_RELTOL_FLOOR;
+    if scope == ValidationScope::Full
+        && has_float32_state(esm_file)
+        && let Some(reltol) = esm_file.solver.as_ref().and_then(|s| s.reltol)
+        && reltol < floor
+    {
+        warnings.push(ValidationWarning {
+            code: crate::diagnostic::codes::TOLERANCE_BELOW_WORKING_PRECISION.to_owned(),
+            path: "/solver/reltol".to_owned(),
+            message: format!("solver.reltol sets {reltol}, below the Float32 state floor {floor}"),
+        });
+    }
     let is_valid = schema_errors.is_empty() && structural_errors.is_empty();
 
     ValidationResult {
         schema_errors,
         structural_errors,
         unit_warnings,
+        warnings,
         is_valid,
     }
 }
@@ -328,6 +405,7 @@ pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> Val
                 }],
                 structural_errors: vec![],
                 unit_warnings: vec![],
+                warnings: vec![],
                 is_valid: false,
             };
         }
@@ -362,6 +440,7 @@ pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> Val
                 schema_errors,
                 structural_errors: e.findings().to_vec(),
                 unit_warnings: vec![],
+                warnings: vec![],
                 is_valid: false,
             }
         }
@@ -393,6 +472,7 @@ fn validate_with_schema(json_value: &Value, esm_file: &EsmFile) -> ValidationRes
         schema_errors,
         structural_errors: result.structural_errors,
         unit_warnings: result.unit_warnings,
+        warnings: result.warnings,
         is_valid,
     }
 }

@@ -476,15 +476,19 @@ Per-binding decorations, sanctioned under §2.2:
 #### `validate`
 
 **Canonical.** `validate(file) -> ValidationResult`, where `ValidationResult`
-carries `schema_errors`, `structural_errors`, `unit_warnings`, and `is_valid`.
-Total: it reports, it does not raise.
+carries `schema_errors`, `structural_errors`, `unit_warnings`, `warnings`, and
+`is_valid`. `warnings` holds advisory `ValidationWarning` records (`code`,
+`path`, `message`) that are not about units, such as
+`key_precision_unspecified` (esm-spec §11.3.3 P8); like `unit_warnings` they
+never change `is_valid`. Total: it reports, it does not raise.
 
 **Today:** all five export it, all five take only a **typed (loaded)
-document**, all five return the four-field result, and none raises on an
-invalid document. JSON text goes through the separate `validate_text`, which
+document**, all five return the five-field result, and none raises on an
+invalid document. Go and Rust omit an empty `warnings` list when the result is
+serialized to JSON. JSON text goes through the separate `validate_text`, which
 also reports a load failure (malformed JSON, a schema violation, an
 unresolvable mount) as a `ValidationResult` instead of raising. Julia and
-Python also have `validate_path` for a file (§8 item 13).
+Python also have `validate_path` for a file (§8 item 13). Rust also reports a low `solver.reltol` for Float32 integration on `warnings`.
 
 | Binding | `validate` | `validate_text` | `validate_path` |
 |---|---|---|---|
@@ -804,10 +808,10 @@ Problem's `p` (else the parameter defaults) bound in every initial condition's
 scope (§6.6.5). So it depends on neither `tspan` nor any solver option, and a
 field `ic` reads the forcing as construction bound it, without the
 discrete-cadence fields a solve refreshes, so it gives the same state before and
-after a solve. A Problem with no solve has no initial state: nothing to
-integrate is `NotDynamic` and a Float32 document that integrates is
-`Float32Unsupported`, as for `solve`; an element no source values is
-`InvalidInitialCondition`, as in a solve. A Rust
+after a solve. A Problem with no dynamic backend has no initial state. Nothing to
+integrate is `NotDynamic`. An element with no initial value produces
+`InvalidInitialCondition`. Float32 state values are returned rounded to their
+declared precision. A Rust
 `RhsProgram`'s `default_state()` is the declared defaults alone.
 
 The SciML name `u0` already means the CALLER's override bindings in Python
@@ -1242,6 +1246,7 @@ pub enum RhsError {
     ForcingSignature { detail: String },
     SlotIndex { slot: usize, slots: usize },
     NotGathered,
+    StatePrecision { variable: String, declared: Precision },
 }
 ```
 
@@ -1253,6 +1258,21 @@ program is `ForeignProgram`, a forcing set for other slots is
 out-of-range slot index to `replace` is `SlotIndex`, and lane inputs whose last
 gather failed, or that were never gathered, are `NotGathered`. Build-time calls (`rhs_program`, `select`,
 `halo`, `tile`, `lanes`, `parameter_vector`) keep `SimulateError`.
+
+**Rust simulation precision extensions.** `SolutionMetadata.integrator_precision`
+reports an `IntegratorPrecision` value with the state, clock, norm, and linear
+algebra types. The sealed trait `StateScalar` supplies the scalar types for a
+public RHS call.
+
+`RhsProgram::precision()` reports the document
+precision. `RhsProgram::state_precisions()` reports each slot's precision in
+`u` order. `round_state(&mut [f64])` rounds a caller's accepted state in this
+order. `eval_into<T: StateScalar>` accepts both `f32` and `f64` state and
+derivative slices. With `f32`, it returns `StatePrecision` if any written state
+slot requires binary64. Auxiliary state, parameters and time use the existing
+`f64` interface and are read at model precision. A call sets the program's
+precision on the calling thread for the duration of the evaluation.
+`ForcingSet::new` and `replace` round each stored buffer to its slot's precision.
 
 **Julia types.** `ForcingSet`, `ForcingSlot` (`name::String`,
 `shape::Vector{Int}`, `kind::Symbol`, `:forcing` or `:array_parameter`),
@@ -1994,6 +2014,28 @@ question 2), affects exposed as small algebraic systems (open question 1) and a
 derived-document form of a kernel spec (open question 5) are not settled here.
 Range-restricted kernels (tiles and lanes) and XLA kernels are future work.
 
+#### Declared precision and external RHS evaluation
+
+All five bindings expose `precision_source(document, variable)` (Go
+`PrecisionSource`, TypeScript `precisionSource`). Omitting the variable
+queries the document default. Rust returns `PrecisionSource::Declared(p)` or
+`PrecisionSource::Unspecified`; the other bindings return the declared
+spelling or `"unspecified"`.
+
+Rust's `rhs_program_with_options(file, tspan, problem_options, rhs_options)`
+selects working precision for unspecified variables using
+`RhsOptions::unspecified_evaluation`. The ordinary
+`rhs_program(prob)` uses the built-in binary64 default. The program reports
+`precision_sources()` and `state_precisions()` in flat `u` order.
+`eval_into` serves both binary64 and binary32 state storage, with the latter
+requiring binary32 working precision for every writable state slot.
+External integrators can serialize the versioned Rust `PrecisionRecord` with
+`canonical_json()` for attachment to results.
+Julia's `operator_ir(prob; unspecified_eltype = Float32)` requests binary32
+for the selected StableHLO evaluation group. `emit_fragment` uses the IR's
+resolved element type. A supplied `eltype` must agree with the IR. The native
+`rhs_program` refuses this choice with `float32_unsupported`.
+
 ### 5.9 Reference resolution
 
 `build_reference_graph(model, model_name="", index_sets=<none>) -> ReferenceGraph`
@@ -2163,6 +2205,7 @@ reading that as a gap.
 | `parse_markdown` | function | `parse_markdown` | `parseMarkdown` | `parse_markdown` | `parse_markdown` | `ParseMarkdown` |
 | `parse_math` | function | `parse_math` | `parseMath` | `parse_math` | `parse_math` | `ParseMath` |
 | `parse_typst` | function | `parse_typst` | `parseTypst` | `parse_typst` | `parse_typst` | `ParseTypst` |
+| `precision_source` | function | `precision_source` | `precisionSource` | `precision_source` | `precision_source` | `PrecisionSource` |
 | `print_document` | function | `print_document` | `printDocument` | `print_document` | `print_document` | `PrintDocument` |
 | `print_markdown` | function | `print_markdown` | `printMarkdown` | `print_markdown` | `print_markdown` | `PrintMarkdown` |
 | `print_math` | function | `print_math` | `printMath` | `print_math` | `print_math` | `PrintMath` |
@@ -2200,6 +2243,7 @@ reading that as a gap.
 | `validate` | function | `validate` | `validate` | `validate` | `validate` | `Validate` |
 | `validate_text` | function | `validate_text` | `validateText` | `validate_text` | `validate_complete` / `validate_text` | `ValidateText` |
 | `validation_result` | type | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` |
+| `validation_warning` | type | `ValidationWarning` | `ValidationWarning` | `ValidationWarning` | `ValidationWarning` | `ValidationWarning` |
 | `variable_node` | type | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` |
 | `write_path` | function | `write_path` | `writePath` | `write_path` | `write_path` | `WritePath` |
 
@@ -2407,6 +2451,7 @@ reading that as a gap.
 | `remake` | function | – | – | `remake` | `remake` | – |
 | `restrict` | function | `restrict` | – | `restrict` | – | – |
 | `return_code` | type | – | – | `ReturnCode` | `ReturnCode` | – |
+| `rhs_selection` | type | `RhsSelection` | – | – | `RhsSelection` | – |
 | `run_inline_tests` | function | `run_inline_tests` | – | – | `run_inline_tests` | – |
 | `schema_error` | error | – | – | – | `SchemaError` | `SchemaError` |
 | `schema_error` | type | `SchemaError` | `SchemaError` | – | – | – |
@@ -2506,7 +2551,7 @@ deprecated alias for one minor, then removed at the next major (§10).
 | 20 | `component_graph` alias | TypeScript exports **both** `component_graph` (snake_case, violating §2) and `componentGraph`. | **DONE (phase 6).** `component_graph` is deleted. It was kept only for the (since-deleted) editor package's web components, which had already migrated to `componentGraph`; no caller outside this binding's own tests remained. | TypeScript |
 | 21 | `compiler` | Each binding picks its build strategy by inspecting the document, and a caller can neither ask for one nor read back which ran. Julia's stable entry point always builds the tree walk, so its XLA emitter is unreachable from `esm_problem`; Rust routes on whether the document is arrayed; Python routes on document content between two pathways that disagree numerically. | `esm_problem` gains the keyword `compiler` over §5.8's closed vocabulary (`interpreter` / `native` / `xla` / `mtk` / `sympy`), defaulting to a **strict** `native`, and every Problem exposes `compiler` and `compiler_report`. Julia `compiler::Symbol`, Python `compiler: str \| None`, Rust `ProblemOptions.compiler: Option<Compiler>` over a new `Compiler` enum. Adding an optional keyword is a minor (§10). Flipping the default is a behaviour change and lands together with the conformance tier that measures what it refuses (`CONFORMANCE_SPEC.md` §5.44). **DONE.** Implemented in Julia, Rust and Python: the keyword, the strict `native` default, the three selection failures and the two readbacks are live in all three, and §5.44's compiler-agreement tier carries the goldens the refusals are measured against. The specialty members land per binding on the same one-way ratchet: Python's `sympy` and Julia's `mtk` are reachable from `esm_problem` (Julia's needs ModelingToolkit loaded and is the one compiler that runs the events and implicit equations of `CONFORMANCE_SPEC.md` §5.39); Rust's `xla` reached `esm_problem` on 2026-09-22 — the emitter over the tape now builds the Problem's right-hand side and the Jacobian differenced out of it, and rust is `bindings_required` for `xla` in that tier, on a build that has the feature and the extension. Julia's `:xla` reached `esm_problem` too: the direct StableHLO emitter builds the Problem's right-hand side, compiled once per build, and hands the solver a finite-difference Jacobian through it, so every Julia member of the vocabulary is reachable from the stable entry point. | Julia, Python, Rust |
 | 22 | Rust `Compile` | Rust already exports an enum `Compile::{Auto, Always, Never}`, which decides whether a right-hand side is built **at all** — the static-versus-dynamic question — and says nothing about *which* compiler builds it. Beside item 21's `Compiler` the two names differ by one letter and mean different things, which is exactly the confusion §2 exists to prevent — and the collision is worse on the struct than on the type, since item 21 puts a field `compiler` next to the existing field `compile` on the same `ProblemOptions`. | Rename the type to `Rhs::{Auto, Always, Never}` and the field to `rhs`, keeping `Compile` as a deprecated type alias for one minor (§10). `Compile` is `extension` tier, so the rename is a minor. **DONE (compiler selection):** the enum is `Rhs`, the field is `ProblemOptions::rhs`, and `pub type Compile = Rhs` carried `#[deprecated(since = "0.2.0")]` for its one minor; the alias is removed. | Rust |
-| 23 | `build_evaluator` | §5.8 kept it as a documented extension seam on two grounds: it is the entry point for a caller who wants the compiled right-hand side without a Problem around it, and it has substantial downstream use. Item 21 answers both — `esm_problem(…; compiler=:xla)` *is* the compiled right-hand side, and the downstream use is one package, which migrates to that call. | **DONE.** `build_evaluator` is removed: the build is private behind `esm_problem`, and the package's own tests and conformance adapters build through the documented, unexported `EarthSciAST.Internal.build`, which flattens first and so builds exactly what `esm_problem` builds (not cross-binding API, not for callers outside this repository). The deprecated alias is gone; the downstream callers named below must move off it. The forcing-buffer seam re-hung on the Problem — `forcing_buffers(prob)` / `forcing_buffer_index(prob)` answer for **every** compiler, not only for an out-of-place build, and `sync_forcing!` takes that container — and the compiler half of `BuildInspection` is `compiler_report`, which a `BuildInspection` and an `EsmProblem` now both answer. Every in-package caller (src, ext, scripts, test, docs) moved off the name. `BuildInspection` itself stays exported: `esm_problem`'s `inspect` keyword takes one, and a build that REFUSED leaves no Problem to read the partial report off. ReSEACT (`run_reseact_reactant.jl`, `tools/adjoint_gradient.jl`, `tools/rx_adjoint_check.jl`, `tools/sensitivity_forward.jl`, `tools/diag/*`, `prototypes/*`) calls `EA.build_evaluator(doc; form = :oop, …)` on each half of an operator-split document, reads `EA.forcing_buffers(fo)` off the product, mirrors it to device arrays and re-syncs with `EA.sync_forcing!` at each cadence boundary, and then traces its OWN macro step — advection plus sub-cycled chemistry over one window — of which the emitted right-hand side is a COMPONENT. `EarthSciASTDiff.prepare_jacobian` reaches the same seam through `build_kwargs = (; form = :oop, …)`. With the alias removed those calls fail; they can reach the same build through `EarthSciAST.Internal.build`, which is not public API. Four things a Problem-shaped replacement still lacks: (1) a public way to obtain the out-of-place compiled intermediate representation itself, since `compiler = :xla` hands back a Problem whose `f!` is already compiled and host-in/host-out and cannot be composed into a larger traced program; (2) live forcing under `compiler = :xla`, which is a named refusal today (the device re-sync is not wired to the refresh callback's `post_refresh` hook); (3) a Problem-shaped replacement for `prepare_jacobian`'s `build_kwargs`; (4) an answer for a caller that builds SEVERAL right-hand sides from one document and drives them in one time loop, which one Problem does not describe. | Julia |
+| 23 | `build_evaluator` | §5.8 kept it as a documented extension seam on two grounds: it is the entry point for a caller who wants the compiled right-hand side without a Problem around it, and it has substantial downstream use. Item 21 answers both — `esm_problem(…; compiler=:xla)` *is* the compiled right-hand side, and the downstream use is one package, which migrates to that call. | **DONE.** `build_evaluator` is removed: the build is private behind `esm_problem`, and the package's own tests and conformance adapters build through the documented, unexported `EarthSciAST.Internal.build`, which flattens first and so builds exactly what `esm_problem` builds (not cross-binding API, not for callers outside this repository). The deprecated alias is gone; the downstream callers named below must move off it. The forcing-buffer seam re-hung on the Problem — `forcing_buffers(prob)` / `forcing_buffer_index(prob)` answer for **every** compiler, not only for an out-of-place build, and `sync_forcing!` takes that container — and the compiler half of `BuildInspection` is `compiler_report`, which a `BuildInspection` and an `EsmProblem` now both answer. Every in-package caller (src, ext, scripts, test, docs) moved off the name. `BuildInspection` itself stays exported: `esm_problem`'s `inspect` keyword takes one, and a build that REFUSED leaves no Problem to read the partial report off. ReSEACT (`run_reseact_reactant.jl`, `tools/adjoint_gradient.jl`, `tools/rx_adjoint_check.jl`, `tools/sensitivity_forward.jl`, `tools/diag/*`, `prototypes/*`) calls `EA.build_evaluator(doc; form = :oop, …)` on each half of an operator-split document, reads `EA.forcing_buffers(fo)` off the product, mirrors it to device arrays and re-syncs with `EA.sync_forcing!` at each cadence boundary, and then traces its OWN macro step — advection plus sub-cycled chemistry over one window — of which the emitted right-hand side is a COMPONENT. `EarthSciASTDiff.prepare_jacobian` reaches the same seam through `build_kwargs = (; form = :oop, …)`. With the alias removed those calls fail; they can reach the same build through `EarthSciAST.Internal.build`, which is not public API. Julia callers that own a Reactant trace can build and compose several selected right-hand sides with `operator_ir` and `emit_fragment`, passing live forcing explicitly. Remaining Problem-level work includes wiring device refresh under `compiler = :xla` and a replacement for `prepare_jacobian`'s `build_kwargs`. | Julia |
 | G-2 | `supported_migration_targets` | TypeScript and Rust spelled it `get_supported_migration_targets`; Julia, Python and Go spell it `supported_migration_targets`. One capability under two canonical names, so the manifest carried two `stable` entries for it. | **TypeScript DONE (phase 6).** `supportedMigrationTargets()` added at the canonical name over the same table `migrate` / `canMigrate` use; `getSupportedMigrationTargets` stays a deprecated alias for one minor (§10), the same function object. **Rust DONE (phase 6)** as well (`a154aa171`): `supported_migration_targets` is the definition, `get_supported_migration_targets` a `#[deprecated]` delegate. Both spellings fold under the canonical name via `ALIAS_OVERRIDES`, so the manifest carries one entry, not two. | TypeScript, Rust |
 | G-3 | `build_reference_graph` | Exported by Julia, Python, Rust and Go; **absent in TypeScript** — a four-of-five gap in a `stable` symbol that no row above covered. | **DONE (phase 6).** TypeScript gains `buildReferenceGraph`, plus the rest of the module's public surface (`resolveReferences`, `ReferenceGraph`, `ReferenceVertex`, `ReferenceEdge`, `VertexKind`, `EdgeKind`, `ReferenceResolutionError`), so the family is 5/5. See item 17 for the signature and the cross-binding verification. | TypeScript |
 | H-4 | Python layering | Python re-exported the whole `data_sources` loader stack through the top-level `__all__` — 32 spellings, of which 29 were `extension`-tier and Python-only — so `import earthsci_ast` handed you a data-loading toolkit as well as a format library. `xarray` and `netcdf4` sat in the BASE dependency set, which a comment justified as "the IO tier hard-depends on them". | **DONE (phase 6).** The premise was measured FALSE: no module under `earthsci_ast/` imports `xarray` or `netCDF4` at module scope — `xarray` is imported inside `data_sources._xarray._default_xarray_opener`, and `netCDF4` is never imported by this package at all (it is the engine xarray selects). With all three of `xarray` / `netCDF4` / `scipy` blocked by an import hook, `import earthsci_ast` already succeeded and `__all__` was still the full 272, so nothing had to be restructured to make the split possible. The 29 `extension` spellings left `__all__` and now live only on `earthsci_ast.data_sources`; Python's declared surface is **272 -> 243**. The three `stable` spellings in that block — `apply_unit_conversion`, `parse_unit_conversion`, `UnitConversionError` — were **deliberately KEPT** at the top level: Julia defines them in core `src/unit_conversion.jl` (not `EarthSciASTEarthSciIOExt`), TypeScript exports `UnitConversionError` from its index, and §6 carries all three as `stable`, so dropping them would have made Python the sole non-conformant binding and downgraded a stable symbol. The manifest's `stable` count is unchanged at 272 — every symbol removed was `extension`. `xarray` / `netcdf4` moved to a new `data` extra; `scipy` had already moved to `simulate` in an earlier round, per esm-libraries-spec §2.4 / §2.5.9. A missing optional dependency is reported at the point of use, naming the extra. | Python |

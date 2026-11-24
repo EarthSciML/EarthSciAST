@@ -1140,6 +1140,114 @@
       "note": "A variable's element_type governs the precision of every operation over it, not only the rounding where its data enters."
     },
     {
+      "id": "spec.11.3.2.report-integrator-precision",
+      "section": "11.3.2",
+      "quote": "binding MUST report the precisions it uses for state, time, norms and linear algebra in solution metadata.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "The time integrator reports the arithmetic used for state, time, norms and linear algebra."
+    },
+    {
+      "id": "spec.11.3.2.store-declared-state-precision",
+      "section": "11.3.2",
+      "quote": "Each accepted state value MUST be stored at the variable's precision.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "Each accepted state value is representable at the declared element type and stored there across steps."
+    },
+    {
+      "id": "spec.11.3.2.round-stage-and-newton-inputs",
+      "section": "11.3.2",
+      "quote": "Stage values and Newton iterates MUST be rounded by the time the model reads them.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "The integrator may use wider intermediate arithmetic before values enter the model."
+    },
+    {
+      "id": "spec.11.3.2.float32-relative-tolerance-floor",
+      "section": "11.3.2",
+      "quote": "A relative tolerance below 2⁻²² for a Float32 state MUST be refused with",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "The integration refusal reports the tolerance and the source chosen by the resolution chain."
+    },
+    {
+      "id": "spec.11.3.2.refuse-unsupported-integration",
+      "section": "11.3.2",
+      "quote": "A binding unable to meet these requirements MUST refuse the integration with `float32_unsupported`, naming the unsupported construct.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "A solver must honour the state precision contract or identify what it cannot integrate."
+    },
+    {
+      "id": "spec.11.3.3.omitted-choice-is-binary64",
+      "section": "11.3.3",
+      "quote": "The consumer MUST use binary64 for an automatic or omitted choice.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "An external consumer given no explicit precision choice evaluates unspecified variables in binary64; the model has no external consumer or run configuration."
+    },
+    {
+      "id": "spec.11.3.3.precision-choice-conflict",
+      "section": "11.3.3",
+      "quote": "A choice that introduces a precision mismatch under §11.3.1 MUST fail with `precision_choice_conflict`, naming the variables, declaration and request.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "An external precision request that would mix precisions in one operator or equation is refused with precision_choice_conflict; it depends on a consumer request the model does not represent."
+    },
+    {
+      "id": "spec.11.3.3.precision-choice-no-eligible-variable",
+      "section": "11.3.3",
+      "quote": "A binary32 request with no eligible variable that the group reads or writes also MUST fail with that code.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "A binary32 request whose evaluation group reads or writes no unspecified variable is refused with precision_choice_conflict."
+    },
+    {
+      "id": "spec.11.3.3.tolerance-below-working-precision",
+      "section": "11.3.3",
+      "quote": "For binary32 state storage, a resolved relative tolerance below 2⁻²² MUST fail with `tolerance_below_working_precision`, naming the tolerance's source and the request.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "A consumer storing state in binary32 refuses a resolved relative tolerance below 2^-22; it depends on an integrator the model does not run."
+    },
+    {
+      "id": "spec.11.3.3.choice-preserves-tolerances",
+      "section": "11.3.3",
+      "quote": "The choice MUST preserve integration and assertion tolerances.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "A precision choice leaves the resolved integration and inline-assertion tolerances unchanged."
+    },
+    {
+      "id": "spec.11.3.3.refuse-unspecified-key",
+      "section": "11.3.3",
+      "quote": "A consumer MUST refuse binary32 evaluation of an unspecified variable directly used as an operand of `==` or `!=`, or as a `join.on` key, with `key_precision_unspecified` naming the variable and expression.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "Binary32 evaluation of an unspecified variable used directly as an equality operand or join key is refused with key_precision_unspecified; it depends on an external evaluation request."
+    },
+    {
+      "id": "spec.11.3.3.results-carry-precision-record",
+      "section": "11.3.3",
+      "quote": "MUST carry the precision record below.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "Every result a consumer produces under a run configuration carries the canonical precision record; it depends on consumer output the model does not produce."
+    },
+    {
       "id": "spec.11.4.ic-coordinate-symbols-declared",
       "section": "11.4",
       "quote": "Those symbols are implicitly declared and MUST NOT be reported as `undefined_variable` (§4.9.1).",

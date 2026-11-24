@@ -55,6 +55,7 @@ struct _LaneGather
     subs::Vector{ASTExpr}
     vars::Vector{Pair{String, Int}}   # loop variable → lane-set row of `cells`
     consts::AbstractDict             # the const arrays a subscript may read
+    columns::Vector{Pair{String, UnitRange{Int}}}
 end
 
 # Copy plan of one variable between the lane layout and the internal layout.
@@ -118,6 +119,7 @@ mutable struct _LaneSpec <: _RangeSpec
     obs_shapes::Dict{String, Vector{String}}
     params::Dict{String, Int}
     ext::Dict{String, Int}
+    fragment::Bool
 end
 
 _lane_refuse(rule, why) = _refuse_rule(_rule_display(rule), "lane: $why")
@@ -175,6 +177,7 @@ end
 struct _LaneScope
     lanevars::Dict{String, String}
     first::String
+    columns::Dict{String, UnitRange{Int}}
 end
 
 function _lane_value(spec::_LaneSpec, sc::_LaneScope, set::String)
@@ -202,8 +205,35 @@ function _lane_rewrite(spec::_LaneSpec, ctx, e::ASTExpr, sc::_LaneScope, rule::S
                 "an aggregate rebinds the lane index '$k'"
             )
         end
+        if spec.fragment
+            # The node's bound indices become columns of a lane gather in the
+            # fields that see them. `args` and the range bounds keep the
+            # outer scope; every other expression field (`expr`, `filter`,
+            # `key`, …) is rewritten in the node's scope, so no field is
+            # skipped that the in-place program rewrites through `map_children`.
+            columns = copy(sc.columns)
+            _lane_column_ranges!(columns, spec, o.ranges)
+            body = _LaneScope(sc.lanevars, sc.first, columns)
+            return _map_children_scoped(
+                x -> _lane_rewrite(spec, ctx, x, sc, rule),
+                x -> _lane_rewrite(spec, ctx, x, body, rule), o, (:args, :ranges)
+            )
+        end
     end
     return map_children(x -> _lane_rewrite(spec, ctx, x, sc, rule), o)
+end
+
+# `map_children` with two rewrites: `outer` for the fields named in
+# `outer_fields`, `inner` for every other expression field of the node. The
+# field walk is the one `map_children` runs, so a new expression field of
+# `OpExpr` is never dropped.
+function _map_children_scoped(outer::F, inner::G, o::OpExpr, outer_fields) where {F, G}
+    kw = map(_MAPPED_FIELDS) do fld
+        f = fld in outer_fields ? outer : inner
+        mapper = getfield(@__MODULE__, getfield(_MAP_CHILD_FN, OPEXPR_FIELD_TABLE[fld].kind))
+        fld => mapper(f, getfield(o, fld))
+    end
+    return reconstruct(o; kw...)
 end
 
 function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, rule::String)
@@ -241,19 +271,29 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
         # build's data, not from a call's parameters or forcing set.
         other = [
             r for r in refs if !haskey(sc.lanevars, r) &&
-                !(haskey(ctx.arrays, r) && !(r in ctx.livein))
+                (haskey(sc.columns, r) || !(haskey(ctx.arrays, r) && !(r in ctx.livein)))
         ]
-        if !isempty(lane) && isempty(other)
+        if !isempty(lane) && all(r -> haskey(sc.columns, r), other)
+            sort!(lane; by = r -> (findfirst(==(sc.lanevars[r]), spec.sets), r))
+            columns = [r => sc.columns[r] for r in sort!(other)]
             k = length(spec.gathers) + 1
-            buf = zeros(spec.C)
+            shape = (spec.C, length.(last.(columns))...)
+            buf = zeros(prod(shape))
             push!(
                 spec.gathers, _LaneGather(
                     buf, ctx.arrays[n], collect(Int, size(ctx.arrays[n])), n, subs,
-                    [r => findfirst(==(sc.lanevars[r]), spec.sets) for r in lane], ctx.arrays
+                    [r => findfirst(==(sc.lanevars[r]), spec.sets) for r in lane], ctx.arrays,
+                    columns
                 )
             )
-            ctx.live["__lane_in_$k"] = buf
-            return OpExpr("index", ASTExpr[VarExpr("__lane_in_$k"), VarExpr(sc.first)])
+            ctx.live["__lane_in_$k"] = isempty(columns) ? buf : reshape(buf, shape)
+            idx = ASTExpr[VarExpr("__lane_in_$k"), VarExpr(sc.first)]
+            for (r, range) in columns
+                sub = VarExpr(r)
+                shift = first(range) - 1
+                push!(idx, shift == 0 ? sub : OpExpr("-", ASTExpr[sub, IntExpr(shift)]))
+            end
+            return OpExpr("index", idx)
         end
     end
     if _index_target_kind(target) === _IT_MAKEARRAY
@@ -317,7 +357,42 @@ function _lane_scope_ranges(
         end
     end
     isempty(first) && _lane_refuse(rule, "it carries none of the lane sets")
-    return _LaneScope(lanevars, first), newr
+    columns = Dict{String, UnitRange{Int}}()
+    if spec.fragment
+        _lane_column_ranges!(columns, spec, ranges)
+        for n in keys(lanevars)
+            delete!(columns, n)
+        end
+    end
+    return _LaneScope(lanevars, first, columns), newr
+end
+
+function _lane_column_ranges!(columns, spec, ranges)
+    for (name, r) in pairs(ranges)
+        n = String(name)
+        if r isa AbstractDict && haskey(r, "from") && haskey(spec.ext, r["from"])
+            columns[n] = 1:spec.ext[r["from"]]
+        elseif r isa AbstractVector && length(r) == 2
+            a, b = map(x -> x isa Integer ? Int(x) : x isa IntExpr ? x.value : nothing, r)
+            if a !== nothing && b !== nothing
+                columns[n] = a:b
+            else
+                delete!(columns, n)
+            end
+        else
+            delete!(columns, n)
+        end
+    end
+    return columns
+end
+
+# Resolve the subscript with the same compiler used for integer gather nodes.
+# Index symbols become input slots of this small expression program.
+function _compile_lane_subscripts(g::_LaneGather)
+    names = [first.(g.vars); first.(g.columns)]
+    slots = Dict(n => i for (i, n) in enumerate(names))
+    rc = _ResolveCtx(Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), slots, copy(g.consts))
+    return [_compile(_resolve_indices(e, rc), slots, Set{Symbol}()) for e in g.subs]
 end
 
 function _range_restrict_parts(
@@ -471,7 +546,12 @@ A read that leaves the cell (or the column) raises `compiler_refused_rule`
 naming the rule; lane sets that do not fit the program raise
 `range_box_invalid`.
 """
-function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
+lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK) =
+    _lanes(op, kind, sets, chunk)
+
+function _lanes(
+        op::RhsProgram, kind::Symbol, sets, chunk::Int; form = :inplace, shared_aux = Set{String}()
+    )
     _require_native(op, "lanes")
     kind in (:cells, :columns) || throw(
         _box_invalid(
@@ -483,6 +563,7 @@ function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
     isempty(S) && throw(_box_invalid("", "no lane sets were given"))
     shapes = _array_shapes(op)
     for n in vcat(op.writes, op.aux_names)
+        n in shared_aux && continue
         sh = get(shapes, n, nothing)
         sh === nothing && throw(
             _box_invalid(
@@ -513,7 +594,7 @@ function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
             )
         )
     end
-    inst = _lane_instance(op, kind, S, chunk)
+    inst = _lane_instance(op, kind, S, chunk; form)
     internal = inst.internal
     # ---- the lane layout and its copy plans ----
     function blocks(names)
@@ -521,6 +602,12 @@ function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
         plans = _LaneCopy[]
         off = 0
         for n in names
+            if n in shared_aux
+                push!(out, LaneBlock(n, String[], Int[], off))
+                push!(plans, _LaneCopy(off, [internal.scalars[n]], 0))
+                off += 1
+                continue
+            end
             sh = shapes[n]
             ib = _layout_block(internal, n)
             nl = [d for d in eachindex(sh) if !(sh[d] in S)]
@@ -558,6 +645,7 @@ function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
                 "but no forcing slot"
         )
     end
+    form === :oop && return (; inst..., layout, uplan, aplan, gslots)
     return LaneProgram(
         op, S, chunk, inst.f!, internal, layout, inst.index_bufs,
         inst.gathers, gslots, uplan, aplan, inst.params,
@@ -570,16 +658,17 @@ end
 
 # One compiled lane program: its right-hand side, the live lane buffers it
 # reads, its gathers and its build's forcing epoch.
-function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::Int)
+function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::Int; form = :inplace)
     index_bufs = Dict{String, Vector{Float64}}(s => zeros(chunk) for s in S)
     spec = _LaneSpec(
         kind, S, chunk, _array_shapes(op), index_bufs, _LaneGather[],
         Set{String}(), Dict{String, Vector{String}}(), Dict{String, Int}(),
-        _program_sets(op)
+        _program_sets(op), form === :oop
     )
     # The lane-index buffers are live forcing buffers of the build.
     file, model_name, recorded = op.front
     opts = _relower_options(recorded)
+    opts.form = form
     pa = Dict{String, Any}(
         String(k) => v for (k, v) in something(opts.param_arrays, Dict{String, Any}())
     )

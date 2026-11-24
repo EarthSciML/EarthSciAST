@@ -9,7 +9,7 @@
 //! so neither assembles these stages by hand and they run in one order. Their
 //! product, [`NormalizedModel`], is the only input the later stages accept.
 
-use super::compile::{apply_shape_rewrites, model_from_flattened};
+use super::compile::{apply_shape_rewrites_with, model_from_flattened};
 use super::recurrence_group::lower_recurrence_groups;
 use super::shape_table::ShapeTable;
 use super::{HashMap, IndexSet};
@@ -49,6 +49,9 @@ pub(crate) struct NormalizedModel {
     /// Every variable's index-set axes, declared or decided by the build
     /// (esm-spec §4.3.4, §9.6.11), and the variables only data can shape.
     pub(crate) shapes: ShapeTable,
+    /// The flattened system's operator registry, which the references of
+    /// [`Self::model`] resolve against (esm-spec §9.6.4 rule 7).
+    pub(crate) operators: crate::operator_refs::OperatorRegistry,
 }
 
 /// Normalize `input` against the document's `index_sets` registry. The stages
@@ -66,6 +69,11 @@ pub(crate) fn normalize(
     input: BuildInput<'_>,
     mut index_sets: HashMap<String, IndexSet>,
 ) -> Result<NormalizedModel, CompileError> {
+    let mut registry = match &input {
+        BuildInput::Local { flat, .. } | BuildInput::Flattened { flat, .. } => {
+            flat.template_registry.clone()
+        }
+    };
     let (mut model, inherited) = match input {
         BuildInput::Local { flat, model: local } => {
             // esm-spec §4.2: a right-hand-side `D` flatten could not resolve is
@@ -82,12 +90,15 @@ pub(crate) fn normalize(
         }
         BuildInput::Flattened { flat, inherited } => (model_from_flattened(flat), inherited),
     };
-    let mut shapes = apply_shape_rewrites(&mut model, &index_sets, inherited)?;
+    // The lift may add definitions; the build resolves against the result.
+    let mut shapes = apply_shape_rewrites_with(&mut model, &index_sets, inherited, &mut registry)?;
+    let operators = crate::operator_refs::OperatorRegistry::from_json(registry.iter());
     shapes.record_stacked(lower_recurrence_groups(&mut model, &mut index_sets)?);
     Ok(NormalizedModel {
         model,
         index_sets,
         shapes,
+        operators,
     })
 }
 

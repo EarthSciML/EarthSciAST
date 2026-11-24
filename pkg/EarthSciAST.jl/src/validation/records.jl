@@ -114,13 +114,27 @@ struct UnitWarning
 end
 
 """
+    ValidationWarning
+
+An advisory validation finding that is not about units: a stable diagnostic
+`code`, the JSON `path` it concerns and a `message`. It never changes
+`is_valid`.
+"""
+struct ValidationWarning
+    code::String
+    path::String
+    message::String
+end
+
+"""
     ValidationResult
 
 Combined validation result containing schema errors, structural errors,
-unit warnings, and overall validation status.
+unit warnings, non-unit `warnings`, and overall validation status.
 
-The four-field shape (`is_valid`, `schema_errors`, `structural_errors`,
-`unit_warnings`) is pinned by `ESM_COMPLIANCE_VALIDATION_MATRIX.md` VALID-03-A.
+The fields `is_valid`, `schema_errors`, `structural_errors` and
+`unit_warnings` are pinned by `ESM_COMPLIANCE_VALIDATION_MATRIX.md` VALID-03-A;
+`warnings` holds [`ValidationWarning`](@ref)s.
 
 `unit_warnings` mirrors the TS/Python/Go bindings' `ValidationResult` shape:
 unit findings appear both here (as [`UnitWarning`](@ref) records) and as
@@ -132,11 +146,19 @@ struct ValidationResult
     schema_errors::Vector{SchemaError}
     structural_errors::Vector{StructuralError}
     unit_warnings::Vector{UnitWarning}
+    warnings::Vector{ValidationWarning}
 end
 
 # Constructor for ValidationResult
-ValidationResult(schema_errors::Vector{SchemaError}, structural_errors::Vector{StructuralError}; unit_warnings::Vector{UnitWarning} = UnitWarning[]) =
-    ValidationResult(isempty(schema_errors) && isempty(structural_errors), schema_errors, structural_errors, unit_warnings)
+ValidationResult(
+    schema_errors::Vector{SchemaError}, structural_errors::Vector{StructuralError};
+    unit_warnings::Vector{UnitWarning} = UnitWarning[],
+    warnings::Vector{ValidationWarning} = ValidationWarning[]
+) =
+    ValidationResult(
+    isempty(schema_errors) && isempty(structural_errors), schema_errors, structural_errors,
+    unit_warnings, warnings
+)
 
 """
     SchemaValidationError <: EarthSciASTError

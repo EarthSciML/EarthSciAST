@@ -161,22 +161,29 @@ mutable struct _TileSpec <: _RangeSpec
     xeqs::IdDict{Any, Any}
     fixed::IdDict{Any, Dict{Int, Any}}
     memo::Union{Nothing, _ProgramMemo}          # the program's (`_ProgramMemo`)
+    coordinate_axes::Vector{String}
+    coordinate_boxes::Vector{UnitRange{Int}}
+    share_native_code::Bool
 end
 
-_TileSpec(mode, axes, owned, storage, shapes, writes, ctx, memo = nothing) =
+_TileSpec(
+    mode, axes, owned, storage, shapes, writes, ctx, memo = nothing;
+    coordinate_axes = String[], share_native_code = true
+) =
     _TileSpec(
     mode, axes, owned, storage, shapes, writes, ctx,
     Dict{String, Tuple{String, Vector{Bool}}}(),
     Dict{Tuple{String, Vector{Tuple{Int, Int}}}, Vector{UnitRange{Int}}}(),
     Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), IdDict{Any, Any}(),
-    IdDict{Any, Any}(), IdDict{Any, Dict{Int, Any}}(), memo
+    IdDict{Any, Any}(), IdDict{Any, Dict{Int, Any}}(), memo,
+    coordinate_axes, fill(1:0, length(coordinate_axes)), share_native_code
 )
 
-# Whether a tile shares its code with the operator's other tiles: always, but
-# for one whose storage crosses a periodic seam (its far-side blocks have no
-# counterpart in another tile's layout).
+# Native code shares whole-domain box kernels when their layout can be rebased.
+# The out-of-place fragment instead batches the tile's clipped kernels, so
+# emitting an entire column never requires a separate kernel per level.
 _tile_shares_code(spec::_TileSpec) =
-    spec.mode === :tile && spec.ctx !== nothing && isempty(spec.ctx.seams)
+    spec.share_native_code && spec.mode === :tile && spec.ctx !== nothing && isempty(spec.ctx.seams)
 _range_shared_code(spec::_TileSpec) = _tile_shares_code(spec)
 _range_memo(spec::_TileSpec) = spec.memo
 
@@ -524,7 +531,7 @@ function _range_restrict_parts(
     _need_drain!(ctx)
     spec.mode === :halo && throw(_HaloDone(ctx))
     isempty(ctx.seams) || (eqs = _seam_equations(ctx, spec, eqs))
-    return _with_equations(parts, eqs)
+    return _with_equations(parts, _tile_coordinates!(spec, eqs, param_arrays))
 end
 
 # ---- Reads past a periodic seam ----
@@ -1069,11 +1076,15 @@ function halo(op::RhsProgram, dec::Decomposition)
         err isa _HaloDone || rethrow()
         err.ctx
     end
+    return _halo_reach(ctx)
+end
+
+function _halo_reach(ctx::_NeedCtx)
     out = Dict{Tuple{String, String}, Tuple{Int, Int}}()
     for n in ctx.reads
         n in ctx.states || continue
         for s in ctx.shapes[n]
-            haskey(m.cut, s) || continue
+            haskey(ctx.axes.cut, s) || continue
             lo, hi = get(ctx.reach, (n, s), (0, 0))
             out[(n, s)] = (max(0, -lo), max(0, hi))
         end
@@ -1095,7 +1106,10 @@ periodic image in it raises `range_halo_insufficient`; a 0-d state write or a
 contraction, scan or data-dependent gather along a cut axis raises
 `range_global_locality`; a box that does not fit raises `range_box_invalid`.
 """
-function restrict(op::RhsProgram, dec::Decomposition; owned, storage)
+restrict(op::RhsProgram, dec::Decomposition; owned, storage) =
+    _restrict(op, dec; owned, storage)
+
+function _restrict(op::RhsProgram, dec::Decomposition; owned, storage, form = :inplace, relocate = false)
     _require_native(op, "restrict")
     m = _axis_model(op, dec)
     ow = _axis_boxes(m, owned, "owned")
@@ -1126,8 +1140,12 @@ function restrict(op::RhsProgram, dec::Decomposition; owned, storage)
         )
     end
     shapes = _array_shapes(op)
-    spec = _TileSpec(:tile, m, ow, st, shapes, Set(op.writes), nothing, op.memo)
-    f!, internal, cap, pa = _relower(op, spec)
+    axes = relocate ? first.(dec.axes) : String[]
+    spec = _TileSpec(
+        :tile, m, ow, st, shapes, Set(op.writes), nothing, op.memo;
+        coordinate_axes = axes, share_native_code = form === :inplace
+    )
+    f!, internal, cap, pa = _relower(op, spec; form)
     # ---- the tile's layout and copy maps ----
     gb = Dict{String, Vector{UnitRange{Int}}}(
         b.name => UnitRange{Int}[b.lo[d]:b.hi[d] for d in eachindex(b.lo)]
@@ -1167,8 +1185,15 @@ function restrict(op::RhsProgram, dec::Decomposition; owned, storage)
     end
     foreach(sort!, values(extra))
     maps = _copy_maps(layout, internal, to_internal, extra)
+    if form === :oop
+        origin = Int[first(ow[a]) for a in axes]
+        coordinates = [(first(b) - o):(last(b) - o) for (b, o) in zip(spec.coordinate_boxes, origin)]
+        return (; f!, layout, maps, reach = _halo_reach(spec.ctx), coordinates, origin)
+    end
     return TileProgram(
         op, f!, internal, layout, maps,
         _derived_shared(op.shared, f!, length(internal), cap, pa)
     )
 end
+
+include("tile_coordinates.jl")

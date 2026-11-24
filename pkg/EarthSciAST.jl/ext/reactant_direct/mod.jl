@@ -57,4 +57,7 @@ include("emit.jl")
 include("batch.jl")
 include("device.jl")
 include("api.jl")
+include("fragment.jl")
 include("problem.jl")
+
+_de_skip_rewrite!()

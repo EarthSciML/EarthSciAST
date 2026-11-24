@@ -262,7 +262,8 @@ fn assert_rhs_agrees(label: &str, native: &EsmProblem, interp: &EsmProblem) {
 fn assert_trajectory_agrees(label: &str, native: &EsmProblem, interp: &EsmProblem, var: &str) {
     let o = SolveOptions {
         alg: Alg::Erk,
-        reltol: Some(1e-8),
+        // The same controller options are used for both compilers and every state precision.
+        reltol: Some(1e-6),
         abstol: Some(1e-10),
         saveat: Some(vec![0.0, 0.25, 0.5]),
         output_observed: vec![var.to_string()],

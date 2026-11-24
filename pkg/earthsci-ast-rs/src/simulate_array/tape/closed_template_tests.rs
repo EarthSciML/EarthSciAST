@@ -168,6 +168,15 @@ fn template_regrid(n: usize, dx: f64) -> Value {
 
 /// The largest element count any instruction of `prog` writes.
 fn widest(prog: &super::ir::TapeProgram) -> usize {
+    // The widest box of the program and of every function it calls.
+    let own = widest_own(prog);
+    prog.funcs
+        .iter()
+        .map(|f| widest_own(f))
+        .fold(own, usize::max)
+}
+
+fn widest_own(prog: &super::ir::TapeProgram) -> usize {
     prog.instrs
         .iter()
         .map(|ins| match ins {

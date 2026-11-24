@@ -757,8 +757,7 @@ fn eval_observed(
     // exact key still rounds its accumulator, which is enough to turn
     // `2260007005` back into `2260006912`. A no-op swap for every document
     // that declares no per-variable element type.
-    let _rule_precision = crate::precision::has_variable_overrides()
-        .then(|| crate::precision::enter(crate::precision::of_variable(name)));
+    let _rule_precision = crate::precision::enter_variable(name);
     // A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) cannot be evaluated
     // wholesale: its cells are not independent, and the self-read would
     // resolve against a map that does not yet hold the array being built.
@@ -1585,6 +1584,11 @@ struct BuildState<'o> {
     arrays: ArrMap,
     /// The CONST-ARRAY registry (see [`BuildState::seal_const_registry`]).
     const_scope: ConstArrayScope,
+    /// The operator registry the model's references resolve against.
+    operators: crate::operator_refs::OperatorRegistry,
+    /// Its instances, each body resolved as an observed definition is
+    /// ([`BuildState::collect_observed_defs`]).
+    ops: std::sync::Arc<crate::operator_refs::Instances>,
     /// Observed definitions, their dependency summaries, their join-free
     /// partition, and dependency order.
     defs: HashMap<String, Expr>,
@@ -1727,6 +1731,7 @@ impl<'o> BuildState<'o> {
             t: self.opts.t0,
             derived_extents: extents,
             const_arrays: &self.const_scope,
+            ops: &self.ops,
         }
     }
 
@@ -1819,6 +1824,7 @@ impl<'o> BuildState<'o> {
             model,
             index_sets,
             shapes,
+            operators,
         } = normalized;
         let built_variables = BuiltVariables {
             shapes: std::sync::Arc::new(shapes),
@@ -1843,6 +1849,8 @@ impl<'o> BuildState<'o> {
             param_names,
             arrays: ArrMap::default(),
             const_scope: ConstArrayScope::default(),
+            operators,
+            ops: Default::default(),
             defs: HashMap::new(),
             deps: Default::default(),
             join_free: HashSet::new(),
@@ -2310,9 +2318,14 @@ impl<'o> BuildState<'o> {
                 .values()
                 .filter_map(|is| is.member_factor.clone()),
         );
-        crate::simulate_array::check_free_variables(&self.model, &self.index_sets, &extra)
-            // The compile path's own refusal, unchanged.
-            .map_err(SimulateError::Compile)
+        crate::simulate_array::check_free_variables(
+            &self.model,
+            &self.index_sets,
+            &extra,
+            &self.operators,
+        )
+        // The compile path's own refusal, unchanged.
+        .map_err(SimulateError::Compile)
     }
 
     /// Observed definitions + the join-free partition.
@@ -2341,6 +2354,12 @@ impl<'o> BuildState<'o> {
                 .built_variables
                 .shapes
                 .declared_map(|n| self.model.variables.contains_key(n));
+            self.ops = std::sync::Arc::new(crate::simulate_array::build_instances(
+                self.operators.clone(),
+                &self.index_sets,
+                var_shapes.clone(),
+                &self.extents,
+            ));
             for e in defs.values_mut() {
                 crate::join::resolve_overlap_syms_expr(e, &var_shapes);
                 crate::join::check_overlap_factor_ranks(e, &var_shapes)
@@ -2468,6 +2487,7 @@ impl<'o> BuildState<'o> {
             &self.index_sets,
             Some(&self.arrays),
             &params,
+            &self.ops,
         )
         .map_err(|e| stage_err("value invention", e))?;
         // A member id is needed where a set feeds one back (a `member_factor`,
@@ -2484,6 +2504,18 @@ impl<'o> BuildState<'o> {
         }
         self.members = members;
         self.extents = vi.extents;
+        // The instance bodies' ranges are resolved against the extents value
+        // invention just counted, as the observed definitions are.
+        let var_shapes = self
+            .built_variables
+            .shapes
+            .declared_map(|n| self.model.variables.contains_key(n));
+        self.ops = std::sync::Arc::new(crate::simulate_array::build_instances(
+            self.operators.clone(),
+            &self.index_sets,
+            var_shapes,
+            &self.extents,
+        ));
         Ok(())
     }
 
@@ -2847,7 +2879,8 @@ impl<'o> BuildState<'o> {
         if !self.opts.refuse_per_cell || !crate::row_dedup::row_dedup_enabled() {
             return Ok(None);
         }
-        let Some(mut plan) = crate::row_dedup::plan(name, expr, &self.arrays) else {
+        let Some(mut plan) = crate::row_dedup::plan_in(name, expr, &self.arrays, &self.operators)
+        else {
             return Ok(None);
         };
         let fill = self.fill_shape(name).map(|mut s| {
