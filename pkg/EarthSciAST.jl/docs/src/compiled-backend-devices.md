@@ -55,12 +55,15 @@ program = Reactant.@compile donated_args = :none frag(u, aux, p, t, ())
   `forcing_slots(ir)` order. Array lengths are part of the compiled signature.
   New parameter values and forcing data of the same shape can be passed to the
   compiled program.
-- `emit_fragment(ir; eltype = Float32)` evaluates in single precision and
-  takes Float32 state and auxiliary tensors. Time, scalar parameters and
-  floating-point forcing are converted on read. The default `fold = :tree`
-  emits balanced binary folds, and a Float64 fragment still evaluates
-  subtrees of constants on the host, grouped the same way. Choose
-  `fold = :reduce` for the legacy emitter's reduction policy.
+- `operator_ir(prob; unspecified_eltype = Float32)` requests single-precision
+  evaluation for a fragment whose variables resolve to Float32 (esm-spec
+  §11.3.3). `emit_fragment(ir)` uses the resolved type. Pass Float32 state
+  and auxiliary tensors for single-precision evaluation. Time, scalar
+  parameters and floating-point forcing are converted on read.
+- Float32 fragments round after each operation and accumulate in expression
+  order. For Float64 fragments, `fold = :tree` emits balanced binary folds
+  and evaluates constant subtrees on the host with the same grouping.
+  `fold = :reduce` uses the legacy emitter's reduction policy.
 - `Tile(dec; owned, storage)` uses the native tile boxes. The output uses the
   tile storage layout, with zeros outside owned rows. `halo(ir)` reports the
   state reach of that tile. Pass compact column-major windows in

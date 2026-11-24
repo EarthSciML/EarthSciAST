@@ -77,26 +77,75 @@ struct OperatorIR{F, L, M, T, E, K}
     params::Vector{String}
     forcing::Vector{ForcingSlot}
     kernel::K
+    working_eltype::Type
 end
-OperatorIR(f, layout, maps, target, extra, params, forcing) =
-    OperatorIR(f, layout, maps, target, extra, params, forcing, nothing)
+OperatorIR(f, layout, maps, target, extra, params, forcing, kernel = nothing) =
+    OperatorIR(f, layout, maps, target, extra, params, forcing, kernel, Float64)
+
+function _operator_eltype(prog::RhsProgram, requested::Type)
+    requested in (Float32, Float64) ||
+        throw(ArgumentError("unspecified_eltype must be Float32 or Float64"))
+    requested === Float64 && return Float64
+
+    file = prog.seed.prep.file
+    source = if file === nothing
+        dom = prog.flat.domain
+        something(dom === nothing ? nothing : dom.element_type, "Float64")
+    else
+        precision_source(file)
+    end
+    request = "operator_ir(…; unspecified_eltype = Float32)"
+    conflict(msg) = throw(_range_error(ERROR_CODES.PRECISION_CHOICE_CONFLICT, "$request: $msg"))
+    source == "unspecified" || conflict("the document declares $source working precision")
+
+    flat = expand_flattened_refs(prog.flat)
+    variables = merge(flat.parameters, flat.observed_variables, flat.state_variables)
+    used = Set{String}(prog.writes)
+    union!(used, prog.aux_names)
+    for (i, eq) in enumerate(flat.equations), expr in (eq.lhs, eq.rhs)
+        _referenced_var_names(expr, used)
+        _visit_keys(expr, String[]) do key, op
+            var = get(variables, key, nothing)
+            var === nothing && return
+            push!(used, key)
+            var.element_type === nothing && throw(
+                _range_error(
+                    ERROR_CODES.KEY_PRECISION_UNSPECIFIED,
+                    "$request: $key has unspecified precision in $op in operator equation $i"
+                )
+            )
+        end
+    end
+    names = sort!([name for name in used if haskey(variables, name)])
+    eligible = filter(n -> variables[n].element_type === nothing, names)
+    isempty(eligible) && conflict(
+        "no variable read or written has unspecified precision; variables: " * join(names, ", ")
+    )
+    for name in names
+        variables[name].element_type == "Float64" || continue
+        conflict("$name declares Float64, while $(first(eligible)) resolves to Float32. A fragment uses one working precision.")
+    end
+    return Float32
+end
 
 """
-    operator_ir(prob; select = RhsSelection(), target = Whole(), outputs = :du)
-    operator_ir(prog::RhsProgram; target = Whole())
+    operator_ir(prob; select = RhsSelection(), target = Whole(), outputs = :du, unspecified_eltype = Float64)
+    operator_ir(prog::RhsProgram; target = Whole(), unspecified_eltype = Float64)
 
 Build the out-of-place tree-walk IR for a selected operator. Its state and
 forcing tensors are described by [`ir_layout`](@ref), [`parameter_names`](@ref)
 and [`forcing_slots`](@ref). With `outputs = KernelOutputs(spec)`, compile the
 named kernel against the Problem, using its `u` and `z` inputs.
+Set `unspecified_eltype = Float32` to build a binary32 fragment for a group
+whose variables all resolve to Float32 under esm-spec §11.3.3.
 """
 function operator_ir(
         prob::EsmProblem; select::RhsSelection = RhsSelection(),
-        target = Whole(), outputs = :du
+        target = Whole(), outputs = :du, unspecified_eltype::Type = Float64
     )
     if outputs isa KernelOutputs
         (select.writes === :all && select.terms === :all) || throw(ArgumentError("kernel specifications define their own selection"))
-        return _kernel_operator_ir(prob, outputs, target)
+        return _kernel_operator_ir(prob, outputs, target; unspecified_eltype)
     end
     outputs === :du || throw(ArgumentError("outputs must be :du or a KernelOutputs"))
     op = rhs_program(prob)
@@ -112,7 +161,7 @@ function operator_ir(
         )
         op = EarthSciAST.select(op; select.writes, select.terms)
     end
-    return operator_ir(op; target)
+    return operator_ir(op; target, unspecified_eltype)
 end
 
 function _operator_build(prog::RhsProgram)
@@ -125,19 +174,22 @@ function _operator_build(prog::RhsProgram)
     return f
 end
 
-operator_ir(prog::RhsProgram; target = Whole()) = _rhs_operator_ir(prog, target)
+operator_ir(prog::RhsProgram; target = Whole(), unspecified_eltype::Type = Float64) =
+    _rhs_operator_ir(prog, target; unspecified_eltype)
 
 # `slots` is the forcing signature of the IR. Tile forcing windows are
 # computed against it by name, so `ir.extra.windows[i]` is the window of
 # `ir.forcing[i]`: a kernel's IR passes its kernel set's signature, which the
 # kernel program reads by name.
 function _rhs_operator_ir(
-        prog::RhsProgram, target; shared_aux = Set{String}(), slots = forcing_slots(prog)
+        prog::RhsProgram, target; shared_aux = Set{String}(), slots = forcing_slots(prog),
+        unspecified_eltype::Type = Float64
     )
+    T = _operator_eltype(prog, unspecified_eltype)
     params = parameter_names(prog)
     slots = copy(slots)
     if target isa Whole
-        return OperatorIR(_operator_build(prog), prog.layout, prog.maps, target, nothing, params, slots)
+        return OperatorIR(_operator_build(prog), prog.layout, prog.maps, target, nothing, params, slots, nothing, T)
     elseif target isa Tile
         if target.class === nothing
             tile = _restrict(prog, target.decomposition; target.owned, target.storage, form = :oop)
@@ -151,13 +203,13 @@ function _rhs_operator_ir(
             windows = target.class.windows[Tuple(tile.origin)]
         end
         info = (; tile.reach, windows, tile.coordinates)
-        return OperatorIR(tile.f!, tile.layout, tile.maps, target, info, params, slots)
+        return OperatorIR(tile.f!, tile.layout, tile.maps, target, info, params, slots, nothing, T)
     elseif target isa Lanes
         lane = _lanes(prog, target.kind, target.sets, target.capacity; form = :oop, shared_aux)
         maps = _lane_operator_maps(lane, target.capacity)
         return OperatorIR(
             lane.f!, lane.layout, maps, target, (lane.gathers, _lane_state_index(prog, lane.layout)),
-            params, slots
+            params, slots, nothing, T
         )
     end
     throw(ArgumentError("target must be Whole, Tile or Lanes"))
@@ -243,12 +295,15 @@ function forcing_reach(ir::OperatorIR, origin = nothing)
 end
 
 """
-    emit_fragment(ir; eltype = Float64, fold = :tree)
+    emit_fragment(ir; eltype = ir.working_eltype, fold = :tree)
 
 With Reactant loaded, create a host callable that emits a StableHLO fragment
 into the caller's trace. Call it on traced arguments `(u, aux, p, t, forcing)`;
 tile classes also take `origin` and lane targets take `cells`. If an output
-kernel reads a time step, append `dt`. See the compiled backend guide for layouts and precision.
+kernel reads a time step, append `dt`. The fragment uses the IR's working
+precision, including when `eltype` is supplied explicitly. Binary32 operations
+and reductions accumulate in expression order. See the compiled backend
+guide for layouts and precision.
 """
 function emit_fragment end
 

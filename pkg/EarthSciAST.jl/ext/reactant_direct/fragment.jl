@@ -38,8 +38,14 @@ function Reactant.make_tracer(
     return prev
 end
 
-function emit_fragment(ir::_E.OperatorIR; eltype::Type = Float64, fold::Symbol = :tree)
+function emit_fragment(ir::_E.OperatorIR; eltype::Type = ir.working_eltype, fold::Symbol = :tree)
     eltype in (Float32, Float64) || throw(ArgumentError("fragment eltype must be Float32 or Float64"))
+    eltype === ir.working_eltype || throw(
+        _E._range_error(
+            _E.ERROR_CODES.PRECISION_CHOICE_CONFLICT,
+            "emit_fragment requested $eltype for an operator resolved to $(ir.working_eltype)"
+        )
+    )
     fold in (:tree, :reduce) || throw(ArgumentError("fragment fold must be :tree or :reduce"))
     host = _E.forcing_buffers(ir.f)
     buffers = map(keys(host)) do name
@@ -58,7 +64,7 @@ function emit_fragment(ir::_E.OperatorIR; eltype::Type = Float64, fold::Symbol =
     # slices as the tile or lane capacity grows.
     return _StableHLOFragment{eltype, typeof(ir), typeof(buffers)}(
         ir, buffers, Vector{Float64}[values(host)...], names,
-        DirectEmitOptions(; read = :always), fold === :tree
+        DirectEmitOptions(; read = :always), eltype === Float64 && fold === :tree
     )
 end
 

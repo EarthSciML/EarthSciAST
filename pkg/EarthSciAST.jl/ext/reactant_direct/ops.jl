@@ -150,7 +150,7 @@ function _de_fold_terms(
         f = _de_semiring_fn(ctx, op)
         return _de_balanced_fold(ctx, f, [_de_const(ctx, zbar); terms], 1, length(terms) + 1)
     end
-    if length(terms) >= ctx.opts.reduce_min
+    if ctx.precision === Float64 && length(terms) >= ctx.opts.reduce_min
         return _de_reduce_terms(ctx, op, zbar, terms, L)
     end
     f = _de_semiring_fn(ctx, op)

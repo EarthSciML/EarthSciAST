@@ -12,19 +12,19 @@ struct _OperatorKernel
     out_eltype::Union{Nothing, DataType}
 end
 
-function _kernel_operator_ir(prob, spec, target)
+function _kernel_operator_ir(prob, spec, target; unspecified_eltype)
     ks, k = _fragment_kernel_set(prob, spec, target)
     # The kernel program is built from its own flattened system, so its
     # forcing slots need not be the kernel set's. The IR takes the kernel
     # set's signature and the build reads its buffers by name.
     slots = forcing_slots(ks)
     if target isa Whole
-        base = _rhs_operator_ir(k.prog, target; slots)
+        base = _rhs_operator_ir(k.prog, target; slots, unspecified_eltype)
         layout = (u = state_layout(ks), aux = z_layout(ks), out = kernel_layout(k))
         outputs = k.direct ? [_CopyRun(1, 1, k.n_u)] : [_CopyRun(s, d, n) for (s, d, n) in k.out_plan]
         plan = _OperatorKernel(k.aux_plan, outputs, k.map, k.direct, k.n_u, k.n_z, base.layout.n_u, base.layout.n_aux, spec.out_eltype)
     elseif k.direct
-        base = _rhs_operator_ir(k.prog, target; slots)
+        base = _rhs_operator_ir(k.prog, target; slots, unspecified_eltype)
         cap = target isa Lanes ? target.capacity : 1
         u, aux = cap * base.layout.n_u, cap * base.layout.n_aux
         layout = (u = base.layout.u, aux = base.layout.aux, out = _operator_kernel_blocks(base.layout.u, cap))
@@ -33,7 +33,7 @@ function _kernel_operator_ir(prob, spec, target)
     else
         srcs = Dict(b.name => p[1] for (b, p) in zip(k.prog.layout.aux, k.aux_plan))
         shared = Set(n for (n, src) in srcs if src in (0, 3) && haskey(k.prog.internal.scalars, n))
-        base = _rhs_operator_ir(k.prog, target; shared_aux = shared, slots)
+        base = _rhs_operator_ir(k.prog, target; shared_aux = shared, slots, unspecified_eltype)
         layout, plan = _restricted_kernel_plan(k, base, srcs, spec.out_eltype)
     end
     extra = if target isa Lanes
@@ -42,7 +42,7 @@ function _kernel_operator_ir(prob, spec, target)
         base.extra
     end
     return OperatorIR(
-        base.f, layout, base.maps, target, extra, parameter_names(ks.rhs), base.forcing, plan
+        base.f, layout, base.maps, target, extra, parameter_names(ks.rhs), base.forcing, plan, base.working_eltype
     )
 end
 
