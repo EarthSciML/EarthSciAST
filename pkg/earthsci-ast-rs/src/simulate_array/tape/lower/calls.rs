@@ -274,12 +274,10 @@ impl<'m> TapeBuilder<'m> {
         let inst = ops
             .instance_of_node(node)
             .map_err(|e| Bail::new(e.to_string()))?;
-        if bx.tuple != 0 || !bx.cnames.is_empty() {
-            bail_tape!(
-                "operator reference `{name}`: a call inside an unrolled contraction or a tuple \
-                 list is not compiled yet"
-            );
-        }
+        // Inside an unrolled contraction a bound index reads as its literal
+        // value at this term, and inside a tuple list a column reads as an
+        // array over the list: either way the call's arguments carry it,
+        // and the function is lowered over the call's plain box.
         let Some(r) = crate::operator_refs::reference_node(node) else {
             bail_tape!("operator reference without a name");
         };
@@ -326,7 +324,10 @@ impl<'m> TapeBuilder<'m> {
                         params.push((p.clone(), ArgKind::ConstLit(shape, origin, sorted)));
                     }
                     Value::Scalar(x) => {
-                        params.push((p.clone(), ArgKind::Lit(crate::precision::round(x).to_bits())));
+                        params.push((
+                            p.clone(),
+                            ArgKind::Lit(crate::precision::round(x).to_bits()),
+                        ));
                     }
                 }
                 continue;
@@ -334,7 +335,9 @@ impl<'m> TapeBuilder<'m> {
             // The names the binding reads free: a loop symbol a node of the
             // binding binds is its own.
             let reads = crate::binders::free_names(b, crate::binders::Binders::SCOPE);
-            let reads_box = reads.iter().any(|n| bx.syms.contains(n));
+            // A tuple list's symbols are columns of the list, not axes: a
+            // binding that reads one is an array argument over the list.
+            let reads_box = bx.tuple == 0 && reads.iter().any(|n| bx.syms.contains(n));
             // A constant array is build-time data the lowering reads by its
             // name (its values, its boundary policy): a binding that reads
             // one is compiled into the instance under that name.
@@ -352,7 +355,7 @@ impl<'m> TapeBuilder<'m> {
                 // function.
                 let mut caller_names: Vec<&String> = reads
                     .iter()
-                    .filter(|n| !binders.contains(*n) && !bx.syms.contains(n))
+                    .filter(|n| !binders.contains(*n) && (bx.tuple != 0 || !bx.syms.contains(n)))
                     .collect();
                 caller_names.sort();
                 let mut rename: FxHashMap<String, String> = FxHashMap::default();

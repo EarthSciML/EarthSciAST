@@ -1213,8 +1213,11 @@ pub(super) unsafe fn exec_call(
 ) {
     let prog = env.prog;
     let spec = &prog.tables.calls[call as usize];
-    let arrays: SmallVec<[*const f64; 8]> =
-        spec.arrays.iter().map(|s| src_base(s, env, slab).0).collect();
+    let arrays: SmallVec<[*const f64; 8]> = spec
+        .arrays
+        .iter()
+        .map(|s| src_base(s, env, slab).0)
+        .collect();
     let scalars: SmallVec<[f64; 8]> = spec
         .scalars
         .iter()
