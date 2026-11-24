@@ -66,7 +66,7 @@ def unspecified_keys(document: EsmFile) -> list[tuple[str, str]]:
         for entry in list(rs.species) + list(rs.parameters):
             unspecified[f"{scope}.{entry.name}"] = True
         for i, reaction in enumerate(rs.reactions):
-            expressions.append((scope, f"{pointer}/reactions/{i}/rate", reaction.rate))
+            expressions.append((scope, f"{pointer}/reactions/{i}/rate", reaction.rate_constant))
         equations(scope, pointer, "constraint_equations", rs.constraint_equations)
         for key, sub in (rs.subsystems or {}).items():
             if isinstance(sub, ReactionSystem):
