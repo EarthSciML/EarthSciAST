@@ -1433,6 +1433,22 @@ _tpl_array_binding(v::ASTExpr) =
     (v isa VarExpr && !occursin(_TPL_SENTINEL, v.name)) ||
     (v isa OpExpr && v.op == "const" && v.value isa AbstractVector)
 
+# The form an array-valued `faq` must have for the build to read it as an array
+# over its output indices: no reduction (every range is an output index's),
+# filter, join, key, `values` table or bounds, and a body. Shared by the lazy
+# route below and the buffered one (`_tpl_buffered_array_expr`).
+function _tpl_elementwise_faq_form(v::OpExpr)
+    _is_faq_op(v.op) || return false
+    oi = v.output_idx
+    (oi !== nothing && !isempty(oi) && all(x -> x isa AbstractString, oi)) || return false
+    (
+        v.filter === nothing && v.join_gates === nothing && v.join === nothing &&
+            v.key === nothing && v.expr_body !== nothing && v.values === nothing &&
+            v.lower === nothing && v.upper === nothing && all(a -> a isa VarExpr, v.args)
+    ) || return false
+    return v.ranges === nothing || all(k -> String(k) in oi, keys(v.ranges))
+end
+
 # An ARRAY EXPRESSION bound to an array parameter: an elementwise `faq` over
 # its output indices (no reduction, filter or join), whose element is read
 # lazily: where the body reads the parameter at subscripts `s…`, the element
@@ -1441,37 +1457,89 @@ _tpl_array_binding(v::ASTExpr) =
 # buffer holds it and the body is not inlined. The form alone; with the
 # template table `tt`, also an element the build compiles into the instance
 # (`_tpl_inlinable`).
-# A COMPUTED ARRAY bound to an array parameter that is not an elementwise
-# `faq` (above): a `makearray`, a `faq` with output indices whose element is
-# no compiled-in expression, or (with the template table `tt`) a whole-array
-# reference, read as its view. The build evaluates it once in the caller, into a
-# buffer of its own (an internal array observed, call.jl
-# `_hoist_array_arguments`), and passes that buffer as the argument, as it
-# passes a named array. Nothing is expanded: the reference stays a call and the
-# computed array is its argument.
-function _tpl_buffered_array_expr(v::ASTExpr, tt::Union{Nothing, _TplTable} = nothing)
-    v isa OpExpr || return false
-    tt !== nothing && _tpl_is_call(v) && return !_tpl_is_elem(v) &&
-        (_tpl_view_rank(tt, v) > 0 || (_tpl_call_info(tt, v.name) === nothing && _tpl_skel(tt, v.name) !== nothing))
-    v.op == "makearray" && return v.regions !== nothing && v.values !== nothing
-    _is_faq_op(v.op) || return false
-    oi = v.output_idx
-    return oi !== nothing && !isempty(oi) && all(x -> x isa AbstractString, oi) &&
-        v.ranges !== nothing && all(k -> String(k) in oi, keys(v.ranges)) &&
-        v.filter === nothing && v.join === nothing && v.join_gates === nothing
+function _tpl_array_expr(v::ASTExpr, tt::Union{Nothing, _TplTable} = nothing)
+    (v isa OpExpr && _tpl_elementwise_faq_form(v)) || return false
+    return tt === nothing || _tpl_inlinable(v.expr_body, tt)
 end
 
-function _tpl_array_expr(v::ASTExpr, tt::Union{Nothing, _TplTable} = nothing)
-    (v isa OpExpr && _is_faq_op(v.op)) || return false
-    oi = v.output_idx
-    (oi !== nothing && !isempty(oi) && all(x -> x isa AbstractString, oi)) || return false
-    (
-        v.filter === nothing && v.join_gates === nothing && v.join === nothing &&
-            v.key === nothing && v.expr_body !== nothing && v.values === nothing &&
-            v.lower === nothing && v.upper === nothing && all(a -> a isa VarExpr, v.args)
-    ) || return false
-    v.ranges === nothing || all(k -> String(k) in oi, keys(v.ranges)) || return false
-    return tt === nothing || _tpl_inlinable(v.expr_body, tt)
+# A COMPUTED ARRAY bound to an array parameter that is not an elementwise
+# `faq` read lazily (above): a `makearray`, a `faq` with output indices whose
+# element is no compiled-in expression, or a whole-array reference, read as its
+# view. The build evaluates it once in the caller, into a buffer of its own (an
+# internal array observed, call.jl `_hoist_array_arguments`), and passes that
+# buffer as the argument, as it passes a named array. Nothing is expanded: the
+# reference stays a call and the computed array is its argument. A `makearray`
+# or `faq` qualifies only when its extents are build-time integers
+# (`_argarr_extents`); a reference's are those of its view, known only once it
+# is read as one (call.jl `_hoist_array_arguments` refuses it otherwise).
+function _tpl_buffered_array_expr(v::ASTExpr, tt::_TplTable)
+    v isa OpExpr || return false
+    _tpl_is_call(v) && return !_tpl_is_elem(v) &&
+        (_tpl_view_rank(tt, v) > 0 || (_tpl_call_info(tt, v.name) === nothing && _tpl_skel(tt, v.name) !== nothing))
+    v.op == "makearray" && return v.values !== nothing && _argarr_extents(tt, v) !== nothing
+    _tpl_elementwise_faq_form(v) || return false
+    return _argarr_extents(tt, v) !== nothing
+end
+
+# A binding of an array parameter that the build passes through a buffer of its
+# own (`_tpl_buffered_array_expr`): not one it passes as it stands
+# (`_call_passable_array`) or reads lazily (`_tpl_array_expr`).
+_tpl_buffered_binding(b::ASTExpr, tt::_TplTable) =
+    b isa OpExpr && !_call_passable_array(b) && !_tpl_array_expr(b, tt) &&
+    _tpl_buffered_array_expr(b, tt)
+
+# The keys of the bindings of `call` that bind an array parameter (an explicit
+# one or an implicit one, `_TPL_FREE`), the lanes and outputs of a laned call
+# left out. Empty for a reference read through its view.
+function _tpl_array_param_keys(tt::_TplTable, call::OpExpr)
+    keys_ = String[]
+    call.bindings === nothing && return keys_
+    info = _tpl_call_info(tt, call.name)
+    info === nothing && return keys_
+    for k in keys(call.bindings)
+        (startswith(k, _TPL_OUT) || startswith(k, _TPL_LANE)) && continue
+        ((startswith(k, _TPL_FREE) ? k : _TPL_ARG * k) in info.arrays) && push!(keys_, k)
+    end
+    return keys_
+end
+
+# The extents of a computed array (`makearray` or array `faq`), each axis
+# `[1, n]` (an array index starts at 1), as a list of `n`; `nothing` when one is
+# not a build-time integer or an axis does not start at 1.
+function _argarr_extents(tt::_TplTable, v::OpExpr)
+    if v.op == "makearray"
+        regs = v.regions
+        (regs === nothing || isempty(regs)) && return nothing
+        nd = length(regs[1])
+        hi = zeros(Int, nd)
+        for r in regs
+            length(r) == nd || return nothing
+            for d in 1:nd
+                b = r[d]
+                (length(b) == 2 && b[1] isa Integer && b[2] isa Integer) || return nothing
+                b[1] >= 1 || return nothing
+                b[2] >= b[1] - 1 || return nothing
+                hi[d] = max(hi[d], b[2])
+            end
+        end
+        return hi
+    end
+    (_is_faq_op(v.op) && v.output_idx !== nothing && v.ranges !== nothing) || return nothing
+    n = Int[]
+    for o in v.output_idx
+        r = get(v.ranges, String(o), nothing)
+        r === nothing && (r = get(v.ranges, Symbol(o), nothing))
+        if r isa IndexSetRef
+            e = _tpl_iset_extent(tt, r)
+            e === nothing && return nothing
+            push!(n, e)
+        elseif r isa AbstractVector && length(r) == 2 && r[1] == 1 && r[2] isa Integer
+            push!(n, Int(r[2]))
+        else
+            return nothing
+        end
+    end
+    return n
 end
 
 """
@@ -1496,7 +1564,8 @@ function _tpl_compiles(tt::_TplTable, call::OpExpr)
         v === nothing && !(s in info.scalars || s in info.arrays || s in info.fixed) && continue
         v === nothing && return false
         if s in info.arrays
-            _tpl_array_binding(v) || _tpl_array_expr(v, tt) || _tpl_buffered_array_expr(v, tt) || return false
+            _tpl_array_binding(v) || _tpl_array_expr(v, tt) || _tpl_buffered_array_expr(v, tt) ||
+                return false
             continue
         end
         if s in info.fixed

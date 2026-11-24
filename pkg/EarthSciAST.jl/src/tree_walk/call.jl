@@ -2056,21 +2056,49 @@ end
 # or through its view); otherwise the build is refused, naming the template and
 # why. With `ENV["ESS_TPL_SURVEY"]` naming a file, each refusal is also appended
 # to it (a diagnostic: the target is none).
+#
+# A computed array bound to an array parameter (`_tpl_buffered_binding`)
+# becomes an equation of its own (`_hoist_array_arguments`), so the references
+# in it must compile too, and it is accepted only where that pass reaches: the
+# right-hand side of one of the model's own equations.
 function _tpl_refuse_uncompiled(tt::_TplTable, model)
-    foreach_expression(model) do e, _, _
-        _tpl_refuse_walk(tt, e)
+    foreach_expression(model) do e, p, kind
+        buffered_ok = kind === :equation_rhs && startswith(p, "/equations/")
+        _tpl_refuse_walk(tt, e, buffered_ok, p)
         nothing
     end
     return nothing
 end
-function _tpl_refuse_walk(tt::_TplTable, e)
+function _tpl_refuse_walk(tt::_TplTable, e, buffered_ok::Bool, at::AbstractString)
     e isa OpExpr || return
     if _tpl_is_call(e)
         _tpl_compiles(tt, e) || throw(_tpl_refusal_error(tt, e))
+        for k in _tpl_array_param_keys(tt, e)
+            b = e.bindings[k]
+            _tpl_buffered_binding(b, tt) || continue
+            buffered_ok || throw(
+                _tpl_argarr_error(
+                    e, k, "outside the right-hand side of one of the model's own " *
+                        "equations (at $at); bind it to a named array observed instead"
+                )
+            )
+            _tpl_refuse_walk(tt, b, buffered_ok, at)
+        end
         return
     end
-    foreach_child(c -> _tpl_refuse_walk(tt, c), e)
+    foreach_child(c -> _tpl_refuse_walk(tt, c, buffered_ok, at), e)
     return
+end
+
+# The refusal of the computed array bound to the parameter `k` of `call`.
+function _tpl_argarr_error(call::OpExpr, k::AbstractString, why::AbstractString)
+    name = replace(String(call.name), '\0' => '·')
+    p = replace(String(k), '\0' => '·')
+    return TreeWalkError(
+        "E_TREEWALK_UNSUPPORTED_OP",
+        "template reference '$name' cannot be compiled as a call: array parameter " *
+            "'$p' is bound to a computed array $why"
+    )
 end
 
 function _tpl_refusal_error(tt::_TplTable, call::OpExpr)
@@ -2170,7 +2198,7 @@ end
 # ---- Computed array arguments ------------------------------------------------------
 # A reference whose array parameter is bound to a computed array (a
 # `makearray`, or a `faq` the build does not read element by element:
-# frames.jl `_tpl_buffered_array_expr`) passes that array the way it passes a
+# frames.jl `_tpl_buffered_binding`) passes that array the way it passes a
 # named one. The array is an internal array observed of the build's own copy of
 # the model — defined by the binding, evaluated once per call of the
 # right-hand side in the caller, before its reader — and the binding names it.
@@ -2183,49 +2211,13 @@ end
 # every compiler (build_pipeline.jl), since a call reads it as an array. Its
 # axes are internal interval index sets of the array's extents; a computed
 # array is anonymous (esm-spec §4.3.4), so it is read only through `index`,
-# positionally. Identical bindings (by their canonical form) share one array.
+# positionally. Identical bindings in one equation share one array; each
+# equation has its own, filed under the variable it defines (`_hoist_owner`),
+# so a diagnostic about the array names the equation that reads it. Only the
+# model's own equations are walked: the refusal pass (`_tpl_refuse_uncompiled`)
+# refuses such a binding anywhere else.
 const _ARGARR_KIND = "argarr"
 _is_argarr_name(n::AbstractString) = occursin(string(_HOIST_PREFIX, _ARGARR_KIND), n)
-
-# The extents of a computed array, each `[1, n]` (an array index starts at 1),
-# as a list of `n`; `nothing` when one is not a build-time integer.
-function _argarr_extents(v::OpExpr, index_sets)
-    if v.op == "makearray"
-        regs = v.regions::Vector{Vector{Vector{Any}}}
-        isempty(regs) && return nothing
-        nd = length(regs[1])
-        hi = zeros(Int, nd)
-        for r in regs
-            length(r) == nd || return nothing
-            for d in 1:nd
-                b = r[d]
-                (length(b) == 2 && b[1] isa Integer && b[2] isa Integer) || return nothing
-                b[1] >= 1 || return nothing
-                b[2] >= b[1] - 1 || return nothing
-                hi[d] = max(hi[d], b[2])
-            end
-        end
-        return hi
-    end
-    (_is_faq_op(v.op) && v.output_idx !== nothing && v.ranges !== nothing) || return nothing
-    oi = String[String(x) for x in v.output_idx]
-    n = Int[]
-    for o in oi
-        r = get(v.ranges, o, nothing)
-        r === nothing && (r = get(v.ranges, Symbol(o), nothing))
-        if r isa IndexSetRef
-            isempty(r.of) || return nothing
-            is = get(index_sets, r.from, nothing)
-            (is isa IndexSet && is.kind == "interval" && is.size isa Int) || return nothing
-            push!(n, is.size)
-        elseif r isa AbstractVector && length(r) == 2 && r[1] == 1 && r[2] isa Integer
-            push!(n, r[2])
-        else
-            return nothing
-        end
-    end
-    return n
-end
 
 """
     _hoist_array_arguments(model, index_sets, tt) -> (model, index_sets)
@@ -2236,22 +2228,30 @@ equation of `model` made an internal array observed, and the binding its name
 there is none; otherwise new ones (the caller's are not mutated).
 """
 function _hoist_array_arguments(model::Model, index_sets::AbstractDict, tt::_TplTable)
-    memo = Dict{String, String}()
+    # (binding, owner, name) of every array made so far.
+    made = Tuple{OpExpr, String, String}[]
     vars = OrderedDict{String, ModelVariable}()
     eqs_new = Equation[]
     isets_new = Dict{String, IndexSet}()
-    function hoist(v::OpExpr, owner::String)
-        key = JSON3.write(serialize_expression(v))
-        hit = get(memo, key, nothing)
-        hit === nothing || return VarExpr(hit)
+    function hoist(v::OpExpr, owner::String, call::OpExpr, key::String)
+        for (b, o, n) in made
+            o == owner && _expr_equal(b, v) && return VarExpr(n)
+        end
         # Read as an equation's right-hand side is read after preparation: an
         # array-valued reference in it through its view (`_tpl_whole_views`).
         vv = _tpl_whole_views(tt, v)
-        vv isa OpExpr || return nothing
-        ext = _argarr_extents(vv::OpExpr, index_sets)
-        ext === nothing && return nothing
-        k = length(memo) + 1
+        ext = vv isa OpExpr ? _argarr_extents(tt, vv) : nothing
+        ext === nothing && throw(
+            _tpl_argarr_error(
+                call, key, "whose extents are not build-time integers, each axis " *
+                    "starting at 1"
+            )
+        )
+        # The number is taken before the array's own expression is walked, so
+        # an array that expression binds gets a number of its own.
+        k = length(made) + 1
         name = string(_HOIST_PREFIX, _ARGARR_KIND, k, '\0', owner)
+        push!(made, (v, owner, name))
         shape = String[]
         for (d, n) in enumerate(ext)
             s = string(_HOIST_PREFIX, _ARGARR_KIND, k, '\0', "d", d)
@@ -2261,7 +2261,6 @@ function _hoist_array_arguments(model::Model, index_sets::AbstractDict, tt::_Tpl
         vars[name] = ModelVariable(UnknownVariable; shape = shape)
         # The array's own expression may bind computed arrays too.
         push!(eqs_new, Equation(VarExpr(name), walk(vv, owner)))
-        memo[key] = name
         return VarExpr(name)
     end
     seen = IdDict{Tuple{OpExpr, String}, ASTExpr}()
@@ -2275,28 +2274,21 @@ function _hoist_array_arguments(model::Model, index_sets::AbstractDict, tt::_Tpl
     end
     function walk_node(e::OpExpr, owner::String)
         o = map_children(c -> walk(c, owner), e)
-        (_tpl_is_call(o) && o.bindings !== nothing) || return o
-        info = _tpl_call_info(tt, o.name)
-        info === nothing && return o
+        _tpl_is_call(o) || return o
         # Every array parameter, also one a laned call reads through its lanes
         # (`_call_array_slots` leaves those out): the lanes read the binding
         # at their subscripts, so they read the hoisted array instead.
-        hoisted = Dict{String, Tuple{ASTExpr, VarExpr}}()
-        for (k, b) in o.bindings
-            (startswith(k, _TPL_OUT) || startswith(k, _TPL_LANE)) && continue
-            ((startswith(k, _TPL_FREE) ? k : _TPL_ARG * k) in info.arrays) || continue
-            (b isa OpExpr && !_call_passable_array(b) && !_tpl_array_expr(b, tt) &&
-                _tpl_buffered_array_expr(b, tt)) || continue
-            r = hoist(b::OpExpr, owner)
-            r === nothing && continue
-            hoisted[JSON3.write(serialize_expression(b))] = (b, r)
+        hoisted = Tuple{OpExpr, VarExpr}[]
+        for k in _tpl_array_param_keys(tt, o)
+            b = o.bindings[k]
+            _tpl_buffered_binding(b, tt) || continue
+            push!(hoisted, (b::OpExpr, hoist(b::OpExpr, owner, o, k)))
         end
         isempty(hoisted) && return o
         function swap(x)
             x isa OpExpr || return x
-            if x.op == "makearray" || _is_faq_op(x.op) || _tpl_is_call(x)
-                h = get(hoisted, JSON3.write(serialize_expression(x)), nothing)
-                h === nothing || return h[2]
+            for (b, r) in hoisted
+                (x === b || (x.op == b.op && _expr_equal(x, b))) && return r
             end
             return map_children(swap, x)
         end
@@ -2311,7 +2303,7 @@ function _hoist_array_arguments(model::Model, index_sets::AbstractDict, tt::_Tpl
         eqs === model.equations && (eqs = copy(model.equations))
         eqs[i] = Equation(eq.lhs, rhs; _comment = eq._comment)
     end
-    isempty(memo) && return model, index_sets
+    isempty(made) && return model, index_sets
     allvars = OrderedDict{String, ModelVariable}(model.variables)
     merge!(allvars, vars)
     isets = copy(index_sets)

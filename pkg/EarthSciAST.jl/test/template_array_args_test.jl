@@ -196,3 +196,115 @@ end
         @test all(iszero, (at("a[$i]") for i in 1:4))
     end
 end
+
+# Variants of that fixture: the computed array of `D(v)` (`face_difference`'s
+# F) replaced, or the reference moved to another site.
+function _caa_variant(f!)
+    path = joinpath(
+        TESTUTILS_REPO_ROOT, "tests", "conformance", "array_expression_forms",
+        "fixtures", "computed_array_argument.esm"
+    )
+    d = _normj(JSON3.read(read(path, String)))
+    m = d["models"]["computed_array_argument"]
+    f!(m, m["equations"][2]["rhs"])
+    return EarthSciAST.load_string(JSON3.write(d))
+end
+_caa_build(file; compiler = :interpreter) = EarthSciAST.esm_problem(
+    file, (0.0, 1.0); compiler = compiler,
+    u0 = Dict{String, Float64}(
+        "a[1]" => 1.0, "a[2]" => 2.0, "a[3]" => 4.0, "a[4]" => 8.0,
+        ("$n[$i]" => 0.0 for n in ("v", "w") for i in 1:4)...
+    )
+)
+function _caa_refusal(file)
+    err = try
+        _caa_build(file)
+        nothing
+    catch e
+        e
+    end
+    return err isa EarthSciAST.TreeWalkError ? sprint(showerror, err) : repr(err)
+end
+_caa_cells(from = "cells") = Dict{String, Any}("from" => from)
+_caa_ref(name, bindings) = Dict{String, Any}(
+    "op" => "apply_operator", "args" => Any[], "name" => name, "bindings" => bindings
+)
+
+@testset "array parameter bound to a computed array: what is refused, and where" begin
+    # A computed array whose own expression binds a computed array: each gets
+    # an array of its own (the inner one is the whole-array reference
+    # twice(a), read by faces_interior at other subscripts).
+    file = _caa_variant() do _, call
+        inner = call["bindings"]["F"]["values"][1]
+        inner["bindings"]["q"] = _caa_ref("twice", Dict{String, Any}("q" => "a"))
+    end
+    for compiler in (:interpreter, :native)
+        prob = _caa_build(file; compiler = compiler)
+        du = similar(prob.u0)
+        prob.f!(du, prob.u0, prob.p, 0.0)
+        slot(n) = prob.var_map[only(k for k in keys(prob.var_map) if k == n || endswith(k, "." * n))]
+        @test [du[slot("v[$i]")] for i in 1:4] == [3.0, 3.0, 6.0, -12.0]
+        @test [du[slot("w[$i]")] for i in 1:4] == [48.0, 24.0, 12.0, 6.0]
+    end
+
+    # A faq whose element is a reduction (so the build does not read it
+    # lazily), F[f] = f * sum(a) = 15 f: over [1, 5] it is passed as an array;
+    # over [2, 6] its axis does not start at 1, so its extents are not an
+    # array's, and it is refused.
+    reduced_F(lo, hi) = _caa_variant() do _, call
+        call["bindings"]["F"] = Dict{String, Any}(
+            "op" => "faq", "args" => Any["a"], "output_idx" => Any["f"],
+            "ranges" => Dict{String, Any}("f" => Any[lo, hi]),
+            "expr" => Dict{String, Any}(
+                "op" => "faq", "args" => Any["a"], "output_idx" => Any[],
+                "ranges" => Dict{String, Any}("j" => _caa_cells()),
+                "expr" => Dict{String, Any}(
+                    "op" => "*", "args" => Any["f", Dict{String, Any}("op" => "index", "args" => Any["a", "j"])]
+                )
+            )
+        )
+    end
+    prob = _caa_build(reduced_F(1, 5))
+    du = similar(prob.u0)
+    prob.f!(du, prob.u0, prob.p, 0.0)
+    @test [du[prob.var_map[only(k for k in keys(prob.var_map) if endswith(k, "v[$i]"))]] for i in 1:4] ==
+        fill(15.0, 4)
+    msg = _caa_refusal(reduced_F(2, 6))
+    @test occursin("face_difference", msg) && occursin("cannot be compiled as a call", msg)
+
+    # A reference inside the computed array that does not compile is refused
+    # by name: faces_interior's q bound to a filtered faq.
+    file = _caa_variant() do _, call
+        inner = call["bindings"]["F"]["values"][1]
+        inner["bindings"]["q"] = Dict{String, Any}(
+            "op" => "faq", "args" => Any["a"], "output_idx" => Any["i"],
+            "ranges" => Dict{String, Any}("i" => _caa_cells()),
+            "filter" => Dict{String, Any}("op" => ">", "args" => Any["i", 1]),
+            "expr" => Dict{String, Any}("op" => "index", "args" => Any["a", "i"])
+        )
+    end
+    msg = _caa_refusal(file)
+    @test occursin("faces_interior", msg) && occursin("cannot be compiled as a call", msg)
+
+    # Outside the model's own equations (here an initialization equation that
+    # seeds v's cells) the binding is refused, naming the parameter.
+    file = _caa_variant() do m, call
+        m["initialization_equations"] = Any[
+            Dict{String, Any}(
+                "lhs" => "v",
+                "rhs" => Dict{String, Any}(
+                    "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                    "ranges" => Dict{String, Any}("i" => _caa_cells()),
+                    "expr" => Dict{String, Any}("op" => "index", "args" => Any[deepcopy(call), "i"])
+                ),
+            ),
+        ]
+    end
+    msg = _caa_refusal(file)
+    @test occursin("face_difference", msg) && occursin("'F' is bound to a computed array outside", msg)
+
+    # Diagnostics name such an array as an argument, under its equation.
+    @test EarthSciAST._hoist_public_label("\0hoist\0argarr1\0v") == "v (hoisted array argument)"
+    @test occursin("array argument", EarthSciAST._rule_display("\0hoist\0argarr1\0v"))
+    @test occursin("nested reduction", EarthSciAST._rule_display("\0hoist\01\0v"))
+end
