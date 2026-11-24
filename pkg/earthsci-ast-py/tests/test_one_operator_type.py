@@ -620,3 +620,14 @@ def test_a_fired_partial_rule_is_held_to_partials_fixed_unit():
     assert "fixed unit expression of 'partial'" in r.structural_errors[0].message
     emitted = emit_esm_string(emit_document(raw, "."))
     assert "__esm_" not in emitted
+
+
+def test_a_library_with_an_empty_operators_block_is_valid_and_round_trips():
+    """An operator-library file's ``operators`` MAY be empty (esm 2.4.0):
+    lib/vector_calculus.esm only documents operator names. It is a library,
+    not an empty document, and re-emitting it keeps the block."""
+    from earthsci_ast import to_json
+
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "lib", "vector_calculus.esm")
+    assert validate(load_path(path)).is_valid
+    assert json.loads(to_json(load_path(path)))["operators"] == {}

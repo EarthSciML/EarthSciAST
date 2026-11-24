@@ -1359,6 +1359,11 @@ class EsmFile:
     # fails the schema's top-level `anyOf`. The file was legal on disk and
     # illegal the moment it was loaded and re-emitted.
     expression_templates: dict[str, Any] = field(default_factory=dict)
+    # Whether the document declared a top-level `operators` block at all. An
+    # operator-library file's `operators` MAY be empty (esm 2.4.0: a library
+    # that only documents operator names, such as lib/vector_calculus.esm), so
+    # the block's presence, not its size, is what marks the library kind.
+    operators_declared: bool = False
     # Top-level DECLARATION of a coupling-library file's formal role parameters
     # (esm-spec §10.9), and the SOLE positive identifier of that file kind. Held
     # verbatim for the same reason `expression_templates` is: a library carries

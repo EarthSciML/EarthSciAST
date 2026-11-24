@@ -88,7 +88,7 @@ example : reads (parseTypst S "3 thin upright(\"m\")") meters = true := by decid
 
 /-! ## The italic-d derivative and declared names -/
 
-/-! ## Operators in the source formats (esm-spec §1.2, draft 2.4.0) -/
+/-! ## Operators in the source formats (esm-spec §1.2, esm 2.4.0) -/
 
 /-- A derivative along an axis other than `t` is `partial`, whichever differential writes it. -/
 example : reads (parseLatex S "\\frac{\\partial x}{\\partial a}") (pNode x "a") = true := by decide +kernel

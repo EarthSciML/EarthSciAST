@@ -93,7 +93,6 @@ pub use compile::{
 // pipeline: `crate::prepare` runs the same check the compile path runs, so the
 // two routes cannot disagree about which names a document declares.
 pub(crate) use compile::InventedSets;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::build_instances;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;

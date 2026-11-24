@@ -295,16 +295,7 @@ pub(crate) fn emit_program(
     let builder = XlaBuilder::new("earthsci_rhs");
     let mut em = Emitter::new(&builder, prog, compiled)?;
     if let Some(h) = hoisted {
-        for (slot, values) in &h.values {
-            let dims = em.out_dims(*slot);
-            let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
-            let lit = em.wrap(
-                builder.constant_r1(&values[..]).and_then(|c| c.reshape(&d)),
-                "hoisted constant",
-            )?;
-            em.define(*slot, lit);
-        }
-        em.hoisted = h.slots;
+        em.define_hoisted(&h)?;
     }
     let du = em.run()?;
     let forcing = em.forcing_param.take().map(|_| ForcingFeed {
@@ -353,6 +344,16 @@ const HOIST_MIN_ELEMENTS: usize = 4096;
 /// branch, by an instruction of a pure kind whose every input is a literal or
 /// another constant slot. No state, parameter, time or forcing reaches one.
 fn constant_slots(prog: &TapeProgram) -> Vec<bool> {
+    constant_slots_in(prog, false)
+}
+
+/// [`constant_slots`], with a function program's arguments (its state
+/// variables and parameters) counted as constants when `args_const`: what
+/// the function computes when every argument its call passes is one. A
+/// [`Instr::Call`] is a constant when its arguments are and the result of
+/// the function so seeded is.
+fn constant_slots_in(prog: &TapeProgram, args_const: bool) -> Vec<bool> {
+    let args_const = args_const && prog.is_function;
     let n = prog.tables.slots.len();
     let tables = prog.slot_tables();
     let mut defs = vec![0u32; n];
@@ -379,9 +380,13 @@ fn constant_slots(prog: &TapeProgram) -> Vec<bool> {
             let op = |o: &Operand| match o {
                 Operand::Lit(_) => true,
                 Operand::Slot(s) => k[*s as usize],
-                _ => false,
+                Operand::State(_) | Operand::Param(_) => args_const,
+                Operand::Time => false,
             };
-            let src = |s: &SrcRef| matches!(s, SrcRef::Slot(id) if k[*id as usize]);
+            let src = |s: &SrcRef| match s {
+                SrcRef::Slot(id) => k[*id as usize],
+                SrcRef::State(_) => args_const,
+            };
             match ins {
                 Instr::ConstArray { .. } | Instr::Ramp { .. } => true,
                 Instr::Bin { a, b, .. } => op(a) && op(b),
@@ -405,6 +410,15 @@ fn constant_slots(prog: &TapeProgram) -> Vec<bool> {
                     k[*s as usize] && mask.is_none_or(|m| k[m as usize])
                 }
                 Instr::Region { base, src: s, .. } => k[*base as usize] && op(s),
+                Instr::Call { call, .. } => {
+                    let spec = &prog.tables.calls[*call as usize];
+                    let f = &prog.funcs[spec.func as usize];
+                    spec.arrays.iter().all(src)
+                        && spec.scalars.iter().all(op)
+                        && f.exports
+                            .first()
+                            .is_some_and(|(_, r)| constant_slots_in(f, true)[*r as usize])
+                }
                 _ => false,
             }
         };
@@ -415,8 +429,38 @@ fn constant_slots(prog: &TapeProgram) -> Vec<bool> {
     k
 }
 
+/// The phrase every refusal of a fault raised on every call carries, so that
+/// one found while hoisting a called function propagates as that refusal.
+const FAULTS_ON_EVERY_CALL: &str = "raises a fail-closed evaluation fault on every call";
+
+/// A faulting computed-subscript gather [`hoist`] emitted as a constant: its
+/// spec and its subscripts over its box, which the host checks as
+/// [`DataGatherSpec::at`] checks them.
+struct FaultCheck {
+    rule: String,
+    what: FaultCheckKind,
+    /// The values the host reads, each flattened row-major.
+    vals: Vec<XlaOp>,
+}
+
+enum FaultCheckKind {
+    /// A faulting computed-subscript gather: `vals` are its subscripts over
+    /// its box.
+    Gather(Box<DataGatherSpec>),
+    /// A [`Instr::FaultScan`]: `vals` are the values of `ops`, every operand
+    /// its candidates read, resolved as [`FaultScanSpec::first`] reads them.
+    Scan {
+        spec: FaultScanSpec,
+        faults: Vec<String>,
+        ops: Vec<Operand>,
+    },
+}
+
+type FaultChecks = Rc<RefCell<Vec<FaultCheck>>>;
+
 /// What [`hoist`] evaluated: which slots are constants, and the values of
 /// those the rest of the program reads.
+#[derive(Clone)]
 struct Hoisted {
     slots: Vec<bool>,
     values: Vec<(SlotId, Vec<f64>)>,
@@ -451,6 +495,9 @@ fn hoist(prog: &TapeProgram, compiled: &ArrayCompiled) -> R<Option<Hoisted>> {
         match ins {
             Instr::ConstArray { .. } | Instr::Ramp { .. } | Instr::Fill { .. } => {}
             Instr::DataGather { faults: true, .. } => faulting.push(pc),
+            // A constant call may hold a faulting gather; it is checked
+            // through `fault_checks` like one of the program's own.
+            Instr::Call { .. } => faulting.push(pc),
             _ => {
                 let o = ins.out().expect("a constant instruction defines a slot");
                 work += prog.tables.slots[o as usize]
@@ -483,21 +530,21 @@ fn hoist(prog: &TapeProgram, compiled: &ArrayCompiled) -> R<Option<Hoisted>> {
 
     let b = XlaBuilder::new("earthsci_rhs_constants");
     let mut em = Emitter::new(&b, prog, compiled)?;
+    let checks: FaultChecks = Rc::new(RefCell::new(Vec::new()));
+    em.fault_checks = Some(Rc::clone(&checks));
     for (pc, ins) in prog.instrs.iter().enumerate() {
         if !is_const(ins) {
             continue;
         }
         em.cur_rule = rule_of(pc);
-        let done = match ins {
-            Instr::DataGather { src, spec, out, .. } => em
-                .emit_data_gather(src, *spec, *out)
-                .map(|v| em.define(*out, v)),
-            _ => em.emit_one(pc),
-        };
-        if done.is_err() {
-            return Ok(None);
+        match em.emit_one(pc) {
+            Ok(()) => {}
+            // A fault on every call, found while hoisting a called function.
+            Err(e) if e.reason.contains(FAULTS_ON_EVERY_CALL) => return Err(e),
+            Err(_) => return Ok(None),
         }
     }
+    let checks = checks.take();
     // Everything the host needs, flattened into one vector: the frontier
     // slots, then each faulting gather's subscripts over its box.
     let mut pieces: Vec<XlaOp> = Vec::new();
@@ -514,15 +561,9 @@ fn hoist(prog: &TapeProgram, compiled: &ArrayCompiled) -> R<Option<Hoisted>> {
             .ok_or_else(|| em.err(format!("hoisted slot {s} was not defined")))?;
         flat(&em, &v)?;
     }
-    for &pc in &faulting {
-        let Instr::DataGather { spec, out, .. } = &prog.instrs[pc] else {
-            unreachable!("collected as a DataGather");
-        };
-        let dims = em.out_dims(*out);
-        for sub in &prog.tables.data_gathers[*spec as usize].subs {
-            let v = em.operand(sub)?;
-            let v = em.to_shape(&v, &dims)?;
-            flat(&em, &v)?;
+    for check in &checks {
+        for v in &check.vals {
+            flat(&em, v)?;
         }
     }
     if pieces.is_empty() {
@@ -571,26 +612,50 @@ fn hoist(prog: &TapeProgram, compiled: &ArrayCompiled) -> R<Option<Hoisted>> {
         at += lens[i];
     }
     let mut li = frontier.len();
-    for &pc in &faulting {
-        let Instr::DataGather { spec, .. } = &prog.instrs[pc] else {
-            unreachable!("collected as a DataGather");
-        };
-        let spec = &prog.tables.data_gathers[*spec as usize];
-        let mut subs: Vec<&[f64]> = Vec::with_capacity(spec.subs.len());
-        for _ in &spec.subs {
-            subs.push(&host[at..at + lens[li]]);
+    for check in &checks {
+        let mut vals: Vec<&[f64]> = Vec::with_capacity(check.vals.len());
+        for _ in &check.vals {
+            vals.push(&host[at..at + lens[li]]);
             at += lens[li];
             li += 1;
         }
+        let spec = match &check.what {
+            FaultCheckKind::Gather(spec) => spec,
+            FaultCheckKind::Scan { spec, faults, ops } => {
+                let first = spec.first(faults, |op, cell| {
+                    if let Operand::Lit(v) = op {
+                        return *v;
+                    }
+                    let i = ops
+                        .iter()
+                        .position(|o| o == op)
+                        .expect("every operand a fault scan reads was evaluated");
+                    match cell {
+                        Some((shape, c)) => vals[i][super::ir::slab_flat(shape, c, false)],
+                        None => vals[i][0],
+                    }
+                });
+                if let Some((_, msg)) = first {
+                    return Err(XlaEmitError::new(
+                        check.rule.clone(),
+                        format!(
+                            "the program {FAULTS_ON_EVERY_CALL}, which a compiled program \
+                             cannot report: {msg}"
+                        ),
+                    ));
+                }
+                continue;
+            }
+        };
+        let subs = vals;
         let n_out = subs.first().map_or(0, |s| s.len());
         for e in 0..n_out {
             if let DataAt::Fault { d, raw } = spec.at(|d| subs[d][e]) {
                 return Err(XlaEmitError::new(
-                    rule_of(pc),
+                    check.rule.clone(),
                     format!(
-                        "the program raises a fail-closed evaluation fault on every call \
-                         (a computed-subscript gather over compile-time data), which a \
-                         compiled program cannot report: {}",
+                        "the program {FAULTS_ON_EVERY_CALL} (a computed-subscript gather \
+                         over compile-time data), which a compiled program cannot report: {}",
                         spec.fault_message(d, raw)
                     ),
                 ));
@@ -639,6 +704,17 @@ struct Emitter<'a> {
     /// program, so the instruction defining it is not emitted (the slots the
     /// rest of the program reads arrive as literals).
     hoisted: Vec<bool>,
+    /// The model, which a called function's constant section is hoisted
+    /// against ([`hoist`]).
+    compiled: &'a ArrayCompiled,
+    /// Per called function program (keyed by its address): what [`hoist`]
+    /// evaluated of its constant section, computed once and shared by every
+    /// call of it, nested calls included.
+    func_hoists: Rc<RefCell<HashMap<usize, Option<Hoisted>>>>,
+    /// Set only while [`hoist`] emits a constant section: a faulting gather
+    /// is then emitted and its subscripts recorded for the host to check,
+    /// instead of refused.
+    fault_checks: Option<FaultChecks>,
 }
 
 impl<'a> Emitter<'a> {
@@ -731,8 +807,21 @@ impl<'a> Emitter<'a> {
             forcing_layout,
             forcing_len,
             hoisted: vec![false; prog.tables.slots.len()],
+            compiled,
+            func_hoists: Rc::new(RefCell::new(HashMap::new())),
+            fault_checks: None,
         };
-        em.state = em.build_state_views()?;
+        em.state = if prog.is_function {
+            // A function's state variables are its call's array arguments,
+            // not blocks of `u`. Only [`hoist`] builds an emitter for one on
+            // its own, and the constant section it emits reads no state.
+            prog.state_vars
+                .iter()
+                .map(|sv| em.zeros(&sv.shape))
+                .collect::<R<Vec<XlaOp>>>()?
+        } else {
+            em.build_state_views()?
+        };
         Ok(em)
     }
 
@@ -1590,6 +1679,45 @@ impl<'a> Emitter<'a> {
                     self.prog.tables.faults[*fault as usize]
                 )));
             }
+            Instr::FaultScan { spec } if self.fault_checks.is_some() => {
+                // Hoisting a constant section: every condition and subscript
+                // the scan reads is a constant, so the host decides once
+                // whether it fires.
+                let scan = self.prog.tables.fault_scans[*spec as usize].clone();
+                let mut ops: Vec<Operand> = Vec::new();
+                let mut push = |o: &Operand| {
+                    if !matches!(o, Operand::Lit(_)) && !ops.contains(o) {
+                        ops.push(*o);
+                    }
+                };
+                for c in &scan.cands {
+                    for pc in &c.path {
+                        push(&pc.op);
+                    }
+                    if let FaultWhat::ConstOob { dims, .. } = &c.what {
+                        for d in dims {
+                            if let OobSub::Data { op, .. } = &d.sub {
+                                push(op);
+                            }
+                        }
+                    }
+                }
+                let vals = ops
+                    .iter()
+                    .map(|o| self.operand(o))
+                    .collect::<R<Vec<XlaOp>>>()?;
+                if let Some(checks) = &self.fault_checks {
+                    checks.borrow_mut().push(FaultCheck {
+                        rule: self.cur_rule.clone(),
+                        what: FaultCheckKind::Scan {
+                            spec: scan,
+                            faults: self.prog.tables.faults.clone(),
+                            ops,
+                        },
+                        vals,
+                    });
+                }
+            }
             Instr::FaultScan { .. } => {
                 // As for `Instr::Fault`: the program may raise a fail-closed
                 // fault, depending on which cells it evaluates, and has no
@@ -1610,7 +1738,20 @@ impl<'a> Emitter<'a> {
                 out,
                 faults,
             } => {
-                if *faults {
+                if *faults && let Some(checks) = &self.fault_checks {
+                    let gs = self.prog.tables.data_gathers[*spec as usize].clone();
+                    let dims = self.out_dims(*out);
+                    let subs = gs
+                        .subs
+                        .iter()
+                        .map(|o| self.operand(o).and_then(|v| self.to_shape(&v, &dims)))
+                        .collect::<R<Vec<XlaOp>>>()?;
+                    checks.borrow_mut().push(FaultCheck {
+                        rule: self.cur_rule.clone(),
+                        what: FaultCheckKind::Gather(Box::new(gs)),
+                        vals: subs,
+                    });
+                } else if *faults {
                     return Err(self.err(
                         "a computed-subscript const-array gather (`DataGather`) can raise a \
                          fail-closed fault, which a compiled program cannot report",
@@ -1636,6 +1777,10 @@ impl<'a> Emitter<'a> {
                      fusion chooses for itself",
                 ));
             }
+            Instr::Call { call, out } => {
+                let v = self.emit_call(*call)?;
+                self.define(*out, v);
+            }
             // ---- WHERE NEW TAPE INSTRUCTIONS PLUG IN --------------------
             // `ConstArray` and `Reduce` arrived this way and are lowered
             // above. Anything this emitter has not learned lands here and is
@@ -1651,6 +1796,112 @@ impl<'a> Emitter<'a> {
                 )));
             }
         }
+        Ok(())
+    }
+
+    /// Lower a call of a compiled operator definition (esm-spec §9.6.4 rule
+    /// 2) by emitting the function program inline on this builder. Its state
+    /// variables read the caller's array arguments in place, its parameters
+    /// the scalar arguments, in order, and its first export is the result.
+    /// XLA sees one program, so a definition called from several sites is
+    /// emitted once per site; its own fusion and common-subexpression passes
+    /// decide what to share.
+    fn emit_call(&self, call: u32) -> R<XlaOp> {
+        let spec = &self.prog.tables.calls[call as usize];
+        let f: &TapeProgram = &self.prog.funcs[spec.func as usize];
+        if f.state_vars.len() != spec.arrays.len() {
+            return Err(self.err(format!(
+                "a call passes {} array arguments to a function with {} state variables",
+                spec.arrays.len(),
+                f.state_vars.len()
+            )));
+        }
+        if f.instrs.iter().any(|i| {
+            matches!(
+                i,
+                Instr::LoadForcing { .. } | Instr::DyWrite { .. } | Instr::Sweep { .. }
+            )
+        }) {
+            return Err(self.err(
+                "a called function loads a forcing, writes dy or opens a recurrence sweep; \
+                 the emitter lowers only pure function bodies",
+            ));
+        }
+        let state = spec
+            .arrays
+            .iter()
+            .map(|a| self.src(a))
+            .collect::<R<Vec<XlaOp>>>()?;
+        let mut scalars = Vec::with_capacity(spec.scalars.len());
+        for sc in &spec.scalars {
+            let v = self.operand(sc)?;
+            if !self.dims(&v)?.is_empty() {
+                return Err(self.err("a scalar argument of a call is not rank 0"));
+            }
+            scalars.push(self.wrap(v.reshape(&[1]), "call: scalar argument")?);
+        }
+        let p = match scalars.split_first() {
+            None => self.zeros(&[1])?,
+            Some((head, [])) => head.clone(),
+            Some((head, rest)) => self.wrap(head.concat_in_dim(rest, 0), "call: parameters")?,
+        };
+        let key = std::ptr::from_ref(f) as usize;
+        let cached = self.func_hoists.borrow().get(&key).cloned();
+        let hoisted = match cached {
+            Some(h) => h,
+            None => {
+                let h = hoist(f, self.compiled)?;
+                self.func_hoists.borrow_mut().insert(key, h.clone());
+                h
+            }
+        };
+        let mut sub = Emitter {
+            b: self.b,
+            prog: f,
+            u: self.u.clone(),
+            p,
+            t: self.t.clone(),
+            slots: vec![None; f.tables.slots.len()],
+            state,
+            blocks: Vec::new(),
+            var_order: Vec::new(),
+            var_ix: HashMap::new(),
+            cur_rule: self.cur_rule.clone(),
+            forcing_param: None,
+            forcing_offsets: vec![None; f.forcings.len()],
+            forcing_layout: Vec::new(),
+            forcing_len: 0,
+            hoisted: vec![false; f.tables.slots.len()],
+            compiled: self.compiled,
+            func_hoists: Rc::clone(&self.func_hoists),
+            fault_checks: self.fault_checks.clone(),
+        };
+        if let Some(h) = hoisted {
+            sub.define_hoisted(&h)?;
+        }
+        sub.emit_range(0, f.instrs.len())?;
+        let (_, result) = f
+            .exports
+            .first()
+            .ok_or_else(|| self.err("a called function exports no result"))?;
+        sub.slots[*result as usize]
+            .clone()
+            .ok_or_else(|| self.err("a called function never defines its result"))
+    }
+
+    /// Enter what [`hoist`] evaluated as literals, and skip the instructions
+    /// that defined them.
+    fn define_hoisted(&mut self, h: &Hoisted) -> R<()> {
+        for (slot, values) in &h.values {
+            let dims = self.out_dims(*slot);
+            let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+            let lit = self.wrap(
+                self.b.constant_r1(&values[..]).and_then(|c| c.reshape(&d)),
+                "hoisted constant",
+            )?;
+            self.define(*slot, lit);
+        }
+        self.hoisted = h.slots.clone();
         Ok(())
     }
 

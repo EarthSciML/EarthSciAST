@@ -3600,6 +3600,7 @@ def _load_data(
     # Both §9.7 resolution and template lowering consume them, so they must be
     # captured HERE, on the raw document, while they are still visible.
     _raw_expression_templates = copy.deepcopy(data.get("operators") or {})
+    _operators_declared = isinstance(data.get("operators"), dict)
     # esm-spec §10.9 `coupling_roles`, captured on the same grounds and written
     # back verbatim: presence of the key is the sole positive identifier of the
     # coupling-library file kind, so dropping it makes a library unrepresentable.
@@ -3622,7 +3623,7 @@ def _load_data(
     # `load(lib, metaparameters={"N": 12})` is a request to INSTANTIATE the
     # library at that size, so the fold is what was asked for and the concrete
     # sizes stand.
-    _is_pure_library = bool(_raw_expression_templates) and not (
+    _is_pure_library = _operators_declared and not (
         data.get("models") or data.get("reaction_systems") or data.get("data_sources")
     )
     _raw_index_sets = (
@@ -3724,6 +3725,7 @@ def _load_data(
     esm_file = _parse_esm_data(data)
 
     esm_file.expression_templates = _raw_expression_templates
+    esm_file.operators_declared = _operators_declared
     esm_file.coupling_roles = _raw_coupling_roles
     esm_file.metaparameters = _raw_metaparameters
     esm_file.component_templates = _raw_component_templates

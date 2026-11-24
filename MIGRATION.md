@@ -1569,7 +1569,7 @@ canonical spelling and no `units` on a dimensionless `const`.
 |---|---|
 | `format` | **No on-disk change.** Every 2.3.0 document is a valid 2.4.0 document. Two changes: `grad`, `div` and `laplacian` become ordinary operator names, and the `"pde"` system kind is dropped. The format no longer names `grad`, `div` and `laplacian` as rewrite-target sugar for sums of `D` (esm-spec §4.2): they are ordinary open-tier operator names, exactly like any operator you invent. |
 | `semantics` | A document using one still loads; a rewrite rule may still match one; one that reaches evaluation unlowered is still refused with `unlowered_operator`. What changes is that no binding treats the three names specially: |
-| `semantics` | **The `"pde"` system kind is dropped** (esm-spec §6.3.1). `system_kind` derives `"sde"`, `"nonlinear"` or `"ode"`, in that order; a spatial derivative (spatial `D`, or any of the three names) no longer makes a model `"pde"`. A transient model with spatial derivatives is now `"ode"`, a steady-state one (no time derivative) `"nonlinear"`. The `PDESystem` constructor choice is gone from the bindings. |
+| `semantics` | **The `"pde"` system kind is dropped** (esm-spec §6.3.1). `system_kind` derives `"sde"`, `"nonlinear"` or `"ode"`, in that order; a spatial derivative (`partial`, a spatial `D` read as `partial`, or any of the three names) no longer makes a model `"pde"`. A transient model with spatial derivatives is now `"ode"`, a steady-state one (no time derivative) `"nonlinear"`. The `PDESystem` constructor choice is gone from the bindings. |
 | `semantics` | **Go's `ApplyDAEContract` now runs on models with spatial derivatives.** It applies to `"ode"` models, and it used to skip a model that was `"pde"`. Such a model is now `"ode"` when it has a time derivative, so it is factored like any other. A spatial `D` on the right-hand side changes nothing. A spatial `D` on a **left-hand** side is not a time derivative, so that equation is algebraic and survives factoring as a residual: a boundary condition written as an equation, such as `D(u, wrt: x) ~ 0`, now raises `E_NONTRIVIAL_DAE` where Go used to return no error. Rust's `apply_dae_contract`, which never filtered by kind, already refused it. The format has no boundary-condition equation (esm-spec §9.6.8: the condition lives inside the discretization rule), and every binding's `validate` already reports `equation_count_mismatch` for such a document. |
 | `semantics` | **A declared `system_kind: "pde"` is deprecated and ignored.** The document still loads, with one warning per document, `deprecated_system_kind`, naming each such model; the declared kind reads as absent, the model is its derived kind, and `system_kind_mismatch` is never reported for it. The schema keeps `"pde"` in the enum. |
 | `semantics` | **Julia ModelingToolkit.** `grad` is no longer lowered to an MTK `Differential`; like any user op it must be rewritten first. |
@@ -1579,12 +1579,29 @@ canonical spelling and no `units` on a dimensionless `const`.
 **What to do.** Remove `system_kind: "pde"` declarations (or leave them; they
 are ignored with a warning) and stop branching on a `"pde"` kind in code that
 calls `system_kind`. Where a spatial derivative was written with one of the
-three names expecting it to mean something, write the derivative with spatial `D`
-(`grad(f, dim: x)` as `D(f, wrt: x)`, a divergence as a sum of `D` per axis, a
-Laplacian as a sum of `D(D(u, wrt: x_i), wrt: x_i)`), or keep the name as an
+three names expecting it to mean something, write the derivative with `partial`
+(`grad(f, dim: x)` as `partial(f, wrt: x)`, a divergence as a sum of `partial` per axis, a
+Laplacian as a sum of `partial(partial(u, wrt: x_i), wrt: x_i)`), or keep the name as an
 operator lowered by your own rewrite rule.
 
 ---
+
+## esm 2.4.0: one operator type, and the spatial derivative is `partial`
+
+| Kind | What |
+|---|---|
+| `format` | **Old spellings are read, never refused.** A loader reads `expression_templates` as `operators` and `expression_template_imports` as `operator_imports` (warning `deprecated_field`), and `apply_expression_template` as `apply_operator` (warning `deprecated_op`). Emit writes only the new names, so an emitted document declares `esm: 2.4.0`. |
+| `format` | **The spatial derivative is `partial`; `D` is only the time derivative** (esm-spec §4.2). A `D` whose `wrt` is neither `"t"` nor the document's own `domain.independent_variable`, and the spellings `δ` and `∂`, are read as `partial` with `deprecated_op`. A `D` whose `wrt` names the independent variable is read as `wrt: "t"`, with no warning. |
+| `semantics` | **Every `operators` entry is a definition of one operator** (esm-spec §9.6.12), with the new optional fields `defines`, `units` (a unit expression) and `reference_only`. A plain call `{"op": N, "args": [...]}` now resolves to a match-less definition of `N` in scope. Before 2.4.0 only `match` rules fired on calls. Definitions are chosen by `priority`, then one with a `where` before one without, then declaration order. A name with no definition in scope is a placeholder. |
+| `semantics` | **Rules write references.** A firing rule leaves a reference to itself, rules rewrite definition bodies once per instance, and nothing is inlined (esm-spec §9.6.3, §9.6.4). The four edge cases where this changes which rules fire are listed at the top of esm-spec.md. None of them occurs in the 2026-11 corpus of real models. |
+| `new` | Load errors `operator_arity_mismatch` and `operator_defines_core_op`, and `definition_unit_mismatch` (an error when a definition's body unit is determinable and disagrees with its unit expression, a warning when it cannot be determined). |
+| `semantics` | **Error codes named after templates are renamed** (`apply_expression_template_unknown_template` becomes `operator_unknown_definition`, `template_import_*` becomes `operator_import_*`, and so on: esm-spec §9.6.6, "Renamed codes"). A binding reports the new code. Code that matches the old spelling must accept the new one. |
+
+**What to do.** Nothing, to keep loading your documents. To silence the
+warnings, rename the three blocks and the node, and write a spatial derivative
+as `{"op": "partial", "args": [f], "wrt": "x"}`. Any `esm convert` or binding
+emit does this for you. Update any code that matches error codes by their
+template-era names.
 
 # Part V — What did NOT change
 
@@ -1693,7 +1710,7 @@ remove. Your code stops compiling (Rust), or raises `UndefVarError` /
 | Julia, Python, Rust | the inline-test runner | Now runs **`reaction_systems`** as well as `models`. Both carry `tests` (esm-spec §6.6); only `models` were run before. | More result rows, from components that previously reported none. A gate counting rows sees the count rise — that is the bug being fixed, not a regression. |
 | Julia, Python, Rust | the inline-test runner | A **batch** input (an iterable or a directory) records an unreadable document as one ERROR row instead of raising. A single-document call still raises. | A corpus run no longer aborts on one bad file. |
 
-## Unreleased
+## 0.15.0: Rust modules, CLI subcommands and error variants removed
 
 ### Rust — `earthsci-ast`
 
@@ -1781,7 +1798,7 @@ time derivative. A flattened name with a dot prints as a quoted name joined by
 
 ---
 
-## Unreleased
+## 0.15.0: Rust build route, providers and error types
 
 ### Rust — `earthsci-ast`
 

@@ -1204,7 +1204,9 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
     # file unrepresentable: legal on disk, illegal once loaded and re-emitted.
     if getattr(esm_file, "metaparameters", None):
         result["metaparameters"] = esm_file.metaparameters
-    if getattr(esm_file, "expression_templates", None):
+    if getattr(esm_file, "expression_templates", None) or getattr(
+        esm_file, "operators_declared", False
+    ):
         result["operators"] = esm_file.expression_templates
     if getattr(esm_file, "coupling_roles", None):
         result["coupling_roles"] = esm_file.coupling_roles

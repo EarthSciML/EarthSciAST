@@ -1,6 +1,6 @@
 [package]
 name = "earthsci-ast-cli"
-version = "0.14.0"
+version = "0.15.0"
 edition = "2024"
 rust-version = "1.89.0"
 authors = ["EarthSciML Authors and Contributors"]
@@ -41,7 +41,7 @@ xla = ["earthsci-ast/xla"]
 
 [dependencies]
 # Exact: the tool and the library ship under one version number.
-earthsci-ast = { path = "..", version = "=0.14.0", default-features = false }
+earthsci-ast = { path = "..", version = "=0.15.0", default-features = false }
 clap = { version = "4.0", features = ["derive"] }
 indexmap = { version = "2", features = ["serde"] }
 ndarray = "0.17"
