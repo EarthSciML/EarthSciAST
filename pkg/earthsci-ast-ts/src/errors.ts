@@ -526,7 +526,8 @@ export const ERROR_CODES = {
   /** An unspecified variable is used as a key (§11.3.3 P8). */
   KEY_PRECISION_UNSPECIFIED: 'key_precision_unspecified',
   /**
-   * A relative tolerance below 2⁻²² for a Float32 state (esm-spec §11.3.2).
+   * A relative tolerance below 2⁻²² for a Float32 state (esm-spec §11.3.2),
+   * or for binary32 state storage chosen by an external consumer (§11.3.3 P7).
    * This binding does not integrate; the code stays because the table is
    * cross-language uniform.
    */
