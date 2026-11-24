@@ -1080,3 +1080,83 @@ end
             [("Flux.u", [fx - 4], [fx]), ("__seam_1__Flux.u", [1], [1])]
     end
 end
+
+# The forms EarthSciIntegrator's derived documents write: a whole-array
+# right-hand side `D(u) = faq{…}` and a `makearray` whose region value is an
+# array `faq` (a Jacobian document's band field). Every lane equals the
+# whole-domain program bit for bit.
+@testset "lanes of whole-array faq right-hand sides" begin
+    ix(v, i...) = Dict("op" => "index", "args" => Any[v, i...])
+    whole(e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
+        "ranges" => Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "y")), "expr" => e
+    )
+    doc = Dict(
+        "esm" => "2.0.0",
+        "metadata" => Dict("name" => "wholefaq", "authors" => ["test"]),
+        "index_sets" => Dict(
+            "x" => Dict("kind" => "interval", "size" => 3),
+            "y" => Dict("kind" => "interval", "size" => 4)
+        ),
+        "models" => Dict(
+            "M" => Dict(
+                "variables" => Dict(
+                    "u" => Dict("type" => "unknown", "units" => "1", "shape" => ["x", "y"], "default" => 1.0),
+                    "v" => Dict("type" => "unknown", "units" => "1", "shape" => ["x", "y"], "default" => 2.0),
+                    "c" => Dict("type" => "parameter", "units" => "1", "shape" => ["x"], "default" => [0.5, 1.5, 2.5])
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                        "rhs" => whole(
+                            Dict(
+                                "op" => "-", "args" => Any[
+                                    Dict("op" => "*", "args" => Any[ix("c", "i"), ix("u", "i", "j"), "t"]),
+                                    Dict("op" => "*", "args" => Any["j", ix("v", "i", "j")]),
+                                ]
+                            )
+                        )
+                    ),
+                    Dict(
+                        "lhs" => Dict("op" => "D", "args" => Any["v"], "wrt" => "t"),
+                        "rhs" => Dict(
+                            "op" => "makearray", "args" => Any[],
+                            "regions" => Any[Any[Any[1, 3], Any[1, 4]]],
+                            "values" => Any[whole(Dict("op" => "*", "args" => Any[ix("u", "i", "j"), ix("v", "i", "j")]))]
+                        )
+                    ),
+                ]
+            )
+        )
+    )
+    path = joinpath(mktempdir(), "wholefaq.esm")
+    write(path, EarthSciAST.JSON3.write(doc))
+    prob = esm_problem(path, (0.0, 1.0))
+    prog = rhs_program(prob)
+    lp = lanes(prog, :cells, ["x", "y"]; chunk = 4)
+    LL = lane_layout(lp)
+    n = 12
+    gu = [0.5 + ((k * 7919) % 101) / 37 for k in 1:(2n)]
+    fs = default_forcing_set(prog)
+    want = fill(NaN, 2n)
+    rhs!(want, prog, rhs_workspace(prog), gu, Float64[], prob.p, 0.75, fs)
+    offs = Dict(b.name => b.offset for b in LL.u)
+    ws = rhs_workspace(lp)
+    for batch in Iterators.partition(1:n, 4)
+        L = 4
+        u = zeros(LL.n_u * L)
+        cells = ones(Int32, 2, L)
+        for (l, c) in enumerate(batch)
+            u[offs["M.u"] * L + l] = gu[c]
+            u[offs["M.v"] * L + l] = gu[n + c]
+            cells[1, l] = Int32((c - 1) % 3 + 1)
+            cells[2, l] = Int32((c - 1) ÷ 3 + 1)
+        end
+        du = fill(NaN, LL.n_u * L)
+        rhs!(du, lp, ws, u, Float64[], prob.p, 0.75, default_forcing_set(lp), cells, length(batch))
+        for (l, c) in enumerate(batch)
+            @test reinterpret(UInt64, du[offs["M.u"] * L + l]) == reinterpret(UInt64, want[c])
+            @test reinterpret(UInt64, du[offs["M.v"] * L + l]) == reinterpret(UInt64, want[n + c])
+        end
+    end
+end

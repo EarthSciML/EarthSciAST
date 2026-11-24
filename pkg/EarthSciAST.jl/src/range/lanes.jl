@@ -319,7 +319,14 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
             end
             push!(regions, nr)
         end
-        vals = ASTExpr[_lane_rewrite(spec, ctx, v, sc, rule) for v in ma.values]
+        # A value that is an array `faq` over the whole region (the planner's
+        # Jacobian documents write one per band field) is read at the
+        # subscripts, so it is the `faq`'s body there.
+        vals = ASTExpr[
+            (v isa OpExpr && _is_faq_op((v::OpExpr).op) && _lane_array_faq(v::OpExpr)) ?
+                _lane_faq_read(spec, ctx, v::OpExpr, subs, sc, rule) :
+                _lane_rewrite(spec, ctx, v, sc, rule) for v in ma.values
+        ]
         newsubs = ASTExpr[
             (s isa VarExpr && haskey(sc.lanevars, (s::VarExpr).name)) ? s :
                 _lane_rewrite(spec, ctx, s, sc, rule) for s in subs
@@ -331,10 +338,60 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
             ]
         )
     end
+    if target isa OpExpr && _is_faq_op((target::OpExpr).op) && _lane_array_faq(target::OpExpr)
+        return _lane_faq_read(spec, ctx, target::OpExpr, subs, sc, rule)
+    end
     if target isa OpExpr && _is_array_producer(target)
         _lane_refuse(rule, "an array producer is indexed inside the lane scope")
     end
     return reconstruct(o; args = ASTExpr[_lane_rewrite(spec, ctx, a, sc, rule) for a in o.args])
+end
+
+_lane_array_faq(o::OpExpr) = o.output_idx !== nothing && !isempty(o.output_idx) &&
+    o.expr_body !== nothing && o.ranges !== nothing
+
+# `index(faq{output_idx o, ranges, body}, s…)`: the array `faq` read at the
+# subscripts `s`, each a loop variable, along an output axis that starts at 1
+# (a lane set's whole extent, or an interval from 1). That is the body with
+# each `o_d` renamed `s_d`; any other range of the `faq` (a contraction) stays
+# a scalar `faq` over it. The planner's whole-array right-hand sides
+# `D(x) = faq{…}`, lowered to an indexed `faq`, and its Jacobian documents'
+# `makearray` values arrive here.
+function _lane_faq_read(spec::_LaneSpec, ctx, F::OpExpr, subs, sc::_LaneScope, rule::String)
+    outs = _output_idx_strings(F)
+    length(outs) == length(subs) || _lane_refuse(rule, "an array faq is read at the wrong rank")
+    bindings = Dict{String, ASTExpr}()
+    names = Set{String}()
+    for (o, s) in zip(outs, subs)
+        s isa VarExpr || _lane_refuse(rule, "an array faq is read at a computed subscript")
+        sn = (s::VarExpr).name
+        r = F.ranges[o]
+        set = get(sc.lanevars, sn, nothing)
+        starts_at_one = if r isa AbstractDict && haskey(r, "from")
+            set === nothing || r["from"] == set
+        elseif r isa AbstractVector && length(r) == 2
+            lo = r[1] isa Integer ? Int(r[1]) : r[1] isa IntExpr ? r[1].value : nothing
+            hi = r[2] isa Integer ? Int(r[2]) : r[2] isa IntExpr ? r[2].value : nothing
+            lo == 1 && (set === nothing || hi == get(spec.ext, set, -1))
+        else
+            false
+        end
+        starts_at_one || _lane_refuse(
+            rule, "an array faq's axis '$o' does not run over the whole of what reads it"
+        )
+        bindings[o] = s
+        push!(names, sn)
+    end
+    contracted = Dict{String, Any}(String(k) => v for (k, v) in F.ranges if !(String(k) in outs))
+    any(k -> k in names, keys(contracted)) &&
+        _lane_refuse(rule, "an array faq's contraction rebinds a subscript")
+    body = substitute(F.expr_body, bindings)
+    if isempty(contracted) && F.filter === nothing
+        return _lane_rewrite(spec, ctx, body, sc, rule)
+    end
+    filt = F.filter === nothing ? nothing : substitute(F.filter, bindings)
+    G = reconstruct(F; output_idx = Any[], ranges = contracted, expr_body = body, filter = filt)
+    return _lane_rewrite(spec, ctx, G, sc, rule)
 end
 
 # The lane rewrite of `faq(D(index(v, …)))` / an observed's `faq` definition:
