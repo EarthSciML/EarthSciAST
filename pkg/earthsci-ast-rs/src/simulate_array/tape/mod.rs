@@ -743,10 +743,13 @@ impl ArrayCompiled {
             for (i, fs) in fp.fused.iter().enumerate() {
                 let _ = writeln!(
                     out,
-                    "  fused {i}: box {:?}, {} micro-ops, {} inputs",
+                    "  fused {i}: box {:?}, {} micro-ops, {} inputs, {} runs, {} shifted, {} gathers",
                     &fs.shape[..],
                     fs.micro.len(),
                     fs.inputs.len(),
+                    fs.schedule.n_runs,
+                    fs.inputs.iter().filter(|x| x.shifted_ix.is_some()).count(),
+                    fs.inputs.iter().filter(|x| x.gather.is_some() || x.index.is_some()).count(),
                 );
             }
         }

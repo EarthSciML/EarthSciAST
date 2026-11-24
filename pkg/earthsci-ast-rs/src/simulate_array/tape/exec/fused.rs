@@ -2506,6 +2506,8 @@ pub(in crate::simulate_array::tape) struct FramesScratch {
     svals: Vec<f64>,
     bases: Vec<*const f64>,
     outs: Vec<*mut f64>,
+    /// Per scalar: whether the frames' values differ.
+    vary: Vec<bool>,
     /// Whole-read gathers, frame by frame.
     whole: Vec<f64>,
     /// Per fused group: its schedule's runs, expanded on first use.
@@ -2552,6 +2554,7 @@ pub(super) unsafe fn exec_fused_frames<'s>(
         svals,
         bases,
         outs,
+        vary,
         whole,
         runs,
     } = fx;
@@ -2593,11 +2596,16 @@ pub(super) unsafe fn exec_fused_frames<'s>(
             });
         }
     }
+    let nsc = fs.scalars.len();
+    vary.clear();
+    vary.extend(
+        (0..nsc).map(|i| (1..nk).any(|k| svals[k * nsc + i].to_bits() != svals[i].to_bits())),
+    );
     if runs.len() <= spec {
         runs.resize_with(spec + 1, || None);
     }
     let runs = runs[spec].get_or_insert_with(|| fs.schedule.expanded());
-    let n_regs = fs.n_regs as usize + ni;
+    let n_regs = fs.n_regs as usize + ni + nsc;
     if regs.len() < n_regs * FCHUNK {
         regs.resize(n_regs * FCHUNK, 0.0);
     }
@@ -2607,6 +2615,7 @@ pub(super) unsafe fn exec_fused_frames<'s>(
         svals,
         bases,
         outs,
+        vary,
         runs,
     };
     match simd {
@@ -2625,6 +2634,7 @@ struct FramesWork<'a> {
     svals: &'a [f64],
     bases: &'a [*const f64],
     outs: &'a [*mut f64],
+    vary: &'a [bool],
     runs: &'a [FusedRun],
 }
 
@@ -2665,6 +2675,7 @@ unsafe fn fused_frames(w: &FramesWork, regs: &mut [f64]) {
         svals,
         bases,
         outs,
+        vary: _,
         runs,
     } = *w;
     let (ni, nsc, no) = (fs.inputs.len(), fs.scalars.len(), fs.outputs.len());
@@ -2683,6 +2694,12 @@ unsafe fn fused_frames(w: &FramesWork, regs: &mut [f64]) {
             while done < len {
                 let cc = (len - done).min(cw);
                 let at = run.out_off as usize + done;
+                if fk > 1 && cc < SIDE_BY_SIDE_BELOW {
+                    // SAFETY: as for the chunk below.
+                    unsafe { side_by_side(w, rp, g0, fk, run, done, cc) };
+                    done += cc;
+                    continue;
+                }
                 // A strided input is pre-loaded into its own register, frame
                 // by frame.
                 for (i, inp) in fs.inputs.iter().enumerate() {
@@ -2855,6 +2872,144 @@ unsafe fn fused_frames(w: &FramesWork, regs: &mut [f64]) {
             }
         }
         g0 += fk;
+    }
+}
+
+/// Chunks shorter than this run with the frames side by side
+/// ([`side_by_side`]).
+const SIDE_BY_SIDE_BELOW: usize = 32;
+
+/// One short chunk of [`fused_frames`] (`cc` elements at `done` into `run`,
+/// frames `g0..g0 + fk`), with the frames side by side: each frame's inputs
+/// and differing scalars are copied into registers at `k * cc`, each
+/// micro-op runs once over all `fk * cc` elements, and each output is copied
+/// out frame by frame. A short chunk costs more in kernel calls than in
+/// these copies.
+///
+/// # Safety
+/// As for [`fused_frames`].
+#[inline(always)]
+unsafe fn side_by_side(
+    w: &FramesWork,
+    rp: *mut f64,
+    g0: usize,
+    fk: usize,
+    run: &FusedRun,
+    done: usize,
+    cc: usize,
+) {
+    let FramesWork {
+        fs,
+        svals,
+        bases,
+        outs,
+        vary,
+        ..
+    } = *w;
+    let (ni, nsc, no) = (fs.inputs.len(), fs.scalars.len(), fs.outputs.len());
+    let cs = FCHUNK;
+    let at = run.out_off as usize + done;
+    let tot = fk * cc;
+    let reg = |r: usize| unsafe { rp.add(r * cs) };
+    let mut in_src: SmallVec<[MSrc; 8]> = SmallVec::from_elem(MSrc::C(0.0), ni);
+    let mut sc_src: SmallVec<[MSrc; 8]> = SmallVec::from_elem(MSrc::C(0.0), nsc);
+    for (i, inp) in fs.inputs.iter().enumerate() {
+        let dst = reg(fs.n_regs as usize + i);
+        let base = |k: usize| bases[(g0 + k) * ni + i];
+        match inp.shifted_ix {
+            None => {
+                for k in 0..fk {
+                    unsafe { copy_short(base(k).add(at), dst.add(k * cc), cc) };
+                }
+            }
+            Some(sx) => {
+                let o = run.in_off[sx as usize];
+                if o == GHOST_OFF {
+                    in_src[i] = MSrc::C(0.0);
+                    continue;
+                }
+                let st = inp.elem_stride as isize;
+                for k in 0..fk {
+                    unsafe {
+                        let src = base(k).offset(o as isize + done as isize * st);
+                        let d = dst.add(k * cc);
+                        for e in 0..cc {
+                            *d.add(e) = *src.offset(e as isize * st);
+                        }
+                    }
+                }
+            }
+        }
+        in_src[i] = MSrc::P(dst);
+    }
+    for i in 0..nsc {
+        sc_src[i] = if vary[i] {
+            let d = reg(fs.n_regs as usize + ni + i);
+            for k in 0..fk {
+                let v = svals[(g0 + k) * nsc + i];
+                unsafe { std::slice::from_raw_parts_mut(d.add(k * cc), cc).fill(v) };
+            }
+            MSrc::P(d)
+        } else {
+            MSrc::C(svals[g0 * nsc + i])
+        };
+    }
+    let msrc = |m: &MRef| -> MSrc {
+        match *m {
+            MRef::Reg(r) => MSrc::P(reg(r as usize)),
+            MRef::In(i) => in_src[i as usize],
+            MRef::Scal(i) => sc_src[i as usize],
+        }
+    };
+    for op in &fs.micro {
+        match op {
+            MicroOp::Bin { op, a, b, out } => {
+                let (a, b, dst) = (msrc(a), msrc(b), reg(*out as usize));
+                macro_rules! chunk {
+                    ($f:expr) => {
+                        unsafe { fch2(dst, tot, a, b, $f) }
+                    };
+                }
+                dispatch_bin_kernel!(op, chunk);
+            }
+            MicroOp::Un { op, a, out } => {
+                let (a, dst) = (msrc(a), reg(*out as usize));
+                macro_rules! chunk {
+                    ($f:expr) => {
+                        unsafe { fch1(dst, tot, a, $f) }
+                    };
+                }
+                dispatch_un_kernel!(op, chunk);
+            }
+            MicroOp::Neg { a, out } => unsafe { fch1(reg(*out as usize), tot, msrc(a), |x| -x) },
+            MicroOp::Select { cond, a, b, out } => unsafe {
+                fch_sel(reg(*out as usize), tot, msrc(cond), msrc(a), msrc(b))
+            },
+            MicroOp::Mov { a, out } => unsafe { fch1(reg(*out as usize), tot, msrc(a), |x| x) },
+            MicroOp::Bin2 {
+                op1,
+                a,
+                b,
+                op2,
+                c,
+                swap,
+                out,
+            } => unsafe {
+                bin2_chunk(reg(*out as usize), tot, msrc(a), msrc(b), msrc(c), *op1, *op2, *swap)
+            },
+            MicroOp::Load { .. } | MicroOp::Scan { .. } => {
+                unreachable!("`frames_ok` admits no load or scan")
+            }
+        }
+    }
+    // Every output from its register: no micro-op wrote one directly.
+    for (o, &(r, _)) in fs.outputs.iter().enumerate() {
+        for k in 0..fk {
+            let optr = outs[(g0 + k) * no + o];
+            if !optr.is_null() {
+                unsafe { copy_short(reg(r as usize).add(k * cc), optr.add(at), cc) };
+            }
+        }
     }
 }
 
