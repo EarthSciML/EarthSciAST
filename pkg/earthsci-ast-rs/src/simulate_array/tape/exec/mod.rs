@@ -313,6 +313,11 @@ pub(super) struct FuncFrames {
     /// it has no branch region, no recurrence body and no per-instruction
     /// precision after its CONST part.
     pub(super) by_instr: bool,
+    /// Whether the body can latch a fault ([`TapeProgram::can_fault`]): run
+    /// one instruction at a time across the frames, a later frame can reach
+    /// a fault before an earlier one does, so a batched execution that
+    /// latched one runs again frame by frame ([`interp::run_frames`]).
+    pub(super) can_fault: bool,
     /// Per state variable: `false` (a function's state is its arguments,
     /// never mirrored).
     pub(super) no_mirror: Vec<bool>,
@@ -404,6 +409,7 @@ impl FuncFrames {
             primed: false,
             args: FrameArgs::default(),
             by_instr,
+            can_fault: by_instr && prog.can_fault(),
             no_mirror: vec![false; prog.state_vars.len()],
             fused_frames: prog.fused.iter().map(fused::frames_ok).collect(),
             fx: Default::default(),

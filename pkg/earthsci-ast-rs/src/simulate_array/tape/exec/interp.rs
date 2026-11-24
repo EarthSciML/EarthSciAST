@@ -1308,7 +1308,9 @@ impl super::FrameArgs {
 /// the same kernels in the same order; the frames share the dispatch of
 /// every instruction, and a call inside the body runs as one execution over
 /// all the frames. A body with a branch region, a recurrence or its own
-/// precision runs frame by frame instead. Returns `true` when the body wrote
+/// precision runs frame by frame instead; so, once more, does a body that
+/// latched a fault, so that the fault latched first is the one lone calls of
+/// the frames, in order, latch. Returns `true` when the body wrote
 /// each frame's result straight into its target
 /// ([`super::FuncFrames::direct`]); otherwise [`super::FuncFrames::result`] is
 /// each frame's result, for the caller to copy.
@@ -1329,6 +1331,7 @@ pub(super) unsafe fn run_frames(
         primed,
         args,
         by_instr,
+        can_fault,
         no_mirror,
         fused_frames,
         fx,
@@ -1380,6 +1383,10 @@ pub(super) unsafe fn run_frames(
         return false;
     }
     let envs: SmallVec<[Env; 8]> = (0..n).map(env_of).collect();
+    // What the frames latch, apart from the caller's latch: run one
+    // instruction at a time across the frames, a later frame can fault
+    // before an earlier one, so on a fault the frames run again one by one.
+    let faults = (*can_fault && n > 1).then(crate::simulate_array::eval::FaultScope::enter);
     let slots = &prog.tables.slots;
     // The decoded scalar code serves every frame: they share one layout.
     exec.scalar.ensure(prog, &exec.slot_off, exec.layout);
@@ -1511,6 +1518,20 @@ pub(super) unsafe fn run_frames(
             }
         }
         pc += 1;
+    }
+    if let Some(faults) = faults
+        && faults.take().is_some()
+    {
+        // Back to the caller's latch, then each frame whole, in order, as
+        // the calls run without batching: the same values, and the first
+        // fault latched is theirs.
+        drop(faults);
+        for (k, env) in envs.iter().enumerate() {
+            exec.frame_off = k * l;
+            run_range(env, prime_end..end, exec, &mut no_dy);
+        }
+        exec.frame_off = 0;
+        return false;
     }
     direct.is_some()
 }

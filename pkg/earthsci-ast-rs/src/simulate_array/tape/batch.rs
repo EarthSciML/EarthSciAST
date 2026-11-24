@@ -24,16 +24,19 @@
 //! Moving a call earlier changes no value: it reads exactly the values it
 //! read at its own position (its inputs are defined once, before the new
 //! position), computes them with the same kernels in the same order, and
-//! nothing between the two positions reads what it writes. A call stays put
-//! when an input or its result is defined more than once, or when it sits in
-//! a branch region or a recurrence body.
+//! nothing between the two positions reads what it writes. Nor does it
+//! change which fault latches first: a call that can fault moves above no
+//! other instruction that can. A call stays put when an input or its result
+//! is defined more than once, or when it sits in a branch region or a
+//! recurrence body.
 
 use super::ir::*;
 
 /// Group the independent calls of each function into batches (see the
 /// module docs), filling [`TapeProgram::call_batches`]. Runs on a finished
-/// instruction stream, before slab coloring.
-pub(super) fn batch_calls(prog: &mut TapeProgram) {
+/// instruction stream, before slab coloring; `funcs_fault` says per function
+/// the program calls whether it can latch a fault ([`funcs_can_fault`]).
+pub(super) fn batch_calls(prog: &mut TapeProgram, funcs_fault: &[bool]) {
     prog.call_batches.clear();
     if prog.tables.calls.is_empty() {
         return;
@@ -72,11 +75,21 @@ pub(super) fn batch_calls(prog: &mut TapeProgram) {
         let mut open: rustc_hash::FxHashMap<(u32, Option<crate::precision::Precision>), usize> =
             Default::default();
         let mut batches: Vec<Vec<usize>> = Vec::new();
+        // The last position, in the order the part runs in once batched,
+        // of an instruction that can latch a fault.
+        let mut last_fault: Option<usize> = None;
         for pc in part.clone() {
+            let can_fault = prog.instrs[pc].can_fault(&prog.tables.calls, funcs_fault);
             let Instr::Call { call, out } = prog.instrs[pc] else {
+                if can_fault {
+                    last_fault = Some(pc);
+                }
                 continue;
             };
             if covered[pc] || du.n_defs[out as usize] != 1 {
+                if can_fault {
+                    last_fault = Some(pc);
+                }
                 continue;
             }
             // The earliest position the call can run at: after every
@@ -102,6 +115,13 @@ pub(super) fn batch_calls(prog: &mut TapeProgram) {
                 prog.tables.calls[call as usize].func,
                 prog.precision.get(pc).copied(),
             );
+            // A call that can fault does not move above another instruction
+            // that can, so the first fault latched is the one latched
+            // without batching. The earlier calls of its batch, all at the
+            // batch's position, run before it either way.
+            if can_fault && let Some(f) = last_fault {
+                earliest = earliest.max(f);
+            }
             match open.get(&key) {
                 Some(&b) if movable && earliest <= batches[b][0] => batches[b].push(pc),
                 _ => {
@@ -109,6 +129,9 @@ pub(super) fn batch_calls(prog: &mut TapeProgram) {
                     // may join (they move up to it); it never moves itself.
                     open.insert(key, batches.len());
                     batches.push(vec![pc]);
+                    if can_fault {
+                        last_fault = Some(pc);
+                    }
                 }
             }
         }

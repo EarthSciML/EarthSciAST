@@ -201,6 +201,11 @@ pub(super) fn call_key_live(key: &CallKey, n_slots: SlotId) -> bool {
 }
 
 impl FuncTable {
+    /// Per function compiled so far: whether running it can latch a fault.
+    pub(super) fn can_fault(&self) -> Vec<bool> {
+        funcs_can_fault(&self.progs)
+    }
+
     /// Whether every function compiled so far can be laid out axis-reversed,
     /// which a column-major caller needs of each of them.
     pub(super) fn all_reversible(&self) -> bool {
@@ -216,9 +221,11 @@ impl FuncTable {
         fuse: Option<super::super::fuse::SuperopCfg>,
     ) -> Result<Vec<Arc<TapeProgram>>, String> {
         let mut done: Vec<Arc<TapeProgram>> = Vec::with_capacity(self.progs.len());
+        let mut faults: Vec<bool> = Vec::with_capacity(self.progs.len());
         for mut prog in std::mem::take(&mut self.progs) {
             prog.funcs = done.clone();
-            finish_program(&mut prog, Layout::Forced(col_major), fuse)?;
+            finish_program(&mut prog, Layout::Forced(col_major), fuse, &faults)?;
+            faults.push(prog.can_fault_with(&faults));
             done.push(Arc::new(prog));
         }
         Ok(done)
@@ -233,11 +240,13 @@ pub(super) enum Layout {
 }
 
 /// The passes after lowering: constant dedup, scan rewrites, the layout,
-/// (fusion), liveness and slab coloring.
+/// (fusion), call batching, liveness and slab coloring. `funcs_fault` says
+/// per function the program calls whether it can latch a fault.
 pub(super) fn finish_program(
     prog: &mut TapeProgram,
     layout: Layout,
     fuse: Option<super::super::fuse::SuperopCfg>,
+    funcs_fault: &[bool],
 ) -> Result<(), String> {
     super::super::dedup::dedup_const(prog);
     super::super::scan_shift::rewrite_scan_makearray_reads(prog);
@@ -272,7 +281,7 @@ pub(super) fn finish_program(
         // A function's result is its export: every instruction runs.
         prog.n_rhs = prog.section_range(Cadence::Continuous).len() as u32;
     }
-    super::super::batch::batch_calls(prog);
+    super::super::batch::batch_calls(prog, funcs_fault);
     super::super::slab::color_slab(prog);
     Ok(())
 }
