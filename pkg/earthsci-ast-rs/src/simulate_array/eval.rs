@@ -513,8 +513,25 @@ pub(crate) fn check_evaluable_all<'a>(
     for i in reachable_instances(roots, ops)? {
         check_no_spatial_ops(&i.body)?;
         check_evaluable_ops(&i.body)?;
+        // Flatten resolves a time derivative in a body (step 3a); one still
+        // standing is one it could not answer (`<name>.unresolved`), which
+        // the expansion would leave standing too: refused as unlowered.
+        if contains_d(&i.body) {
+            return Err(CompileError::UnloweredOperatorError {
+                op: "D".to_string(),
+                why: String::new(),
+            });
+        }
     }
     Ok(())
+}
+
+/// Whether `e` holds a `D` node anywhere.
+fn contains_d(e: &Expr) -> bool {
+    match e {
+        Expr::Operator(n) => n.op == "D" || n.any_child(&mut contains_d),
+        _ => false,
+    }
 }
 
 /// Every operator instance `roots` reach through `ops`, each once; a reference

@@ -683,6 +683,13 @@ impl ArrayCompiled {
                 .unwrap_or_default();
             let _ = writeln!(out, "{pc:4} {:?} {ins:?}{boxed}", prog.section_of(pc));
         }
+        // Each function the program calls, compiled once.
+        for (f, fp) in prog.funcs.iter().enumerate() {
+            let _ = writeln!(out, "function {f}: {:?}", fp.rules.first().map(|r| &r.name));
+            for (pc, ins) in fp.instrs.iter().enumerate() {
+                let _ = writeln!(out, "  {pc:4} {:?} {ins:?}", fp.section_of(pc));
+            }
+        }
         for (i, fs) in prog.fused.iter().enumerate() {
             let _ = writeln!(
                 out,

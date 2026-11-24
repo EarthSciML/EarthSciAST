@@ -274,10 +274,12 @@ impl<'m> TapeBuilder<'m> {
         let inst = ops
             .instance_of_node(node)
             .map_err(|e| Bail::new(e.to_string()))?;
-        // Inside an unrolled contraction a bound index reads as its literal
-        // value at this term, and inside a tuple list a column reads as an
-        // array over the list: either way the call's arguments carry it,
-        // and the function is lowered over the call's plain box.
+        if bx.tuple != 0 || !bx.cnames.is_empty() {
+            bail_tape!(
+                "operator reference `{name}`: a call inside an unrolled contraction or a tuple \
+                 list is not compiled yet"
+            );
+        }
         let Some(r) = crate::operator_refs::reference_node(node) else {
             bail_tape!("operator reference without a name");
         };
@@ -304,6 +306,11 @@ impl<'m> TapeBuilder<'m> {
                 continue;
             }
             let Some(b) = r.binding(p) else { continue };
+            // A parameter the body never reads: its expansion never evaluates
+            // the binding, and neither does the call.
+            if inst.definition.param_roles().get(p).is_none() {
+                continue;
+            }
             // An inline `const` is build-time data the lowering reads (a
             // sorted axis, a lookup table): it is compiled into the instance,
             // as a literal is.
@@ -311,6 +318,12 @@ impl<'m> TapeBuilder<'m> {
                 && c.op == "const"
             {
                 match eval_const(c) {
+                    // An empty array has no slot form: compiled into the
+                    // instance, as a literal is.
+                    Value::Array(a) if a.is_empty() => {
+                        let text = serde_json::to_string(b).unwrap_or_default();
+                        params.push((p.clone(), ArgKind::Inline(text)));
+                    }
                     Value::Array(a) => {
                         let lv = self.const_literal_array(c, &a, None)?;
                         let LV::Arr(slot) = lv else {
