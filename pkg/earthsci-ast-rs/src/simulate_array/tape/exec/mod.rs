@@ -268,10 +268,6 @@ pub(crate) struct TapeExec {
     /// grown the first time a call forks wider.
     #[cfg(not(target_arch = "wasm32"))]
     peers: Vec<Scratch>,
-    /// The execution context of each function this program calls
-    /// ([`TapeProgram::funcs`]), made by its first call. A call runs on the
-    /// calling thread ([`Instr::may_run_on_worker`]), one at a time.
-    funcs: Vec<Option<Box<TapeCtx>>>,
 }
 
 /// One thread's mutable scratch for straight-line instructions (see
@@ -287,6 +283,9 @@ pub(super) struct Scratch {
     /// only), sized by the first split so steady calls do not allocate.
     #[cfg(not(target_arch = "wasm32"))]
     asm_parts: Vec<par::AsmPart>,
+    /// This thread's execution context of each function the program calls
+    /// ([`TapeProgram::funcs`]), made by its first call on this thread.
+    pub(super) funcs: Vec<Option<Box<TapeCtx>>>,
 }
 
 impl TapeExec {
@@ -331,6 +330,7 @@ impl TapeExec {
                 fscratch: fused::FusedScratch::for_program(prog),
                 #[cfg(not(target_arch = "wasm32"))]
                 asm_parts: Vec::new(),
+                funcs: Vec::new(),
             },
             idx_tables: fused::index_tables_for(prog),
             lscratch: lanes::LaneScratch::for_program(prog),
@@ -346,7 +346,6 @@ impl TapeExec {
             plan: None,
             #[cfg(not(target_arch = "wasm32"))]
             peers: Vec::new(),
-            funcs: (0..prog.funcs.len()).map(|_| None).collect(),
         }
     }
 }
@@ -452,8 +451,10 @@ impl TapeCtx {
         self.last_params = None;
         self.exec.primed_param_epoch = 0;
         self.exec.primed_forcing_epoch = 0;
-        for f in &mut self.exec.funcs {
-            *f = None;
+        self.exec.scratch.funcs.clear();
+        #[cfg(not(target_arch = "wasm32"))]
+        for p in &mut self.exec.peers {
+            p.funcs.clear();
         }
     }
 

@@ -1187,8 +1187,9 @@ impl Instr {
             Instr::Export { .. } => false,
             // Runs through the lane executor, which owns its register file.
             Instr::Lanes { .. } => false,
-            // Runs a function program in the calling thread's call context.
-            Instr::Call { .. } => false,
+            // Runs the function on the thread that takes it, in that
+            // thread's own context of the function.
+            Instr::Call { .. } => true,
         }
     }
 }

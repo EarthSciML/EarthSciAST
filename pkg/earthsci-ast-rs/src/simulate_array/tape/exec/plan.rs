@@ -461,6 +461,7 @@ pub(super) fn run_plan(plan: &CallPlan, env: &Env, exec: &mut TapeExec, dy: &mut
             fregs: vec![0.0; exec.scratch.fregs.len()],
             fscratch: super::fused::FusedScratch::for_peer(prog),
             asm_parts: Vec::new(),
+            funcs: Vec::new(),
         });
     }
     for step in &plan.steps {
