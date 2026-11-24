@@ -5,18 +5,29 @@
 
 # ---- elementwise -------------------------------------------------------------
 
+# Preserve the per-operation binary32 rounding required by §11.3.1. In
+# particular, reassociating a cancellation chain or fusing multiply-add
+# can change its result even though every tensor has the correct type.
+function _de_rounded(ctx::_DECtx, op, len::Int)
+    value = _de_res(op)
+    if ctx.precision === Float32
+        value = _de_res(_hlo.optimization_barrier([value]; location = _de_loc()))
+    end
+    return _DEVal(value, len)
+end
+
 function _de_bin(ctx::_DECtx, f::F, a::_DEVal, b::_DEVal)::_DEVal where {F}
     L = max(a.len, b.len)
     a = _de_bcast(ctx, a, L); b = _de_bcast(ctx, b, L)
     _de_tally!(ctx, :arith)
     op = f(a.v, b.v; result = _de_ty(ctx, L), location = _de_loc())
-    return _DEVal(_de_res(op), L)
+    return _de_rounded(ctx, op, L)
 end
 
 function _de_un(ctx::_DECtx, f::F, a::_DEVal)::_DEVal where {F}
     _de_tally!(ctx, :arith)
     op = f(a.v; result = _de_ty(ctx, a.len), location = _de_loc())
-    return _DEVal(_de_res(op), a.len)
+    return _de_rounded(ctx, op, a.len)
 end
 
 function _de_pred(ctx::_DECtx, dir::String, a::_DEVal, b::_DEVal)
