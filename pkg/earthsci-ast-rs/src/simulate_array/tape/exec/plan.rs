@@ -287,9 +287,17 @@ impl CallPlan {
                 seg.clear();
             };
         let mut pc = range.start;
+        // The calls of the batch being placed that are not placed yet, and
+        // how many a task takes: a batch with enough work is split into
+        // consecutive parts, one task each, so its calls still spread across
+        // the threads.
+        let mut batch_left = 0usize;
+        let mut batch_part = 1usize;
         while pc < range.end {
             let split = match place(prog, pc, range.end, ways, chains) {
                 Place::Loop(n) => {
+                    // The loop runs what is left of a batch call by call.
+                    batch_left = 0;
                     let hi = (pc + n).min(range.end);
                     flush(&mut seg, &mut steps, &mut tasks);
                     last_write.fill(0);
@@ -305,9 +313,19 @@ impl CallPlan {
                 Place::Task(w) => w,
             };
             let ins = &prog.instrs[pc];
-            // A batch of calls is one task: every call of it at once.
+            // A batch of calls is one task, or a few when it has the work
+            // to keep several threads busy.
             let calls = if matches!(ins, Instr::Call { .. }) {
-                super::interp::calls_at(prog, pc).min(range.end - pc)
+                if batch_left == 0 {
+                    let n = super::interp::calls_at(prog, pc).min(range.end - pc);
+                    let work = task_cost(prog, ins).saturating_mul(n);
+                    let parts = n.min(ways).min((work / phase_min_work().max(1)).max(1));
+                    batch_left = n;
+                    batch_part = n.div_ceil(parts);
+                }
+                let c = batch_part.min(batch_left);
+                batch_left -= c;
+                c
             } else {
                 1
             };
