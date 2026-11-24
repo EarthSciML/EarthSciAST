@@ -164,6 +164,45 @@ fn a_fault_inside_a_batch_is_reported_as_without_batching() {
     );
 }
 
+/// One definition referenced the same way from a binary32 rule and a
+/// binary64 one (esm-spec §11.3.1): each reference runs at its own rule's
+/// precision. The body reads only the box index `l` (`l / 3`, which rounds
+/// differently at each precision), so both references lower to the same
+/// program with the same, empty, arguments: neither reads the other's
+/// result, nor shares its function, whose constant part runs once per
+/// function context.
+#[test]
+fn identical_calls_at_two_precisions_each_run() {
+    let l = json!({"l": [1, 6]});
+    let at = |v: &str| ix(v, vec![json!("l")]);
+    let third = || apply("third", json!({"x": "l"}));
+    let mut m = json!({
+        "variables": {
+            "u": {"type": "unknown", "shape": ["lev"], "default": 1.0, "element_type": "Float32"},
+            "w": {"type": "unknown", "shape": ["lev"], "default": 1.0},
+            "a": {"type": "unknown", "shape": ["lev"], "element_type": "Float32"},
+            "b": {"type": "unknown", "shape": ["lev"]}
+        },
+        "equations": [
+            {"lhs": "a", "rhs": faq(&["l"], l.clone(), third())},
+            {"lhs": "b", "rhs": faq(&["l"], l.clone(), third())},
+            {"lhs": d_lhs("u", &["l"], l.clone()), "rhs": faq(&["l"], l.clone(), at("a"))},
+            {"lhs": d_lhs("w", &["l"], l.clone()), "rhs": faq(&["l"], l.clone(), at("b"))}
+        ]
+    });
+    m["operators"] = json!({
+        "third": {"params": ["x"], "body": op("/", vec![json!("x"), json!(3.0)])}
+    });
+    let doc = json!({"esm": "2.0.0", "metadata": {"name": "identical_calls_two_precisions"}, "models": {"M": m}});
+    let (prog, _) = oracle_ab(doc);
+    let n_calls = prog
+        .instrs
+        .iter()
+        .filter(|i| matches!(i, Instr::Call { .. }))
+        .count();
+    assert_eq!(n_calls, 2, "one call at each precision");
+}
+
 /// Two references with the same definition and the same arguments: the
 /// second reads the first's result (one call), and `dy` matches the oracle.
 #[test]

@@ -62,8 +62,8 @@ enum ArgKind {
     Inline(String),
 }
 
-/// The key of one function: the instance, what each parameter is, and the
-/// call's box.
+/// The key of one function: the instance, what each parameter is, the
+/// call's box, and the precision the body is lowered at.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct FuncKey {
     instance: usize,
@@ -76,6 +76,9 @@ struct FuncKey {
     syms: Vec<String>,
     lo: DimI,
     shape: DimU,
+    /// The precision in force at the call (esm-spec §11.3.1), which the
+    /// body runs at: a call at another precision is another function.
+    precision: crate::precision::Precision,
 }
 
 /// What a finished function returns, in the caller's terms.
@@ -98,9 +101,12 @@ pub(super) struct FuncTable {
     /// Build-time payloads passed as [`ArgKind::Known`], by address (held, so
     /// the address is not reused).
     known_vals: FxHashMap<usize, Arc<Vec<f64>>>,
-    /// Each function's program text ([`fingerprint`]): two instances that
-    /// compile to the same program are one function.
-    by_program: FxHashMap<u128, (u32, FuncResult)>,
+    /// Each function's program text ([`fingerprint`]) and the precision it
+    /// runs at: two instances that compile to the same program at one
+    /// precision are one function. A body whose instructions carry no
+    /// precision of their own runs at its caller's, so the program text
+    /// alone does not tell two precisions apart.
+    by_program: FxHashMap<(u128, crate::precision::Precision), (u32, FuncResult)>,
 }
 
 /// The whole text of an assembled function program: its instructions, its
@@ -172,9 +178,15 @@ fn fingerprint(prog: &TapeProgram) -> u128 {
 
 pub(super) type SharedFuncs = Rc<RefCell<FuncTable>>;
 
-/// A call's identity: its function, its array arguments' sources and its
-/// scalar arguments' operands.
-pub(super) type CallKey = (u32, Vec<SrcRef>, Vec<OperandKey>);
+/// A call's identity: its function, its array arguments' sources, its
+/// scalar arguments' operands, and the precision it runs at (the one in
+/// force where it is emitted).
+pub(super) type CallKey = (
+    u32,
+    Vec<SrcRef>,
+    Vec<OperandKey>,
+    crate::precision::Precision,
+);
 
 /// Whether every slot `key` names (its arguments) is below `n_slots`: a
 /// rolled-back slot's id is handed out again, so a call naming one goes.
@@ -519,6 +531,7 @@ impl<'m> TapeBuilder<'m> {
             syms: bx.syms.to_vec(),
             lo: bx.lo.clone(),
             shape: bx.shape.clone(),
+            precision: crate::precision::active(),
         };
         let funcs = Rc::clone(&self.funcs);
         let known = funcs.borrow().by_key.get(&key).cloned();
@@ -533,7 +546,7 @@ impl<'m> TapeBuilder<'m> {
                 let mut t = funcs.borrow_mut();
                 match built {
                     Ok(Built::Function(prog, res)) => {
-                        let text = fingerprint(&prog);
+                        let text = (fingerprint(&prog), key.precision);
                         t.held.push(Arc::clone(&inst));
                         if let Some(same) = t.by_program.get(&text).cloned() {
                             t.by_key.insert(key, Some(same.clone()));
@@ -566,12 +579,14 @@ impl<'m> TapeBuilder<'m> {
             }
         };
         // The same function over the same arguments (by identity: the same
-        // source slots and views, the same scalar operands) computes the same
-        // values: a call computed unconditionally before is read instead.
+        // source slots and views, the same scalar operands) at the same
+        // precision computes the same values: a call computed
+        // unconditionally before is read instead.
         let key: CallKey = (
             func,
             arrays.clone(),
             scalars.iter().map(Operand::key).collect(),
+            crate::precision::active(),
         );
         if let Some(&(out, scalar)) = self.call_memo.get(&key) {
             return Ok(if scalar {
