@@ -1110,7 +1110,15 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // Phase 5f: the MERGED operator registry (esm-spec §9.6.4 rule 7,
     // §10.7), as the phases above left it. Its bodies are closed, so they
     // read no component name a coupling rule rewrote.
-    let template_registry = std::mem::take(&mut flat_reg.registry);
+    let mut template_registry = std::mem::take(&mut flat_reg.registry);
+    // Every body in the expression form serialization writes (CONFORMANCE
+    // §5.5.3.1: an integral number in `Int64` is an integer, `0.0` is `0`),
+    // as the Julia binding's registry holds it: a body kept as the source
+    // spelled it would reach a document that carries the definition
+    // (esm-spec §9.6.4 rule 5) in another form than the equations around it.
+    for entry in template_registry.values_mut() {
+        canonical_body(entry);
+    }
 
     let equation_lifted: Vec<bool> = if equations.iter().any(|fe| fe.lifted) {
         equations.iter().map(|fe| fe.lifted).collect()
@@ -1698,6 +1706,20 @@ impl ShapeInference<'_, '_> {
             out
         });
         (*out).clone()
+    }
+}
+
+/// A registry entry's `body` rewritten through the typed expression, in the
+/// form serialization writes (numbers canonical, CONFORMANCE §5.5.3.1). A
+/// body that has no typed form is left as it is.
+fn canonical_body(entry: &mut serde_json::Value) {
+    let Some(body) = entry.get_mut("body") else {
+        return;
+    };
+    if let Ok(x) = serde_json::from_value::<Expr>(body.clone())
+        && let Ok(v) = serde_json::to_value(&x)
+    {
+        *body = v;
     }
 }
 
@@ -7687,6 +7709,31 @@ mod tests {
             saved["models"]["M"]["variables"]["X"]
                 .get("shape")
                 .is_none()
+        );
+    }
+
+    /// The merged registry holds every definition's body in the expression
+    /// form serialization writes (CONFORMANCE §5.5.3.1), as the Julia
+    /// binding's does: an integral number the source spells `2.0` is `2`.
+    #[test]
+    fn registry_bodies_have_canonical_numbers() {
+        let doc = serde_json::json!({
+            "esm": "2.4.0",
+            "metadata": {"name": "canon"},
+            "models": {"M": {
+                "operators": {"halve": {"params": ["x"],
+                    "body": {"op": "*", "args": [0.5, "x", 2.0, {"op": "-", "args": ["x", 0.0]}]}}},
+                "variables": {"u": {"type": "unknown", "default": 1.0}},
+                "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                    "rhs": {"op": "apply_operator", "args": [], "name": "halve",
+                            "bindings": {"x": "u"}}}]
+            }}
+        });
+        let file = crate::parse::load_string(&doc.to_string()).expect("loads");
+        let flat = flatten(&file).expect("flattens");
+        assert_eq!(
+            flat.template_registry["halve"]["body"],
+            serde_json::json!({"op": "*", "args": [0.5, "x", 2, {"op": "-", "args": ["x", 0]}]})
         );
     }
 }
