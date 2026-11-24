@@ -172,6 +172,22 @@ fn fingerprint(prog: &TapeProgram) -> u128 {
 
 pub(super) type SharedFuncs = Rc<RefCell<FuncTable>>;
 
+/// A call's identity: its function, its array arguments' sources and its
+/// scalar arguments' operands.
+pub(super) type CallKey = (u32, Vec<SrcRef>, Vec<OperandKey>);
+
+/// Whether every slot `key` names (its arguments) is below `n_slots`: a
+/// rolled-back slot's id is handed out again, so a call naming one goes.
+pub(super) fn call_key_live(key: &CallKey, n_slots: SlotId) -> bool {
+    key.1
+        .iter()
+        .all(|a| !matches!(a, SrcRef::Slot(s) if *s >= n_slots))
+        && key
+            .2
+            .iter()
+            .all(|o| !matches!(o, OperandKey::Slot(s) if *s >= n_slots))
+}
+
 impl FuncTable {
     /// Whether every function compiled so far can be laid out axis-reversed,
     /// which a column-major caller needs of each of them.
@@ -549,6 +565,21 @@ impl<'m> TapeBuilder<'m> {
                 }
             }
         };
+        // The same function over the same arguments (by identity: the same
+        // source slots and views, the same scalar operands) computes the same
+        // values: a call computed unconditionally before is read instead.
+        let key: CallKey = (
+            func,
+            arrays.clone(),
+            scalars.iter().map(Operand::key).collect(),
+        );
+        if let Some(&(out, scalar)) = self.call_memo.get(&key) {
+            return Ok(if scalar {
+                LV::Scalar(out)
+            } else {
+                LV::Arr(out)
+            });
+        }
         let call = tape_index(self.tables.calls.len(), "calls")?;
         self.tables.calls.push(CallSpec {
             func,
@@ -558,6 +589,11 @@ impl<'m> TapeBuilder<'m> {
         let sec = self.placement(cadence);
         let out = self.new_slot(&res.shape, &res.origin, res.scalar, sec);
         self.emit(Instr::Call { call, out }, sec);
+        // Only a call every later read is sure to follow: not one inside a
+        // conditional branch or a recurrence body.
+        if !self.in_branch() && self.rule.sweep.is_none() {
+            self.call_memo.insert(key, (out, res.scalar));
+        }
         Ok(if res.scalar {
             LV::Scalar(out)
         } else {

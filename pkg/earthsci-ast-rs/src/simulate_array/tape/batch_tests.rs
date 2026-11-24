@@ -125,3 +125,83 @@ fn a_lone_reference_is_no_batch() {
     let (prog, _) = oracle_ab(many_lookups(1, true, false));
     assert_eq!(batches(&prog), (0, 0));
 }
+
+/// `pick(a, x) = a[floor(x) + 4]`: past the end of `a` once `x >= 1`, so a
+/// call faults where its state does.
+fn faulting_batch(n_fields: usize) -> Value {
+    use super::test_support::{d_eq, doc, idx, lit, plus};
+    let mut vars = serde_json::Map::new();
+    vars.insert("C".into(), json!({"type": "unknown", "shape": ["c"]}));
+    let mut eqs = vec![json!({"lhs": "C", "rhs": lit(&[1.0, 2.0, 3.0, 4.0])})];
+    for k in 1..=n_fields {
+        let u = format!("u{k}");
+        vars.insert(u.clone(), json!({"type": "unknown", "shape": ["i"]}));
+        let x = idx(json!(u.clone()), &[json!("i")]);
+        let call = apply("pick", json!({"a": "C", "x": x}));
+        eqs.push(d_eq(&u, 5, plus(call, json!(k as f64))));
+    }
+    let mut d = doc(Value::Object(vars), eqs);
+    d["models"]["M"]["operators"] = json!({
+        "pick": {
+            "params": ["a", "x"],
+            "body": idx(json!("a"), &[plus(json!({"op": "floor", "args": ["x"]}), json!(4))])
+        }
+    });
+    d
+}
+
+/// A fault inside a batched call is reported as without batching: the
+/// latched fault (and `dy`) match the per-cell oracle's, on fresh scratches,
+/// whichever calls of the batch fault.
+#[test]
+fn a_fault_inside_a_batch_is_reported_as_without_batching() {
+    let compiled = super::test_support::compile(faulting_batch(3));
+    let prog = super::test_support::ab(&compiled, &super::test_support::no_params());
+    let (n_batches, n_calls) = batches(&prog);
+    assert!(
+        n_batches >= 1 && n_calls >= 3,
+        "{n_batches} batches of {n_calls} calls"
+    );
+}
+
+/// Two references with the same definition and the same arguments: the
+/// second reads the first's result (one call), and `dy` matches the oracle.
+#[test]
+fn identical_calls_run_once() {
+    let l = json!({"l": [1, 6]});
+    let at = |v: &str| ix(v, vec![json!("l")]);
+    let lookup = || {
+        apply(
+            "linear",
+            json!({"table": "T", "axis": "A", "x": at("u"), "n": AXIS.len()}),
+        )
+    };
+    let mut m = json!({
+        "variables": {
+            "u": {"type": "unknown", "shape": ["lev"], "default": 1.0},
+            "w": {"type": "unknown", "shape": ["lev"], "default": 1.0},
+            "T": {"type": "unknown", "shape": ["k"]},
+            "A": {"type": "unknown", "shape": ["k"]}
+        },
+        "equations": [
+            {"lhs": "T", "rhs": super::test_support::lit(&TABLE)},
+            {"lhs": "A", "rhs": super::test_support::lit(&AXIS)},
+            {"lhs": d_lhs("u", &["l"], l.clone()),
+             "rhs": faq(&["l"], l.clone(), op("*", vec![json!(-0.01), lookup()]))},
+            {"lhs": d_lhs("w", &["l"], l.clone()),
+             "rhs": faq(&["l"], l.clone(), op("*", vec![json!(0.02), lookup()]))}
+        ]
+    });
+    m["operators"] = library("interp.esm");
+    let doc = json!({"esm": "2.0.0", "metadata": {"name": "identical_calls"}, "models": {"M": m}});
+    let (prog, _) = oracle_ab(doc);
+    let n_calls = prog
+        .instrs
+        .iter()
+        .filter(|i| matches!(i, Instr::Call { .. }))
+        .count();
+    assert_eq!(
+        n_calls, 1,
+        "the second reference reads the first call's result"
+    );
+}

@@ -150,6 +150,8 @@ impl<'m> TapeBuilder<'m> {
         // A rolled-back slot's id is handed out again: its bounds go with it.
         self.ranges.retain(|s, _| *s < n_slots);
         self.range_defs.retain(|s| *s < n_slots);
+        self.call_memo
+            .retain(|k, v| v.0 < n_slots && super::calls::call_key_live(k, n_slots));
         for s in 0..3 {
             let stream = &mut self.streams[s];
             stream.truncate(txn.stream_lens[s]);
@@ -215,6 +217,8 @@ impl<'m> TapeBuilder<'m> {
         // A rolled-back slot's id is handed out again: its bounds go with it.
         self.ranges.retain(|s, _| *s < n_slots);
         self.range_defs.retain(|s| *s < n_slots);
+        self.call_memo
+            .retain(|k, v| v.0 < n_slots && super::calls::call_key_live(k, n_slots));
         // The attempt's value numbers in the frame it ran in: one naming a
         // rolled-back slot goes (a value it shadowed is simply recomputed).
         if let Some(frame) = self.rule.scope_frames.last_mut() {

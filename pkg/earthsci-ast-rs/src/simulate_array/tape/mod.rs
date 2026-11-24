@@ -707,8 +707,9 @@ impl ArrayCompiled {
                 let batch = prog.call_batches.get(pc).copied().unwrap_or(0);
                 let _ = writeln!(
                     out,
-                    "       {:?}{}",
+                    "       {:?} at {}{}",
                     prog.tables.calls[*call as usize],
+                    arg_offsets(&prog, &prog.tables.calls[*call as usize]),
                     if batch > 1 {
                         format!(" batch of {batch}")
                     } else {
@@ -741,8 +742,9 @@ impl ArrayCompiled {
                     let batch = fp.call_batches.get(pc).copied().unwrap_or(0);
                     let _ = writeln!(
                         out,
-                        "         {:?}{}",
+                        "         {:?} at {}{}",
                         fp.tables.calls[*call as usize],
+                        arg_offsets(fp, &fp.tables.calls[*call as usize]),
                         if batch > 1 {
                             format!(" batch of {batch}")
                         } else {
@@ -754,7 +756,7 @@ impl ArrayCompiled {
             for (i, fs) in fp.fused.iter().enumerate() {
                 let _ = writeln!(
                     out,
-                    "  fused {i}: box {:?}, {} micro-ops, {} inputs, {} runs, {} shifted, {} gathers",
+                    "  fused {i}: box {:?}, {} micro-ops, {} inputs, {} runs, {} shifted, {} gathers, {} state",
                     &fs.shape[..],
                     fs.micro.len(),
                     fs.inputs.len(),
@@ -763,6 +765,10 @@ impl ArrayCompiled {
                     fs.inputs
                         .iter()
                         .filter(|x| x.gather.is_some() || x.index.is_some())
+                        .count(),
+                    fs.inputs
+                        .iter()
+                        .filter(|x| matches!(x.src, SrcRef::State(_)))
                         .count(),
                 );
             }
@@ -914,4 +920,23 @@ impl ArrayCompiled {
         }
         out
     }
+}
+
+/// Where each array argument of `spec` starts: a slot's slab offset (`s@`) or
+/// a state variable's flat offset (`x@`). Diagnostics only.
+fn arg_offsets(prog: &TapeProgram, spec: &CallSpec) -> String {
+    spec.arrays
+        .iter()
+        .map(|a| match a {
+            SrcRef::Slot(s) => {
+                let st = prog.tables.slots[*s as usize].storage;
+                match prog.slab.storages.get(st as usize) {
+                    Some(d) => format!("s@{}", d.offset),
+                    None => "s@?".to_string(),
+                }
+            }
+            SrcRef::State(ix) => format!("x@{}", prog.state_vars[*ix as usize].flat_offset),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
