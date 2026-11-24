@@ -13,9 +13,9 @@
 use super::forcing::{ForcingSet, ForcingSlot, RhsError};
 use super::walk::{AxisSpec, Read, Refusal, Scope, VarInfo, Walker};
 use super::{
-    Blocks, Decomposition, ProgramModel, RhsProgram, RhsWorkspace, TileBox, TileInput, TileLayout,
-    WsExec, check_forcing, check_lengths, check_owner, index_set_sizes, next_program_id,
-    range_error, restricted_inputs, round_binary32, slot_map, tape_fault, var_infos,
+    Blocks, Decomposition, InputPrecisions, ProgramModel, RhsProgram, RhsWorkspace, TileBox,
+    TileInput, TileLayout, WsExec, check_forcing, check_lengths, check_owner, index_set_sizes,
+    next_program_id, range_error, slot_map, tape_fault, var_infos,
 };
 use crate::diagnostic::codes;
 use crate::simulate::SimulateError;
@@ -48,9 +48,10 @@ struct TileInner {
     prog: Arc<TapeProgram>,
     blocks: Blocks,
     layout: TileLayout,
-    slots: Arc<[ForcingSlot]>,
+    default_set: ForcingSet,
     slot_of: Vec<u32>,
     n_params: usize,
+    inputs: InputPrecisions,
     declared: Arc<HashSet<String>>,
     precision: crate::precision::Precision,
 }
@@ -71,7 +72,7 @@ impl TileProgram {
 
     /// The forcing slots a set for this tile holds: the whole program's.
     pub fn forcing_slots(&self) -> &[ForcingSlot] {
-        &self.inner.slots
+        self.inner.default_set.slots()
     }
 
     /// Buffers for [`Self::eval_into`].
@@ -80,10 +81,10 @@ impl TileProgram {
         let mut ctx = TapeCtx::new(Arc::clone(&self.inner.prog));
         ctx.set_serial();
         RhsWorkspace {
-            boundary: Default::default(),
             owner: self.inner.id,
             state: vec![0.0; n],
             dy: Vec::new(),
+            ingress: Default::default(),
             exec: WsExec::Tape(Box::new(ctx)),
             _not_sync: std::marker::PhantomData,
         }
@@ -107,14 +108,12 @@ impl TileProgram {
         let inner = &*self.inner;
         check_lengths(&inner.blocks, u, aux, du, p, inner.n_params)?;
         check_owner(ws, inner.id)?;
-        check_forcing(forcing, &inner.slots)?;
+        check_forcing(forcing, &inner.default_set)?;
         let nu = inner.blocks.u_len;
+        let mut ingress = std::mem::take(&mut ws.ingress);
+        let (u, aux, p) = inner.inputs.rounded(&mut ingress, u, aux, p);
         ws.state[..nu].copy_from_slice(u);
         ws.state[nu..].copy_from_slice(aux);
-        if inner.precision.is_f32() {
-            round_binary32(&mut ws.state);
-        }
-        let (p, forcing) = restricted_inputs(inner.precision, &mut ws.boundary, p, forcing);
         let WsExec::Tape(ctx) = &mut ws.exec else {
             unreachable!("a tile workspace runs a tape");
         };
@@ -132,6 +131,7 @@ impl TileProgram {
             declared: &inner.declared,
         };
         run_tape_inputs(ctx, &inputs, du, false);
+        ws.ingress = ingress;
         tape_fault(scope, ctx)
     }
 }
@@ -782,15 +782,17 @@ pub(super) fn build(
             .map_err(|d| declined_error(&d, "tile restriction"))?
     };
     let slot_of = slot_map(&tape, &prog.inner.slots)?;
+    let inputs = InputPrecisions::new(&layout, &compiled.param_names, &compiled.precision);
     Ok(TileProgram {
         inner: Arc::new(TileInner {
             id: next_program_id(),
             prog: Arc::new(tape),
             layout: layout.public(),
             blocks: layout,
-            slots: Arc::clone(&prog.inner.slots),
+            default_set: prog.default_forcing(),
             slot_of,
             n_params: compiled.param_names.len(),
+            inputs,
             declared: Arc::clone(&prog.inner.declared),
             precision,
         }),

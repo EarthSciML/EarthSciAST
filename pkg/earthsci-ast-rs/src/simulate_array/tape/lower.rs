@@ -2516,12 +2516,24 @@ impl<'m> TapeBuilder<'m> {
         }
     }
 
+    /// Time crosses the RHS as binary64. Narrow it at a read whose working
+    /// precision (the rule's, re-armed per rule and at each precision
+    /// boundary) is binary32, even when the expression copies it directly to
+    /// an observed or a branch (esm-spec §11.3.2).
+    fn lower_time(&mut self) -> LV {
+        if crate::precision::is_f32() {
+            self.emit_un(UnCode::RoundF32, LV::Time)
+        } else {
+            LV::Time
+        }
+    }
+
     /// Resolve a variable over the box, in this order: `t`, bound
     /// contraction index, output box symbol (ramp), state, observed, param,
     /// bail (forcing / unknown loop bind).
     fn resolve_var(&mut self, name: &str, bx: &LBox) -> LResult<LV> {
         if name == "t" {
-            return Ok(LV::Time);
+            return Ok(self.lower_time());
         }
         if let Some(v) = bx.cbind(name) {
             return Ok(LV::Lit(v as f64));
@@ -4157,8 +4169,7 @@ pub(super) fn build_tape_program(
         let txn = b.txn();
         // The rule's own working precision, as `materialize_observeds_pass`
         // arms it: every instruction it emits is tagged with it.
-        let _rule_precision = crate::precision::has_variable_overrides()
-            .then(|| crate::precision::enter(crate::precision::of_variable(&name)));
+        let _rule_precision = crate::precision::enter_variable(&name);
         let lowered = b
             .lower_observed_rule(rule)
             .and_then(|v| b.flush_rule_fault().map(|()| v))
@@ -4203,6 +4214,9 @@ pub(super) fn build_tape_program(
             cadence: Cadence::Continuous,
         });
         let txn = b.txn();
+        // The rule's working precision is its state's, as the per-cell
+        // oracle arms it: every instruction it emits is tagged with it.
+        let _rule_precision = rule.enter_precision(&compiled.var_shapes);
         match b
             .lower_rhs_rule(rule)
             .and_then(|()| b.flush_rule_fault())

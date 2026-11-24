@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 /// The state an equation's left-hand side differentiates in time, in any of
 /// the spellings flatten emits (`D(x)`, `D(x[i…])`, and either inside the
 /// lift's `faq`).
-pub(super) fn derivative_target(lhs: &Expr) -> Option<&str> {
+pub(crate) fn derivative_target(lhs: &Expr) -> Option<&str> {
     let mut e = lhs;
     let mut saw_d = false;
     loop {

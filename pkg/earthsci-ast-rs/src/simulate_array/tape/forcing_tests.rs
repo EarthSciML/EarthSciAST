@@ -319,6 +319,7 @@ fn segmented_solve(
                 initial_conditions: &none,
                 discrete_forcing: &discrete,
                 boundaries,
+                reltol_source: "binding default",
             },
             &opts,
             None,

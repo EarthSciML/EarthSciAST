@@ -246,8 +246,14 @@ pub(crate) fn run_validate(file: PathBuf, verbose: bool) -> Result<(), Box<dyn s
 
     if validation_result.is_valid {
         println!("✓ Validation passed");
-        if verbose && !validation_result.unit_warnings.is_empty() {
+        if verbose
+            && (!validation_result.unit_warnings.is_empty()
+                || !validation_result.warnings.is_empty())
+        {
             println!("Warnings:");
+            for warning in &validation_result.warnings {
+                println!("  ⚠ [{}] {}", warning.code, warning.message);
+            }
             for warning in &validation_result.unit_warnings {
                 // `message` is the exact string this line printed when
                 // `unit_warnings` was a `Vec<String>`; the record's `path` /

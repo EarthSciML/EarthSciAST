@@ -9,6 +9,7 @@ _de_param(ctx::_DECtx, nd::_E._Node)::_DEVal = _de_param(ctx, nd.sym)
 
 function _de_param(ctx::_DECtx, sym::Symbol)::_DEVal
     p = ctx.p
+    p isa _DEParamVector && return _de_vector_param(ctx, p, sym)
     p isa NamedTuple ||
         _de_refuse(
         ctx,
@@ -127,7 +128,7 @@ _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal =
 
 # The frame's views for the count recognisers and the computed-subscript read.
 _de_keyval(ctx::_DECtx, ::_DEScalarFrame, x::_E._Node) = _de_scalar_keyval(ctx, x)
-_de_keyval(::_DECtx, fr::_DEKernelFrame, x::_E._Node) = _de_acck_keyval(x, fr.K, fr.plan)
+_de_keyval(ctx::_DECtx, fr::_DEKernelFrame, x::_E._Node) = _de_acck_keyval(ctx, x, fr.K, fr.plan)
 _de_same(::_DEScalarFrame, a::_E._Node, b::_E._Node) = _de_same_node(a, b)
 _de_same(fr::_DEKernelFrame, a::_E._Node, b::_E._Node) = _de_acck_same(a, b, fr.K, fr.plan)
 _de_resolve(::_DEScalarFrame, x::_E._Node) = x
@@ -141,6 +142,7 @@ _de_cached(::_DECtx, fr::_DEKernelFrame, nd::_E._Node) =
     nd.payload === fr.K.cse.scratch ? fr.cell[nd.idx] : fr.inv[nd.idx]
 
 function _de_count(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)
+    ctx.precision === Float64 || return nothing
     return _de_count_unrolled(
         nd, x -> _de_keyval(ctx, fr, x), (a, b) -> _de_same(fr, a, b),
         x -> _de_resolve(fr, x)
@@ -208,32 +210,30 @@ function _de_leaf(ctx::_DECtx, fr::_DEScalarFrame, nd::_E._Node)::_DEVal
     elseif k === _E._NK_CONTRACTION_LOOP
         return _de_contraction_loop(ctx, fr, nd)
     elseif k === _E._NK_LOOPVAR
-        return _de_const(ctx, Float64((nd.payload::Base.RefValue{Int})[]))
+        return _de_const(ctx, Float64(_de_counter(ctx, nd.payload::Base.RefValue{Int})))
     elseif k === _E._NK_CONST_GATHER
         # `_de_try_fold` has already taken every host-static read.
         return _de_cgather(ctx, nd, ch -> _de_walk(ctx, fr, ch), _ -> nothing)
     elseif k === _E._NK_STATE_GATHER
         sg = nd.payload::_E._StateGather
         slot = _E._state_gather_slot(
-            sg, length(nd.children), d -> _de_index_int(nd.children[d])
+            sg, length(nd.children), d -> _de_index_int(ctx, nd.children[d])
         )
         slot == 0 && return _de_const(ctx, 0.0)                     # ghost cell
         return _de_read(ctx, ctx.ue, slot, :stategather)
     elseif k === _E._NK_PARAM_GATHER
         # Live forcing, read from the `buffers` ARGUMENT (never from the build's
         # captured host array — see `_de_buffer`).
-        buf = _de_buffer(ctx, nd.payload::Vector{Float64})
-        return _de_slice(ctx, buf, nd.idx, nd.idx; why = :pgather)
+        return _de_buffer_read(ctx, nd.payload::Vector{Float64}, nd.idx)
     elseif k === _E._NK_LIVE_GATHER
         # The same live read at an offset the subscripts give: they are loop
         # counters and literals, concrete here (a contraction loop is unrolled
         # at emission), so the offset is resolved on host as the walker does.
         cg = nd.payload::_E._ConstGatherArray
         off = _E._const_gather_offset(
-            cg, length(nd.children), d -> _de_index_int(nd.children[d])
+            cg, length(nd.children), d -> _de_index_int(ctx, nd.children[d])
         )
-        buf = _de_buffer(ctx, cg.flat)
-        return _de_slice(ctx, buf, off, off; why = :pgather)
+        return _de_buffer_read(ctx, cg.flat, off)
     end
     return _de_refuse(
         ctx, "the scalar-spine node kind $(_de_kindname(k))",
@@ -244,7 +244,7 @@ end
 _de_kindname(k::UInt8) = _E._node_kind_name(k)
 
 function _de_contraction_loop(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
-    cnt = _de_count_loop(ctx, nd)
+    cnt = ctx.precision === Float64 ? _de_count_loop(ctx, nd) : nothing
     cnt === nothing ||
         return _de_emit_count(ctx, cnt, _de_walk(ctx, fr, cnt.query))
     # Emission-time unroll of the static range, in the interpreter's
@@ -256,7 +256,7 @@ function _de_contraction_loop(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
     terms = _DEVal[]
     bodyfr = _de_unmemoized(fr)              # the counter changes per iteration
     for kk in spec.lo:spec.step:spec.hi
-        spec.ref[] = kk
+        _de_set_counter!(ctx, spec.ref, kk)
         push!(terms, _de_walk(ctx, bodyfr, body))
     end
     return _de_fold_terms(ctx, nd.op, nd.literal, terms)
@@ -272,7 +272,7 @@ end
 # argument of this one passes the array itself. The interpreter evaluates the
 # body as a pure function of the arguments, so the inlined body denotes the
 # same values; a body is a DAG and stays one.
-function _de_inline_call(ctx::_DECtx, nd::_E._Node)::_E._Node
+function _de_inline_call(ctx::Union{_DECtx, Nothing}, nd::_E._Node)::_E._Node
     site = nd.payload::_E._CallSite
     tg = site.target
     memo = _E._NodeMap{_E._Node}()
@@ -355,13 +355,11 @@ function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
             return _de_read(ctx, ctx.ue, a.idx, :akfixed)
         elseif ak === _E._AK_ARR_FIXED
             # LIVE forcing, invariant slot: one element of a program input.
-            buf = _de_buffer(ctx, a.arr)
-            return _de_slice(ctx, buf, a.idx, a.idx; why = :akarrfixed)
+            return _de_buffer_read(ctx, a.arr, a.idx; why = :akarrfixed)
         elseif ak === _E._AK_FORCING_BOX || ak === _E._AK_ARR_TBL_BOX
             # LIVE forcing lanes: one read of a program input at host-frozen
             # indices — slices plus a concatenate, or one gather.
-            buf = _de_buffer(ctx, a.arr)
-            return _de_take(ctx, buf, plan.forc[nd.idx])
+            return _de_buffer_read(ctx, a.arr, plan.forc[nd.idx])
         else
             # CONST_BOX / LOOP_IDX: frozen lane data, one interned array constant.
             return _de_arrconst(ctx, plan.consts[nd.idx])
@@ -374,7 +372,7 @@ function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
         # host-static read has folded above.
         return _de_cgather(ctx, nd, ch -> _de_walk(ctx, fr, ch), _ -> nothing)
     elseif k === _E._NK_LOOPVAR
-        return _de_const(ctx, Float64((nd.payload::Base.RefValue{Int})[]))
+        return _de_const(ctx, Float64(_de_counter(ctx, nd.payload::Base.RefValue{Int})))
     end
     return _de_refuse(
         ctx, "the access-kernel node kind $(_de_kindname(k))",
@@ -399,6 +397,7 @@ function _de_run_kernel!(
             "(an unsupported descriptor kind or an unbounded reduce) and lower " *
             "that instead."
     )
+    isempty(plan.out_slots) && return nothing
     cse = K.cse
     invvals = Vector{_DEVal}(undef, length(cse.inv_recipes))
     cellvals = Vector{_DEVal}(undef, length(cse.recipes))
@@ -491,7 +490,7 @@ function _de_plan_writes!(ctx::_DECtx, rhs, du::_DEMap)
     return nothing
 end
 
-function _de_emit!(ctx::_DECtx, rhs)::_DEVal
+function _de_emit!(ctx::_DECtx, rhs)::_DEMap
     n_states = ctx.n_states
     # Whole-array einsums are a SECTION of the in-place
     # RHS that this walk has no arm for. Left alone their output slots would
@@ -578,5 +577,5 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
         end
     end
     _de_at!(ctx, :assemble)
-    return _de_assemble(ctx, du, n_states)
+    return du
 end

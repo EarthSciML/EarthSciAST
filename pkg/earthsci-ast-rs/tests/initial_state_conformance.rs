@@ -162,15 +162,14 @@ fn a_static_problem_has_none() {
     ));
 }
 
-/// A Float32 document that integrates has no solve, so it has no initial
-/// state either: the accessor refuses it as `solve` does.
+/// A Float32 solve and its initial-state accessor use the same rounded values.
 #[test]
-fn a_float32_problem_that_integrates_has_none() {
+fn a_float32_problem_has_rounded_initial_state() {
     let file = load_string(
         r#"{"esm": "2.0.0", "metadata": {"name": "Narrow"},
             "domain": {"element_type": "Float32"},
             "models": {"M": {
-                "variables": {"u": {"type": "unknown", "units": "1", "default": 1.0}},
+                "variables": {"u": {"type": "unknown", "units": "1", "default": 1.00000001}},
                 "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
                                "rhs": {"op": "-", "args": ["u"]}}]}}}"#,
     )
@@ -181,7 +180,7 @@ fn a_float32_problem_that_integrates_has_none() {
         ProblemOptions::default(),
     )
     .unwrap();
-    let refused = |e: SimulateError| e.to_string().contains("time integration");
-    assert!(solve(&prob, &SolveOptions::default()).is_err_and(refused));
-    assert!(initial_state(&prob).is_err_and(refused));
+    let sol = solve(&prob, &SolveOptions::default()).unwrap();
+    assert_eq!(initial_state(&prob).unwrap(), vec![1.0]);
+    assert_eq!(sol["u"][0], 1.0);
 }

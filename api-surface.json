@@ -94,18 +94,18 @@
     }
   },
   "counts": {
-    "symbols": 997,
+    "symbols": 1010,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 360,
+      "julia": 373,
       "typescript": 241,
       "python": 272,
-      "rust": 403,
+      "rust": 404,
       "go": 462
     },
     "by_tier": {
-      "extension": 686,
-      "stable": 311
+      "extension": 698,
+      "stable": 312
     }
   },
   "planned": [
@@ -3189,6 +3189,14 @@
       }
     },
     {
+      "name": "emit_fragment",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "emit_fragment"
+      }
+    },
+    {
       "name": "emit_reference_preserving",
       "kind": "function",
       "tier": "extension",
@@ -4353,6 +4361,14 @@
       }
     },
     {
+      "name": "forcing_reach",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "forcing_reach"
+      }
+    },
+    {
       "name": "forcing_set",
       "kind": "function",
       "tier": "stable",
@@ -4476,6 +4492,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "gather_lane_inputs!"
+      }
+    },
+    {
+      "name": "gather_lanes",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "gather_lanes"
       }
     },
     {
@@ -4716,11 +4740,27 @@
       }
     },
     {
+      "name": "integrator_precision",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "IntegratorPrecision"
+      }
+    },
+    {
       "name": "invalid_derivative_order_error",
       "kind": "error",
       "tier": "extension",
       "bindings": {
         "typescript": "InvalidDerivativeOrderError"
+      }
+    },
+    {
+      "name": "ir_layout",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "ir_layout"
       }
     },
     {
@@ -4854,6 +4894,14 @@
       }
     },
     {
+      "name": "kernel_outputs",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "KernelOutputs"
+      }
+    },
+    {
       "name": "kernel_set",
       "kind": "type",
       "tier": "stable",
@@ -4958,6 +5006,14 @@
       "bindings": {
         "julia": "lanes",
         "python": "lanes"
+      }
+    },
+    {
+      "name": "lanes",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "Lanes"
       }
     },
     {
@@ -5669,6 +5725,23 @@
         "python": "OperatorComposeRequireMatchError",
         "typescript": "OperatorComposeRequireMatchError"
       }
+    },
+    {
+      "name": "operator_ir",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "operator_ir"
+      }
+    },
+    {
+      "name": "operator_ir",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "OperatorIR"
+      },
+      "notes": "spelling differs from the §2 rule: julia=OperatorIR (expected OperatorIr)"
     },
     {
       "name": "output_error",
@@ -6968,18 +7041,11 @@
       }
     },
     {
-      "name": "rhs_scalar",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "RhsScalar"
-      }
-    },
-    {
       "name": "rhs_selection",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "julia": "RhsSelection",
         "rust": "RhsSelection"
       }
     },
@@ -7138,6 +7204,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "scatter_grid!"
+      }
+    },
+    {
+      "name": "scatter_lanes",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "scatter_lanes"
       }
     },
     {
@@ -7561,6 +7635,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "state_layout"
+      }
+    },
+    {
+      "name": "state_scalar",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "StateScalar"
       }
     },
     {
@@ -8015,6 +8097,14 @@
       }
     },
     {
+      "name": "tile",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "Tile"
+      }
+    },
+    {
       "name": "tile_block",
       "kind": "type",
       "tier": "extension",
@@ -8028,6 +8118,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "TileBox"
+      }
+    },
+    {
+      "name": "tile_classes",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "tile_classes"
       }
     },
     {
@@ -8923,6 +9021,14 @@
       "tier": "extension",
       "bindings": {
         "go": "VertexKindNode"
+      }
+    },
+    {
+      "name": "whole",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "Whole"
       }
     },
     {

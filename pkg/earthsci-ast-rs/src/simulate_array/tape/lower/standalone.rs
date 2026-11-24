@@ -83,8 +83,7 @@ fn build_standalone_program(
         Cadence::Const
     };
     with_standalone_builder(name, param_names, const_arrays, pipeline, home, |mut b| {
-        let _rule_precision = crate::precision::has_variable_overrides()
-            .then(|| crate::precision::enter(crate::precision::of_variable(name)));
+        let _rule_precision = crate::precision::enter_variable(name);
         for (input, value) in inputs {
             let lv = if value.ndim() == 0 {
                 // `lookup_variable`'s 0-d arm: a scalar, rounded to the

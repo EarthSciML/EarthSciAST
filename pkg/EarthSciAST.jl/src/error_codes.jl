@@ -363,6 +363,10 @@ const ERROR_CODES = (
     ELEMENT_TYPE_UNCARRIED = "element_type_uncarried",
     PRECISION_CHOICE_CONFLICT = "precision_choice_conflict",
     KEY_PRECISION_UNSPECIFIED = "key_precision_unspecified",
+    # A relative tolerance below 2⁻²² for a Float32 state (esm-spec §11.3.2).
+    # This binding refuses Float32 dynamics with `float32_unsupported` instead,
+    # so it never raises it; the constant exists because the code table is
+    # cross-language uniform.
     TOLERANCE_BELOW_WORKING_PRECISION = "tolerance_below_working_precision",
     # A construct an evaluator cannot run at the precision it is declared in
     # (CONFORMANCE_SPEC §5.18.2): refused rather than evaluated in binary64. The

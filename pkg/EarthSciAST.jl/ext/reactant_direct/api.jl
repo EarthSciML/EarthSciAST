@@ -156,7 +156,7 @@ function _de_run(
         n_states, n_total, p, _de_time(t), _DEVal(u.mlir_data, n_states),
         bufs, hostkeys, d.names, _de_options(d)
     )
-    out = _de_emit!(ctx, rhs)
+    out = _de_assemble(ctx, _de_emit!(ctx, rhs), n_states)
     d.stats = copy(ctx.stats)
     out.len == n_states ||
         _de_refuse_at(

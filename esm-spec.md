@@ -5761,7 +5761,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `data_source_merge_conflict` | Two mounts contribute the same `data_sources` name to one mounting document with entries that are not identical after `url_substitutions` and §8.2.1 resolution, and the mounting document does not declare that name itself (§4.7 "A mounted document's data sources"). The message names the source and both edges. |
 | `precision_choice_conflict` | An external working precision request mixes precisions within an operator or equation or has no eligible variable to affect (§11.3.3 P4). |
 | `key_precision_unspecified` | An unspecified variable is used directly as an equality or join key (§11.3.3 P8). Refuse a binary32 evaluation request and warn during validation. |
-| `tolerance_below_working_precision` | A consumer's resolved relative tolerance is below 2⁻²² for binary32 state storage (§11.3.3 P7). |
+| `tolerance_below_working_precision` | The resolved relative tolerance is below 2⁻²² for a Float32 state (§11.3.2). The diagnostic identifies the source of the tolerance. |
 | `element_type_uncarried` | A declared working precision reaches a construct that cannot carry it (§4.7 "Working precision crosses a mount", §11.3.1). At load: a mounted document whose `domain.element_type` must be written onto its component (it differs from the mounting document's effective precision) where the component is, or carries, a reaction system, whose species and parameters have no per-variable `element_type`. At build: an evaluator that cannot carry a declared `element_type` at some construct. MUST name the edge or construct. Refusing is REQUIRED: evaluating the construct in another precision is the silent change of precision §11.3.1 forbids. |
 | `mount_form_unsupported` | A §4.7 `{ref}` mount appears at a mount form this binding does not implement — no current binding leaves a §4.7 mount form unimplemented, so none raises it today (§4.7 "Two mount forms, one mechanism"). Refusing is REQUIRED, at the entry's pointer (for example `/reaction_systems/<k>`): loading the entry as an empty or unresolved component would be silently wrong. Distinct from `subsystem_index_set_rename_unsupported_mount_form`, which refuses one field at a form the binding does mount. |
 | `operator_import_cycle` | Import-graph cycle over canonical paths (§9.7.2). |
@@ -7106,6 +7106,36 @@ Exempting a variable only where its data ENTERS is not sufficient and MUST NOT
 be offered as an implementation of this field: the first expression over the
 value undoes it. `floor(scc/1000)*1000` — the fallback ladder that widens a key
 to its category — is `2260007000` in binary64 and `2260006912` in binary32.
+
+#### 11.3.2 Time integration and working precision
+
+A variable's effective `element_type` governs the values the model evaluates
+and stores during integration. The integrator chooses the arithmetic of its
+clock, step-size controller, error norms, tolerances and linear algebra. A
+binding MUST report the precisions it uses for state, time, norms and linear
+algebra in solution metadata.
+
+- Every model evaluation follows §11.3.1, including the right-hand side,
+  observed equations, event conditions and affects, and initial conditions.
+  Parameters and forcing values supplied during a run round on ingress.
+- Each accepted state value MUST be stored at the variable's precision.
+  Stage values and Newton iterates MUST be rounded by the time the model
+  reads them. Carrying wider accepted states across steps and rounding only
+  the output does not satisfy this rule.
+- Time crosses the public right-hand-side interface as binary64. An
+  expression reads time at the expression's working precision. This
+  applies even when the expression consists of the time symbol alone.
+- A relative tolerance below 2⁻²² for a Float32 state MUST be refused with
+  `tolerance_below_working_precision`, identifying its source (call site,
+  `solver.reltol`, or binding default) after resolving §2.2.2. Validation
+  SHOULD warn when the document's own tolerance is below that floor.
+- A binding unable to meet these requirements MUST refuse the integration
+  with `float32_unsupported`, naming the unsupported construct.
+
+A single-scalar integrator may refuse a state vector containing both Float32
+and Float64 variables. An external integrator can support that vector by
+rounding each slot at its declared precision. Float64 parameters and observed
+variables are legal alongside a Float32 state under §11.3.1's expression rules.
 
 #### 11.3.3 Declared and unspecified precision
 

@@ -54,7 +54,7 @@ impl<'m> TapeBuilder<'m> {
     /// forcing or the NaN sentinel — the interpreter handles both).
     pub(super) fn resolve_wholesale_var(&mut self, name: &str) -> LResult<LV> {
         if name == "t" {
-            return Ok(LV::Time);
+            return Ok(self.lower_time());
         }
         if let Some(&ix) = self.state_ix.get(name) {
             return Ok(LV::State(tape_index(ix, "state variables")?));

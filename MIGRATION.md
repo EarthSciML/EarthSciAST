@@ -1832,6 +1832,22 @@ right-hand-side seams build the `native` compiler, the default of
 `esm_problem`: a solve of a model they built runs every rule, and every
 observed pass, on the tape.
 
+### Float32 state integrates in binary32 (esm-spec §11.3.2)
+
+Rust now integrates Float32 state in binary32 through `solve` and `init`.
+Previously accepted per-variable Float32 states now have binary32 trajectories
+as well. Rust reports the arithmetic in `SolutionMetadata.integrator_precision`
+and refuses mixed state precision, relative tolerances below 2⁻²², and
+indistinguishable binary32 clock times. Python and Julia refuse Float32 dynamics
+with `float32_unsupported`, including Julia's ModelingToolkit compiler.
+
+| Binding | Old | New | Kind |
+|---|---|---|---|
+| Rust | `ValidationResult { schema_errors, structural_errors, unit_warnings, is_valid }` | a fourth list, `warnings: Vec<ValidationWarning>` (`code`, `path`, `message`), holds the advisory findings that are not unit findings, such as `tolerance_below_working_precision`; a struct literal of `ValidationResult` names the new field | `changed` |
+| Rust | `SolutionMetadata` | a new field, `integrator_precision: Option<IntegratorPrecision>`, reports the precision of the state, clock, error norms and linear algebra of a run that integrated; a struct literal of `SolutionMetadata` names it or ends in `..Default::default()` | `changed` |
+| Rust | `RhsProgram::eval_into(u: &[f64], …, du: &mut [f64], …)` | generic over the state scalar, `f64` or `f32` (`StateScalar`); each input slot is rounded to its variable's precision on entry, in tile and lane programs as well | `changed` |
+| Rust | a Float32 document refused by `solve`, `init` and `initial_state` with `float32_unsupported` | integrated in binary32 | `semantics` |
+
 ---
 
 ## Where the contract lives

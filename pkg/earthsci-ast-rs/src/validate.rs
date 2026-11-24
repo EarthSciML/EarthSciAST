@@ -37,6 +37,40 @@ pub struct ValidationResult {
     pub is_valid: bool,
 }
 
+/// Whether some differential state of `file` integrates in binary32: its own
+/// `element_type`, else the document's (esm-spec §11.3.2). A mounted leaf's
+/// precision arrives stamped onto its variables (§4.7), so it is read the
+/// same way.
+fn has_float32_state(file: &EsmFile) -> bool {
+    use crate::types::{TreeOrder, component_tree};
+    let document = file
+        .domain
+        .as_ref()
+        .and_then(|d| d.element_type.as_deref())
+        .unwrap_or("Float64");
+    let models = file.models.iter().flat_map(|models| models.values());
+    let model_state = models
+        .flat_map(|model| component_tree(model, "", "", TreeOrder::Declared))
+        .any(|visit| {
+            let component = visit.component;
+            component
+                .equations
+                .iter()
+                .filter_map(|eq| crate::simulate_array::derivative_target(&eq.lhs))
+                .filter_map(|name| component.variables.get(name))
+                .any(|v| v.element_type.as_deref().unwrap_or(document) == "Float32")
+        });
+    // A species has no `element_type` of its own.
+    let species = || {
+        file.reaction_systems
+            .iter()
+            .flat_map(|systems| systems.values())
+            .flat_map(|rs| component_tree(rs, "", "", TreeOrder::Declared))
+            .any(|visit| !visit.component.species.is_empty())
+    };
+    model_state || (document == "Float32" && species())
+}
+
 /// An advisory validation finding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationWarning {
@@ -317,6 +351,18 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
     // coupled-system reference check MUST see the expanded edges.
     crate::coupling::validate_imported_coupling(esm_file, &system_refs, &mut structural_errors);
 
+    let floor = crate::precision::FLOAT32_RELTOL_FLOOR;
+    if scope == ValidationScope::Full
+        && has_float32_state(esm_file)
+        && let Some(reltol) = esm_file.solver.as_ref().and_then(|s| s.reltol)
+        && reltol < floor
+    {
+        warnings.push(ValidationWarning {
+            code: crate::diagnostic::codes::TOLERANCE_BELOW_WORKING_PRECISION.to_owned(),
+            path: "/solver/reltol".to_owned(),
+            message: format!("solver.reltol sets {reltol}, below the Float32 state floor {floor}"),
+        });
+    }
     let is_valid = schema_errors.is_empty() && structural_errors.is_empty();
 
     ValidationResult {

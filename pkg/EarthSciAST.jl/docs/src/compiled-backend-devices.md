@@ -13,15 +13,10 @@ once, and hand back a Problem whose `f!` is the compiled program — and it pick
 the client off `EARTHSCI_JULIA_XLA_DEVICE` (`cpu` / `gpu`). This page is for the
 caller who needs the emitted callable ITSELF: to shard the state across several
 devices, or to compose it into a larger traced program of their own.
-`EarthSciAST.Internal.build(doc; form = :oop)` is how you get the
-intermediate representation for that — the internal build entry, which builds
-what `esm_problem` builds and is not public API (`API_SPEC.md` §8 item 23) — and it
-returns the build product a backend consumes, not a host evaluator: host
-evaluation is the default in-place `f!`. Nothing in the emitted program names a
-device: the same module compiles on a host CPU or on
-an attached GPU, and **which one is fixed by the client of the arrays you feed
-it**. This page is about that choice and about cutting the state across several
-devices of one client.
+Use [`operator_ir`](@ref) and [`emit_fragment`](@ref) when your application owns
+the Reactant trace. For the legacy `direct_rhs` device-placement helpers shown
+below, obtain their input with `EarthSciAST.Internal.build(doc; form = :oop)`.
+The client of the arrays you pass selects the device.
 
 The emitter lives in the Reactant package extension; its entry points are
 declared (unexported) in EarthSciAST itself, so they are reached as
@@ -31,6 +26,100 @@ declared (unexported) in EarthSciAST itself, so they are reached as
 using EarthSciAST, Reactant
 const ESA = EarthSciAST
 ```
+
+## Compose fragments in an integrator trace
+
+Build a fragment from an `esm_problem` created with the native compiler. A
+fragment emits into the active Reactant block. It can be called at multiple
+stage sites and inside `Reactant.@trace while`. The integrator builds the
+device inputs, compiles the surrounding program and controls device placement.
+
+```julia
+prob = esm_problem(doc, (0.0, 1.0))
+ir = operator_ir(prob)
+frag = emit_fragment(ir)
+
+# This example uses a whole model with no read-only states or forcing slots.
+u = ConcreteRArray(prob.u0)
+aux = ConcreteRArray(Float64[])
+p = ConcreteRArray(parameter_vector(rhs_program(prob)))
+t = ConcreteRNumber(0.0)
+program = Reactant.@compile donated_args = :none frag(u, aux, p, t, ())
+```
+
+- `select = RhsSelection(writes = ..., terms = ...)` selects the states and
+  equation contributions for one operator. Use `ir_layout(ir)` for state
+  and read-only state packing.
+- Pass a flat Float64 parameter tensor in `parameter_names(ir)` order, a
+  Float64 scalar time, and a tuple of flat device tensors in
+  `forcing_slots(ir)` order. Array lengths are part of the compiled signature.
+  New parameter values and forcing data of the same shape can be passed to the
+  compiled program.
+- `emit_fragment(ir; eltype = Float32)` evaluates in single precision and
+  takes Float32 state and auxiliary tensors. Time, scalar parameters and
+  floating-point forcing are converted on read. The default `fold = :tree`
+  emits balanced binary folds, and a Float64 fragment still evaluates
+  subtrees of constants on the host, grouped the same way. Choose
+  `fold = :reduce` for the legacy emitter's reduction policy.
+- `Tile(dec; owned, storage)` uses the native tile boxes. The output uses the
+  tile storage layout, with zeros outside owned rows. `halo(ir)` reports the
+  state reach of that tile. Pass compact column-major windows in
+  `forcing_reach(ir)` order, or pass whole forcing buffers for a fixed tile.
+- `tile_classes(prog, dec, tiles)` groups tiles whose local instructions and
+  buffer layouts agree. Build and compile one fragment per returned target.
+  Its sixth argument is a traced Int32 vector of the owned box's lower
+  corners in decomposition axis order. Pack forcing from
+  `forcing_reach(ir, origin)` for each member's origin and reuse the compiled
+  fragment as that origin changes. The supplied origin must belong to that
+  class. Unsupported structural comparisons retain a separate program for
+  each affected tile.
+- `Lanes(:cells, sets, capacity)` or `Lanes(:columns, sets, capacity)`
+  accepts a sixth argument, a traced Int32 matrix of 1-based coordinates with
+  rows in `sets` order. Duplicate cells can pad evaluations; use distinct
+  cells when writing them back with `scatter_lanes`. The fragment gathers
+  forcing and constant arrays by traced integer subscripts. A column gather
+  computes its lane and level addresses in the same batched program. A read
+  outside an array dimension without a `periodic` or `clamp` policy gives 0.0,
+  as in the native lane program. For cells outside the domain, `gather_lanes`
+  reads an unspecified element and `scatter_lanes` drops the update.
+- `outputs = KernelOutputs(spec)` takes one `compile_kernels` specification and
+  emits its outputs for the selected target. Use
+  `tile_classes(prob, dec, tiles; outputs)` for classes of an output kernel.
+  Pack its input state and its algebraic state from `ir_layout(ir).u` and
+  `ir_layout(ir).aux`. The result is a tuple of flat tensors in
+  `ir_layout(ir).out` order. When the spec reads a time step, append a traced
+  Float64 `dt` after all the other arguments, including any origin or cells.
+  `KernelOutputs(spec; out_eltype = Float16)` casts the outputs at the end of
+  emission. With Reactant loaded, the output type can also be `BFloat16`.
+
+Use the fragment in a caller-owned loop by passing each tensor at the call
+site. For example, a whole-domain Euler program can take the time step and
+stop time as traced Float64 scalars.
+
+```julia
+function euler_steps(frag, u, aux, p, t, forcing, dt, stop)
+    Reactant.@trace while t < stop
+        u = u .+ dt .* frag(u, aux, p, t, forcing)
+        t += dt
+    end
+    return u
+end
+```
+
+The host fragment can also be captured without adding it to the loop carry.
+For lane targets, pass the current cell table at each call. Compile with
+`donated_args = :none` to preserve the input buffers. Reactant can still write
+the final loop carries back to its input wrappers, so initialize state and
+time for each execution. Place the same tile class on each device
+that owns a member of the class. Exchange or refill halos between stages in the
+caller.
+
+For reproducibility checks on XLA:CPU, set
+`XLA_FLAGS=--xla_cpu_prefer_vector_width=128` before loading Reactant.
+The opt-in Reactant suite exercises fresh processes with
+`ESM_TEST_REACTANT_REPRO=1`. Run per-device tile tests on four mock host
+devices with `ESM_TEST_REACTANT_GPU=1`, `EARTHSCI_JULIA_XLA_DEVICE=cpu` and
+`XLA_FLAGS="--xla_cpu_prefer_vector_width=128 --xla_force_host_platform_device_count=4"`.
 
 ## One device
 

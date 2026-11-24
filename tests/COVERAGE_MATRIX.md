@@ -23,6 +23,7 @@ This document maps ESM format specifications to test fixtures to ensure complete
 | 9. Operators | By reference, needed_vars | ❌ Missing | **GAP**: Need operator fixtures |
 | 10. Coupling | All 6 coupling types | ✅ Created | `coupling/` (couple, operator_apply, callback) |
 | 11. Domain | Temporal, spatial, BCs, ICs | ❌ Partial | Basic spatial in minimal_chemistry.esm |
+| 11.3.2 Integration precision | Binary32 state, RHS and clock semantics, solver metadata, and precision refusals | ✅ Created | `conformance/precision_integration/` (CONFORMANCE_SPEC §5.18.5) |
 | 12. Solver | All 3 solver strategies | ❌ Partial | Only strang_threads in minimal_chemistry.esm |
 | 13. Complete Example | MinimalChemAdvection | ✅ Created | `valid/minimal_chemistry.esm` |
 

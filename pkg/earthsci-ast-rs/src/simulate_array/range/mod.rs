@@ -23,6 +23,7 @@ mod kernels;
 mod lanes;
 mod model;
 mod select;
+pub(crate) use select::derivative_target;
 mod tile;
 mod walk;
 
@@ -40,7 +41,7 @@ pub use tile::TileProgram;
 use super::tape::{CallInputs, ForcingView, TapeCtx, TapeProgram, run_tape_inputs};
 use super::{ArrayCompiled, RhsCall, RhsScratch, RhsStats, evaluate_rhs_with_scratch};
 use crate::flatten::{FlattenedSystem, TermOrigin};
-use crate::precision::{Precision, PrecisionSource, precision_source};
+use crate::precision::{Precision, PrecisionSource, StateScalar, precision_source};
 use crate::problem::{Compiler, EsmProblem, ProblemOptions, ProgramSource};
 use crate::simulate::SimulateError;
 use crate::simulate_array::ShapeTable;
@@ -397,61 +398,79 @@ pub struct RhsWorkspace {
     owner: u64,
     state: Vec<f64>,
     dy: Vec<f64>,
-    boundary: BoundaryBuffers,
+    ingress: Ingress,
     exec: WsExec,
     _not_sync: PhantomData<Cell<()>>,
 }
 
+/// A call's inputs rounded to their slots' precisions, reused across calls.
 #[derive(Default)]
-struct BoundaryBuffers {
+struct Ingress {
     u: Vec<f64>,
     aux: Vec<f64>,
-    p: Vec<f64>,
+    params: Vec<f64>,
     du: Vec<f64>,
-    forcing: Option<(u64, ForcingSet)>,
 }
 
-mod rhs_scalar_sealed {
-    pub trait Sealed {}
-    impl Sealed for f32 {}
-    impl Sealed for f64 {}
+/// The effective precision of every element of a program's `u`, `aux` and
+/// `p` (esm-spec §11.3.2: values supplied during a run round on ingress).
+#[derive(Debug, Clone, Default)]
+struct InputPrecisions {
+    u: Vec<Precision>,
+    aux: Vec<Precision>,
+    params: Vec<Precision>,
+    /// Whether any element is binary32; without one a call rounds nothing.
+    any_f32: bool,
 }
 
-/// Storage types accepted by [`RhsProgram::eval_into`].
-pub trait RhsScalar: rhs_scalar_sealed::Sealed + Copy + Into<f64> {
-    #[doc(hidden)]
-    const IS_F32: bool;
-    #[doc(hidden)]
-    fn f64_inputs(values: &[Self]) -> Option<&[f64]>;
-    #[doc(hidden)]
-    fn f64_output(values: &mut [Self]) -> Option<&mut [f64]>;
-    #[doc(hidden)]
-    fn from_f64(value: f64) -> Self;
-}
+impl InputPrecisions {
+    fn new(blocks: &Blocks, param_names: &[String], env: &crate::precision::Env) -> Self {
+        let mut u = vec![env.document; blocks.u_len];
+        let mut aux = vec![env.document; blocks.aux_len];
+        for block in &blocks.vars {
+            let len: usize = block
+                .storage
+                .iter()
+                .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
+                .product();
+            let input = match block.input {
+                TileInput::U => &mut u,
+                TileInput::Aux => &mut aux,
+            };
+            input[block.base..block.base + len].fill(env.variable(&block.name));
+        }
+        let params: Vec<_> = param_names.iter().map(|n| env.variable(n)).collect();
+        let any_f32 = u.iter().chain(&aux).chain(&params).any(|p| p.is_f32());
+        InputPrecisions {
+            u,
+            aux,
+            params,
+            any_f32,
+        }
+    }
 
-impl RhsScalar for f64 {
-    const IS_F32: bool = false;
-    fn f64_inputs(values: &[Self]) -> Option<&[f64]> {
-        Some(values)
+    /// Fill `ingress` with `u`, `aux` and `p` rounded to their slots'
+    /// precisions.
+    fn round_into<T: StateScalar>(&self, ingress: &mut Ingress, u: &[T], aux: &[f64], p: &[f64]) {
+        round_inputs(&mut ingress.u, u, &self.u);
+        round_inputs(&mut ingress.aux, aux, &self.aux);
+        round_inputs(&mut ingress.params, p, &self.params);
     }
-    fn f64_output(values: &mut [Self]) -> Option<&mut [f64]> {
-        Some(values)
-    }
-    fn from_f64(value: f64) -> Self {
-        value
-    }
-}
 
-impl RhsScalar for f32 {
-    const IS_F32: bool = true;
-    fn f64_inputs(_: &[Self]) -> Option<&[f64]> {
-        None
-    }
-    fn f64_output(_: &mut [Self]) -> Option<&mut [f64]> {
-        None
-    }
-    fn from_f64(value: f64) -> Self {
-        value as f32
+    /// `u`, `aux` and `p` as the program reads them: rounded into `ingress`
+    /// when any slot is binary32, else the caller's own slices.
+    fn rounded<'a>(
+        &self,
+        ingress: &'a mut Ingress,
+        u: &'a [f64],
+        aux: &'a [f64],
+        p: &'a [f64],
+    ) -> (&'a [f64], &'a [f64], &'a [f64]) {
+        if !self.any_f32 {
+            return (u, aux, p);
+        }
+        self.round_into(ingress, u, aux, p);
+        (&ingress.u, &ingress.aux, &ingress.params)
     }
 }
 
@@ -535,9 +554,9 @@ struct ProgramInner {
     blocks: Blocks,
     layout: TileLayout,
     state_layout: Vec<StateBlock>,
-    precisions: OnceLock<(Vec<PrecisionSource>, Vec<Precision>)>,
+    precisions: OnceLock<Vec<PrecisionSource>>,
     document_precision_source: PrecisionSource,
-    rounds_inputs: bool,
+    inputs: InputPrecisions,
     params: Vec<ParamSlot>,
     slots: Arc<[ForcingSlot]>,
     /// The Problem's forcing when the program was built.
@@ -933,7 +952,12 @@ impl RhsProgram {
         let default_set = match forcing {
             ForcingSource::Problem(m) => {
                 let (s, d) = forcing_slots(&model, m, &array_params);
-                ForcingSet::for_slots(s.into(), d).expect("each default holds its slot's shape")
+                let precisions = s
+                    .iter()
+                    .map(|slot| model.precision.variable(&slot.name))
+                    .collect();
+                ForcingSet::for_slots(s.into(), precisions, d)
+                    .expect("each default holds its slot's shape")
             }
             ForcingSource::Parent(p) => p.default_set.clone(),
         };
@@ -995,6 +1019,7 @@ impl RhsProgram {
                     .collect(),
             })
             .collect();
+        let inputs = InputPrecisions::new(&blocks, &model.param_names, &model.precision);
         let params = model
             .param_names
             .iter()
@@ -1005,14 +1030,6 @@ impl RhsProgram {
             })
             .collect();
         let declared = Arc::new(model.declared_names.clone());
-        let rounds_inputs = model.precision.is_f32()
-            || model.precision.variables.names().any(|name| {
-                model
-                    .precision
-                    .variables
-                    .get(name)
-                    .is_some_and(Precision::is_f32)
-            });
         Ok(RhsProgram {
             inner: Arc::new(ProgramInner {
                 id: next_program_id(),
@@ -1029,7 +1046,7 @@ impl RhsProgram {
                 state_layout,
                 precisions: OnceLock::new(),
                 document_precision_source,
-                rounds_inputs,
+                inputs,
                 params,
                 slots,
                 default_set,
@@ -1039,10 +1056,6 @@ impl RhsProgram {
                 shapes: shape_table,
             }),
         })
-    }
-
-    pub(super) fn slots_arc(&self) -> Arc<[ForcingSlot]> {
-        Arc::clone(&self.inner.slots)
     }
 
     /// The compiler this program was built with.
@@ -1075,6 +1088,27 @@ impl RhsProgram {
     /// the `u` half of [`Self::layout`].
     pub fn state_layout(&self) -> &[StateBlock] {
         &self.inner.state_layout
+    }
+
+    /// The document's arithmetic precision (Float64 when unspecified).
+    pub fn precision(&self) -> Precision {
+        self.inner.model.precision.document
+    }
+
+    /// The effective precision of each slot in `u` and `du`.
+    pub fn state_precisions(&self) -> &[Precision] {
+        &self.inner.inputs.u
+    }
+
+    /// Round each state slot in place to its effective precision.
+    pub fn round_state(&self, u: &mut [f64]) -> Result<(), RhsError> {
+        if u.len() != self.n_states() {
+            return Err(forcing::shape("u", self.n_states(), u.len()));
+        }
+        for (value, precision) in u.iter_mut().zip(self.state_precisions()) {
+            *value = precision.round(*value);
+        }
+        Ok(())
     }
 
     /// The parameters `p` holds, in its order: the order the program's tape
@@ -1155,41 +1189,24 @@ impl RhsProgram {
 
     /// The precision source of each flat state slot in the `u` buffer.
     pub fn precision_sources(&self) -> &[PrecisionSource] {
-        &self.state_precision_layout().0
-    }
-
-    /// The resolved working precision of each flat state slot in the `u` buffer.
-    pub fn state_precisions(&self) -> &[Precision] {
-        &self.state_precision_layout().1
-    }
-
-    fn state_precision_layout(&self) -> &(Vec<PrecisionSource>, Vec<Precision>) {
         let inner = &self.inner;
         inner.precisions.get_or_init(|| {
             let mut sources = vec![inner.document_precision_source; inner.blocks.u_len];
-            let mut resolved = vec![inner.model.precision.document; inner.blocks.u_len];
             for block in &inner.state_layout {
-                let source = inner
+                if inner
                     .flat()
                     .state_variables
                     .get(&block.name)
-                    .and_then(|v| v.element_type.as_deref())
-                    .map_or(inner.document_precision_source, |p| {
-                        PrecisionSource::Declared(
-                            Precision::from_element_type(Some(p))
-                                .expect("the build checked variable precision"),
-                        )
-                    });
-                let precision = match source {
-                    PrecisionSource::Declared(p) => p,
-                    PrecisionSource::Unspecified => inner.model.precision.document,
-                };
-                let slots =
-                    block.flat_offset..block.flat_offset + block.shape.iter().product::<usize>();
-                sources[slots.clone()].fill(source);
-                resolved[slots].fill(precision);
+                    .is_some_and(|v| v.element_type.is_some())
+                {
+                    let slots = block.flat_offset
+                        ..block.flat_offset + block.shape.iter().product::<usize>();
+                    sources[slots].fill(PrecisionSource::Declared(
+                        inner.model.precision.variable(&block.name),
+                    ));
+                }
             }
-            (sources, resolved)
+            sources
         })
     }
 
@@ -1269,8 +1286,8 @@ impl RhsProgram {
             owner: inner.id,
             state: vec![0.0; n],
             dy: vec![0.0; n],
+            ingress: Ingress::default(),
             exec,
-            boundary: BoundaryBuffers::default(),
             _not_sync: PhantomData,
         }
     }
@@ -1280,16 +1297,13 @@ impl RhsProgram {
     /// (zero for a state with no `D` equation). This is the reference every
     /// tile and lane of the program is bitwise against.
     ///
-    /// State buffers may hold `f64`, or `f32` when all state and auxiliary
-    /// variables work in binary32. Parameters and time cross as binary64.
-    ///
     /// The result depends only on the program and the arguments' values:
     /// not on the thread, the workspace's history, or any other call.
     #[allow(clippy::too_many_arguments)]
-    pub fn eval_into<T: RhsScalar>(
+    pub fn eval_into<T: StateScalar>(
         &self,
         u: &[T],
-        aux: &[T],
+        aux: &[f64],
         p: &[f64],
         t: f64,
         forcing: &ForcingSet,
@@ -1297,91 +1311,42 @@ impl RhsProgram {
         ws: &mut RhsWorkspace,
     ) -> Result<(), RhsError> {
         let inner = &*self.inner;
-        check_vector_lengths(
-            &inner.blocks,
-            u.len(),
-            aux.len(),
-            du.len(),
-            p.len(),
-            inner.params.len(),
-        )?;
+        check_lengths(&inner.blocks, u, aux, du, p, inner.params.len())?;
         check_owner(ws, inner.id)?;
-        check_forcing(forcing, &inner.slots)?;
+        check_forcing(forcing, &inner.default_set)?;
         let _precision = inner.model.precision.enter();
-        let working = crate::precision::of_variable;
-        if T::IS_F32
-            && inner
-                .layout
-                .u
-                .iter()
-                .chain(&inner.layout.aux)
-                .any(|block| !working(&block.name).is_f32())
-        {
-            return Err(RhsError::Fault {
-                code: crate::diagnostic::codes::PRECISION_CHOICE_CONFLICT,
-                message: "binary32 state buffers require all state and auxiliary slots to evaluate in binary32".into(),
-            });
-        }
-        if !inner.rounds_inputs
-            && let (Some(u), Some(aux), Some(du)) =
-                (T::f64_inputs(u), T::f64_inputs(aux), T::f64_output(du))
-        {
-            return self.eval_working(u, aux, p, t, forcing, du, ws);
-        }
-        let mut boundary = std::mem::take(&mut ws.boundary);
-        let stage = |out: &mut Vec<f64>, values: &[T], blocks: &[TileBlock]| {
-            out.clear();
-            out.extend(values.iter().copied().map(Into::into));
-            for block in blocks {
-                if working(&block.name).is_f32() {
-                    let len = block.len();
-                    for value in &mut out[block.base..block.base + len] {
-                        *value = Precision::Float32.round(*value);
-                    }
-                }
-            }
-        };
-        stage(&mut boundary.u, u, &inner.layout.u);
-        stage(&mut boundary.aux, aux, &inner.layout.aux);
-        boundary.p.clear();
-        boundary.p.extend(
-            p.iter()
-                .zip(&inner.params)
-                .map(|(&value, slot)| working(&slot.name).round(value)),
-        );
-        let forcing = rounded_forcing(&mut boundary.forcing, forcing, working);
-        boundary.du.resize(du.len(), 0.0);
-        let result = self.eval_working(
-            &boundary.u,
-            &boundary.aux,
-            &boundary.p,
-            t,
-            forcing,
-            &mut boundary.du,
-            ws,
-        );
-        if result.is_ok() {
-            for (slot, &value) in du.iter_mut().zip(&boundary.du) {
-                *slot = T::from_f64(value);
+        if T::PRECISION.is_f32() {
+            if let Some(block) = inner.state_layout.iter().find(|b| {
+                b.shape.iter().product::<usize>() != 0
+                    && !inner.model.precision.variable(&b.name).is_f32()
+            }) {
+                return Err(RhsError::StatePrecision {
+                    variable: block.name.clone(),
+                    declared: Precision::Float64,
+                });
             }
         }
-        ws.boundary = boundary;
-        result
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn eval_working(
-        &self,
-        u: &[f64],
-        aux: &[f64],
-        p: &[f64],
-        t: f64,
-        forcing: &ForcingSet,
-        du: &mut [f64],
-        ws: &mut RhsWorkspace,
-    ) -> Result<(), RhsError> {
         let scope = super::FaultScope::enter();
-        self.run(u, aux, p, t, Forcing::Set(forcing), du, ws);
+        if let Some(du) = T::as_f64_mut(du).filter(|_| !inner.inputs.any_f32) {
+            self.run(&T::widen_slice(u), aux, p, t, Forcing::Set(forcing), du, ws);
+        } else {
+            let mut ingress = std::mem::take(&mut ws.ingress);
+            inner.inputs.round_into(&mut ingress, u, aux, p);
+            ingress.du.resize(du.len(), 0.0);
+            self.run(
+                &ingress.u,
+                &ingress.aux,
+                &ingress.params,
+                t,
+                Forcing::Set(forcing),
+                &mut ingress.du,
+                ws,
+            );
+            for ((target, &value), prec) in du.iter_mut().zip(&ingress.du).zip(&inner.inputs.u) {
+                *target = T::narrow(prec.round(value));
+            }
+            ws.ingress = ingress;
+        }
         match scope.finish() {
             Some(msg) => {
                 if let WsExec::Tape(ctx) = &mut ws.exec {
@@ -1436,10 +1401,10 @@ impl RhsProgram {
                 state_layout: Vec::new(),
                 precisions: OnceLock::new(),
                 document_precision_source: PrecisionSource::Declared(c.precision.document),
-                rounds_inputs: c.precision.is_f32(),
+                inputs: InputPrecisions::default(),
                 params: Vec::new(),
                 slots: Arc::from(Vec::new()),
-                default_set: ForcingSet::for_slots(Arc::from(Vec::new()), Vec::new())
+                default_set: ForcingSet::for_slots(Arc::from([]), Arc::from([]), Vec::new())
                     .expect("an empty set"),
                 scatter: Vec::new(),
                 identity: true,
@@ -1465,8 +1430,8 @@ impl RhsProgram {
             owner: self.inner.id,
             state: Vec::new(),
             dy: Vec::new(),
+            ingress: Ingress::default(),
             exec: WsExec::Tape(Box::new(TapeCtx::new(Arc::clone(tape)))),
-            boundary: BoundaryBuffers::default(),
             _not_sync: PhantomData,
         }
     }
@@ -1615,59 +1580,9 @@ fn fill_forcing_map(map: &mut HashMap<String, ArrayD<f64>>, set: &ForcingSet) {
     }
 }
 
-fn rounded_forcing<'a>(
-    cached: &'a mut Option<(u64, ForcingSet)>,
-    input: &ForcingSet,
-    precision: impl Fn(&str) -> Precision,
-) -> &'a ForcingSet {
-    if cached
-        .as_ref()
-        .is_none_or(|(epoch, _)| *epoch != input.epoch())
-    {
-        let buffers = input
-            .slots()
-            .iter()
-            .zip(input.bufs())
-            .map(|(slot, buf)| {
-                let p = precision(&slot.name);
-                if p.is_f32() {
-                    buf.iter().map(|&x| p.round(x)).collect()
-                } else {
-                    Arc::clone(buf)
-                }
-            })
-            .collect();
-        let rounded = ForcingSet::for_slots(input.slots_arc(), buffers)
-            .expect("rounding preserves forcing slot lengths");
-        *cached = Some((input.epoch(), rounded));
-    }
-    &cached.as_ref().expect("forcing was staged").1
-}
-
-fn round_binary32(values: &mut [f64]) {
-    for x in values {
-        *x = Precision::Float32.round(*x);
-    }
-}
-
-fn restricted_inputs<'a>(
-    precision: Precision,
-    boundary: &'a mut BoundaryBuffers,
-    p: &'a [f64],
-    forcing: &'a ForcingSet,
-) -> (&'a [f64], &'a ForcingSet) {
-    if !precision.is_f32() {
-        return (p, forcing);
-    }
-    boundary.p.clear();
-    boundary.p.extend(p.iter().map(|&x| precision.round(x)));
-    let forcing = rounded_forcing(&mut boundary.forcing, forcing, |_| precision);
-    (&boundary.p, forcing)
-}
-
-fn check_forcing(set: &ForcingSet, slots: &Arc<[ForcingSlot]>) -> Result<(), RhsError> {
-    if !set.fits(slots) {
-        return Err(set.mismatch(slots));
+fn check_forcing(set: &ForcingSet, defaults: &ForcingSet) -> Result<(), RhsError> {
+    if !set.fits(defaults) {
+        return Err(set.mismatch(defaults));
     }
     Ok(())
 }
@@ -1691,34 +1606,35 @@ fn tape_fault(scope: super::FaultScope, ctx: &mut TapeCtx) -> Result<(), RhsErro
     }
 }
 
-fn check_lengths(
+fn round_inputs<T: StateScalar>(buf: &mut Vec<f64>, input: &[T], precisions: &[Precision]) {
+    buf.clear();
+    buf.extend(
+        input
+            .iter()
+            .zip(precisions)
+            .map(|(&value, precision)| precision.round(value.widen())),
+    );
+}
+
+fn check_lengths<T>(
     layout: &Blocks,
-    u: &[f64],
+    u: &[T],
     aux: &[f64],
-    du: &[f64],
+    du: &[T],
     p: &[f64],
     n_params: usize,
 ) -> Result<(), RhsError> {
-    check_vector_lengths(layout, u.len(), aux.len(), du.len(), p.len(), n_params)
-}
-
-fn check_vector_lengths(
-    layout: &Blocks,
-    u: usize,
-    aux: usize,
-    du: usize,
-    p: usize,
-    n_params: usize,
-) -> Result<(), RhsError> {
-    for (what, expected, got) in [
-        ("u", layout.u_len, u),
-        ("du", layout.u_len, du),
-        ("aux", layout.aux_len, aux),
-        ("p", n_params, p),
-    ] {
-        if expected != got {
-            return Err(forcing::shape(what, expected, got));
-        }
+    if u.len() != layout.u_len {
+        return Err(forcing::shape("u", layout.u_len, u.len()));
+    }
+    if du.len() != layout.u_len {
+        return Err(forcing::shape("du", layout.u_len, du.len()));
+    }
+    if aux.len() != layout.aux_len {
+        return Err(forcing::shape("aux", layout.aux_len, aux.len()));
+    }
+    if p.len() != n_params {
+        return Err(forcing::shape("p", n_params, p.len()));
     }
     Ok(())
 }
