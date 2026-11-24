@@ -969,6 +969,24 @@
       "class": "out_of_scope",
       "area": "conformance_harness",
       "note": "A fixture expectation of the precision gate; the underlying rule is the mixed_element_type refusal of §5.18.2a."
+    },
+    {
+      "id": "conf.5.18.6.precision-source-distinguishes-omission",
+      "section": "5.18.6",
+      "quote": "The binding's precision-source accessor MUST distinguish omitted precision at the root from a declaration, including per-variable overrides written by a mount.",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "A variable's precision source is its own element_type, else the root's domain.element_type, else Float64 for a root below esm 2.4.0 and unspecified from 2.4.0."
+    },
+    {
+      "id": "conf.5.18.6.mounted-float64-survives",
+      "section": "5.18.6",
+      "quote": "A mounted leaf that declares binary64 below an unspecified root MUST retain its declaration through load, emit and reload.",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "The Float64 a mount writes onto a leaf's variables under an unspecified root survives load, emit and reload, so its precision source stays declared Float64."
     }
   ]
 }

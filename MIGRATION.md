@@ -1635,6 +1635,12 @@ Everything above describes one coordinated release. This part records the
 breaking changes that landed **after** it, newest last. The row kinds are the
 same ones [How to read a row](#how-to-read-a-row) defines.
 
+## esm 2.4.0: declared and unspecified precision
+
+| Change | Migration |
+| --- | --- |
+| Omitted `element_type` can mean unspecified (esm-spec §11.3.3) | When raising an older document to esm 2.4.0 or later, declare `"element_type": "Float64"` on the domain or the variables that require binary64 semantics. Older roots retain their implicit binary64 declaration. Built-in evaluation of an unspecified variable uses binary64. |
+
 ## The inline-test runner is no longer named for PDEs
 
 `run_pde_tests` ran a document's esm-spec §6.6 inline tests — all of them. The

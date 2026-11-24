@@ -3110,7 +3110,8 @@ a document that declares no domain evaluated in binary64, and
 precision crosses a mount") makes the edge write the leaf's declared precision
 onto every variable of the spliced component that declares none, whenever it
 differs from the mounting document's effective precision (its own declaration,
-else inherited from its mounter, else `"Float64"` at a root). A leaf that
+else inherited from its mounter, else determined by the root format version as
+in §5.18.6). A leaf that
 declares no precision adopts its mounter's.
 
 Obligations, per binding:
@@ -3199,6 +3200,35 @@ Rust uses a single scalar type for its built-in integrator. It refuses mixed
 state types and Float32 runs with distinct output, span, or provider-refresh
 times that coincide on its binary32 clock. Julia and Python currently
 refuse builds requiring Float32 dynamics with `float32_unsupported`.
+
+#### 5.18.6 Declared and unspecified precision
+
+The binding's precision-source accessor MUST distinguish omitted precision at
+the root from a declaration, including per-variable overrides written by a
+mount. Omission below esm 2.4.0 remains a binary64 declaration. From 2.4.0
+onward, an omitted root and variable precision stays unspecified without
+changing the built-in binary64 evaluation path. A mounted leaf that declares
+binary64 below an unspecified root MUST retain its declaration through load,
+emit and reload. A reaction-system leaf that declares binary64 below an
+unspecified root is `element_type_uncarried`, and the refusal names the
+unspecified mounting document and the declaration that resolves it; below
+esm 2.4.0 the same mount loads. Fixtures: `root_unspecified.esm`,
+`root_legacy.esm`, `reaction_f64_unspecified.esm` and
+`reaction_f64_legacy.esm` in `tests/conformance/mount_element_type/`, whose
+`expected.json` pins each binding's precision-source accessor
+(`precision_sources`) and the refusal's text (`load_error_contains`).
+
+Any external binary32 build option exercises the same precision inference and
+per-operation rounding as a declared binary32 document. Check the rounding
+witness at zero tolerance. A request introducing a mix or reaching only
+declared variables fails with `precision_choice_conflict`. An unspecified
+variable used as an equality or join key fails with
+`key_precision_unspecified`, and every binding's `validate` reports it as a
+`warnings` entry (never on `unit_warnings`) for any run: the shared fixture is
+`tests/conformance/precision_source/key_comparison.esm`, its expectations in
+`expected.json` beside it. With both keys declared binary64, their exact
+comparison may feed the binary32 group. Consumer-level tolerance, conversions
+and result metadata follow esm-spec §11.3.3 P5–P9.
 
 ### 5.19 Causal Self-Reference (Recurrence) Along One Index Axis (normative)
 

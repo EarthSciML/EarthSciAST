@@ -476,17 +476,19 @@ Per-binding decorations, sanctioned under §2.2:
 #### `validate`
 
 **Canonical.** `validate(file) -> ValidationResult`, where `ValidationResult`
-carries `schema_errors`, `structural_errors`, `unit_warnings`, and `is_valid`.
-Total: it reports, it does not raise.
+carries `schema_errors`, `structural_errors`, `unit_warnings`, `warnings`, and
+`is_valid`. `warnings` holds advisory `ValidationWarning` records (`code`,
+`path`, `message`) that are not about units, such as
+`key_precision_unspecified` (esm-spec §11.3.3 P8); like `unit_warnings` they
+never change `is_valid`. Total: it reports, it does not raise.
 
 **Today:** all five export it, all five take only a **typed (loaded)
-document**, all five return the canonical fields, and none raises on an
-invalid document. JSON text goes through the separate `validate_text`, which
+document**, all five return the five-field result, and none raises on an
+invalid document. Go and Rust omit an empty `warnings` list when the result is
+serialized to JSON. JSON text goes through the separate `validate_text`, which
 also reports a load failure (malformed JSON, a schema violation, an
 unresolvable mount) as a `ValidationResult` instead of raising. Julia and
-Python also have `validate_path` for a file (§8 item 13). Rust's extension
-field `warnings` carries advisory `ValidationWarning` records with a code,
-path and message, including a low `solver.reltol` for Float32 integration.
+Python also have `validate_path` for a file (§8 item 13). Rust also reports a low `solver.reltol` for Float32 integration on `warnings`.
 
 | Binding | `validate` | `validate_text` | `validate_path` |
 |---|---|---|---|
@@ -2012,6 +2014,28 @@ question 2), affects exposed as small algebraic systems (open question 1) and a
 derived-document form of a kernel spec (open question 5) are not settled here.
 Range-restricted kernels (tiles and lanes) and XLA kernels are future work.
 
+#### Declared precision and external RHS evaluation
+
+All five bindings expose `precision_source(document, variable)` (Go
+`PrecisionSource`, TypeScript `precisionSource`). Omitting the variable
+queries the document default. Rust returns `PrecisionSource::Declared(p)` or
+`PrecisionSource::Unspecified`; the other bindings return the declared
+spelling or `"unspecified"`.
+
+Rust's `rhs_program_with_options(file, tspan, problem_options, rhs_options)`
+selects working precision for unspecified variables using
+`RhsOptions::unspecified_evaluation`. The ordinary
+`rhs_program(prob)` uses the built-in binary64 default. The program reports
+`precision_sources()` and `state_precisions()` in flat `u` order.
+`eval_into` serves both binary64 and binary32 state storage, with the latter
+requiring binary32 working precision for every writable state slot.
+External integrators can serialize the versioned Rust `PrecisionRecord` with
+`canonical_json()` for attachment to results.
+Julia's `operator_ir(prob; unspecified_eltype = Float32)` requests binary32
+for the selected StableHLO evaluation group. `emit_fragment` uses the IR's
+resolved element type. A supplied `eltype` must agree with the IR. The native
+`rhs_program` refuses this choice with `float32_unsupported`.
+
 ### 5.9 Reference resolution
 
 `build_reference_graph(model, model_name="", index_sets=<none>) -> ReferenceGraph`
@@ -2181,6 +2205,7 @@ reading that as a gap.
 | `parse_markdown` | function | `parse_markdown` | `parseMarkdown` | `parse_markdown` | `parse_markdown` | `ParseMarkdown` |
 | `parse_math` | function | `parse_math` | `parseMath` | `parse_math` | `parse_math` | `ParseMath` |
 | `parse_typst` | function | `parse_typst` | `parseTypst` | `parse_typst` | `parse_typst` | `ParseTypst` |
+| `precision_source` | function | `precision_source` | `precisionSource` | `precision_source` | `precision_source` | `PrecisionSource` |
 | `print_document` | function | `print_document` | `printDocument` | `print_document` | `print_document` | `PrintDocument` |
 | `print_markdown` | function | `print_markdown` | `printMarkdown` | `print_markdown` | `print_markdown` | `PrintMarkdown` |
 | `print_math` | function | `print_math` | `printMath` | `print_math` | `print_math` | `PrintMath` |
@@ -2218,6 +2243,7 @@ reading that as a gap.
 | `validate` | function | `validate` | `validate` | `validate` | `validate` | `Validate` |
 | `validate_text` | function | `validate_text` | `validateText` | `validate_text` | `validate_complete` / `validate_text` | `ValidateText` |
 | `validation_result` | type | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` |
+| `validation_warning` | type | `ValidationWarning` | `ValidationWarning` | `ValidationWarning` | `ValidationWarning` | `ValidationWarning` |
 | `variable_node` | type | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` |
 | `write_path` | function | `write_path` | `writePath` | `write_path` | `write_path` | `WritePath` |
 

@@ -129,12 +129,16 @@ mutable struct _DECtx
     # kernel, a scan, the output assembly. Purely a tally key for the read
     # attribution below; nothing reads it back and nothing branches on it.
     site::Symbol
+    # A binary32 fragment's declared-binary64 comparison keys
+    # (`_DEExactKeys`, fragment.jl), or `nothing`.
+    keys64::Any
 end
 
 function _DECtx(
         n_states::Int, n_total::Int, p, t::_DEVal, uval::Union{Nothing, _DEVal},
         bufs, hostkeys::Vector{Vector{Float64}}, names::Dict{Int, String},
-        opts::DirectEmitOptions; precision = Float64, tree_fold = false, windows = nothing
+        opts::DirectEmitOptions; precision = Float64, tree_fold = false, windows = nothing,
+        keys64 = nothing
     )
     ue = _DEMap(n_total)
     if uval !== nothing
@@ -156,7 +160,7 @@ function _DECtx(
         Dict{Vector{_MLIR.IR.Value}, _DEVal}(),
         Dict{Tuple{_MLIR.IR.Value, Vector{Int}}, _DEVal}(),
         Dict{Tuple{Int, Vector{Int}}, _MLIR.IR.Value}(),
-        Dict{Symbol, Int}(), Int32(0), :none
+        Dict{Symbol, Int}(), Int32(0), :none, keys64
     )
 end
 

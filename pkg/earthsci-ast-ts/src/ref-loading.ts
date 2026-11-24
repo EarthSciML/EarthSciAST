@@ -60,6 +60,7 @@ import { applyMountUrlSubstitutions, resolveDataSourceUrls } from './data-source
 import { loadString, validateSchema, ROOT_PATH } from './parse.js'
 import { toJson } from './serialize.js'
 import { prepareDocumentOps, raiseFaqVersionFloor, rejectVersionGatedConstructs } from './parse.js'
+import { omittedPrecision } from './precision.js'
 import { raiseConstUnitsVersionFloor } from './solver.js'
 import { raiseVariableBoundsVersionFloor } from './variable-bounds.js'
 
@@ -227,7 +228,7 @@ export function resolveSubsystemRefsSync(
 
   // esm-spec §4.7 "Working precision crosses a mount": the root's effective
   // precision, which every edge it carries compares its leaf against.
-  const precision = declaredElementType(file) ?? DEFAULT_ELEMENT_TYPE
+  const precision = declaredElementType(file) ?? omittedPrecision(file.esm)
 
   // Process all models. A top-level `models.<k>` that is a bare `{ ref }` is a
   // MOUNT EDGE in its own right (esm-spec §4.7 "Two mount forms, one
@@ -1076,6 +1077,31 @@ function declaredElementType(doc: unknown): string | undefined {
 }
 
 /**
+ * The `element_type_uncarried` refusal: what the leaf declares, why the
+ * component cannot carry it, what the mounting document's precision is (a
+ * precision name or `unspecified`), and how to fix it.
+ */
+function elementTypeUncarriedMessage(
+  where: string,
+  leaf: string,
+  enclosing: string,
+  at: string,
+): string {
+  const mounter =
+    enclosing === 'unspecified'
+      ? 'The document mounting it has unspecified precision (neither it nor any document ' +
+        'mounting it declares `domain.element_type`; esm-spec §11.3.3)'
+      : `The document mounting it evaluates in ${enclosing}`
+  return (
+    `${where}: the mounted document declares \`domain.element_type: "${leaf}"\`, but the ` +
+    `component is, or carries, a reaction system${at} whose species and parameters cannot ` +
+    `declare a precision of their own. ${mounter}, so the mount cannot keep the leaf's ` +
+    `precision (esm-spec §4.7 "Working precision crosses a mount"). Declare ` +
+    `\`domain.element_type: "${leaf}"\` on the mounting document, or remove it from the leaf`
+  )
+}
+
+/**
  * Carry a mounted document's declared working precision onto the components it
  * splices in (esm-spec §4.7 "Working precision crosses a mount").
  *
@@ -1108,12 +1134,7 @@ function carryMountedElementType(
         ref,
         undefined,
         ERROR_CODES.ELEMENT_TYPE_UNCARRIED,
-        `mount of '${ref}': the mounted document declares \`domain.element_type: "${leaf}"\` ` +
-          `but the document mounting it evaluates in ${enclosing}, and the component carries a ` +
-          `reaction system${at} whose species and parameters cannot declare a per-variable ` +
-          `\`element_type\`; the mount cannot keep the leaf's precision (esm-spec §4.7 ` +
-          `"Working precision crosses a mount"). Declare the same \`domain.element_type\` on ` +
-          `the mounting document, or remove it from the leaf`,
+        elementTypeUncarriedMessage(`mount of '${ref}'`, leaf, enclosing, at),
         pointer,
       )
     }

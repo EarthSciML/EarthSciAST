@@ -1347,7 +1347,7 @@ retired with the renderers they described. Math display is now `print_math` /
 | PREC-11-A-015 | An exempt variable MUST stay exempt through ARITHMETIC, not only through ingress: `floor(scc/1000)*1000` is `2260007000` in binary64 and `2260006912` in binary32 | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
 | PREC-11-A-016 | A compiled artifact MUST carry the per-variable table and re-arm it at every run entry, not only at build | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
 | PREC-11-A-017 | A document in which no variable declares an `element_type` MUST be bit-unchanged, on the same code path, from PREC-11-A-001…010 alone | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
-| PREC-11-A-018 | A mount MUST carry a mounted document's declared `domain.element_type` onto every variable of the spliced component that declares none, whenever it differs from the mounting document's effective precision (its own declaration, else inherited, else `"Float64"` at a root); a leaf declaring none adopts its mounter's; exactly those fields are written, at both mount forms and through nested mounts, and they survive load → emit | esm-spec §4.7 "Working precision crosses a mount"; CONFORMANCE_SPEC §5.18.2b | Yes | parsing |
+| PREC-11-A-018 | A mount MUST carry a mounted document's declared `domain.element_type` onto every variable of the spliced component that declares none, whenever it differs from the mounting document's effective precision (its own declaration, else inherited, else the version-dependent root default); a leaf declaring none adopts its mounter's; exactly those fields are written, at both mount forms and through nested mounts, and they survive load → emit | esm-spec §4.7 "Working precision crosses a mount"; CONFORMANCE_SPEC §5.18.2b | Yes | parsing |
 | PREC-11-A-019 | A component that would need the field but is, or carries, a reaction system MUST be refused at load (`element_type_uncarried`) | esm-spec §4.7; CONFORMANCE_SPEC §5.18.2b | Yes | validation |
 | PREC-11-A-020 | Mixing a mounted binary32 variable with a binary64 one of the mounting document, by an equation or by a coupling, MUST be `mixed_element_type` | CONFORMANCE_SPEC §5.18.2, §5.18.2b | Yes | validation |
 | PREC-11-A-021 | Accepted states MUST be stored at their declared precision | esm-spec §11.3.2 | Yes | simulation |
@@ -1427,6 +1427,23 @@ per-variable rows, `f32_per_variable_element_type.esm` (four assertions at zero
 tolerance: the binary32 quantity, a binary64 key through ingress, the same key
 through `floor(scc/1000)*1000`, and two codes ten apart that binary32 would make
 equal) and `f32_mixed_element_types.esm`, which must not build.
+
+---
+
+### PREC-11-B: Declared and unspecified precision (esm-spec §11.3.3)
+
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| PREC-11-B-001 | Variable, domain and mounted declarations bind arithmetic. Omission is distinguishable from declaration at esm 2.4.0 onward. | P1 | Yes | parsing |
+| PREC-11-B-002 | Built-ins evaluate unspecified precision in binary64. | P2 | Yes | simulation |
+| PREC-11-B-003 | An external consumer accepts a precision choice explicitly per evaluation group and storage choice per unspecified variable. | P3 | Yes | simulation |
+| PREC-11-B-004 | A choice that introduces a mixed expression or affects no eligible variable is refused. | P4 | Yes | validation |
+| PREC-11-B-005 | Group and storage boundaries convert at round-to-nearest-even on narrowing and widen exactly. | P5 | Yes | simulation |
+| PREC-11-B-006 | Consumer-owned precision includes solver quantities and stored tables. | P6 | Yes | simulation |
+| PREC-11-B-007 | Consumers preserve resolved integration and assertion tolerances and enforce the binary32 state storage floor. | P7 | Yes | simulation |
+| PREC-11-B-008 | Binary32 evaluation refuses unspecified keys. Validation can warn without invalidating the document. | P8 | Yes | validation |
+| PREC-11-B-009 | Results carry the canonical versioned precision record. | P9 | Yes | serialization |
+| PREC-11-B-010 | Built-in solve, initialization, observed and test entry points apply the default. | P10 | Yes | simulation |
 
 ---
 

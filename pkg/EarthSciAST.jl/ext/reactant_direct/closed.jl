@@ -136,7 +136,8 @@ _de_is_cgather(nd::_E._Node) =
 function _de_cgather(ctx::_DECtx, nd::_E._Node, ev::F, cached::G)::_DEVal where {F, G}
     cg = nd.payload::_E._ConstGatherArray
     nm = isempty(cg.name) ? "a const array" : "the const array `$(cg.name)`"
-    off = nothing
+    subs = _DEVal[]
+    wraps = Symbol[]
     for d in eachindex(nd.children)
         ch = nd.children[d]
         r = _de_subrange(ctx, ch, cached)
@@ -152,51 +153,56 @@ function _de_cgather(ctx::_DECtx, nd::_E._Node, ev::F, cached::G)::_DEVal where 
         # The extremes as the interpreter rounds them (ties to even).
         rlo, rhi = round(r[1]), round(r[2])
         inside = 1 <= rlo && rhi <= n
-        wraps = n >= 1 && (pol === :periodic || pol === :clamp)
-        (inside || wraps) || _de_refuse(
+        wrapping = n >= 1 && (pol === :periodic || pol === :clamp)
+        (inside || wrapping) || _de_refuse(
             ctx,
             "a read of $nm at a computed subscript",
             "the subscript on dimension $d can take values in [$(r[1]), $(r[2])], " *
                 "outside 1..$n, where the `$(pol)` boundary policy raises at run time; " *
                 "a compiled program has no channel to report it."
         )
-        s = _de_un(ctx, _hlo.round_nearest_even, _de_bcast_any(ev(ch)))
-        if !inside && pol === :periodic
-            # mod1(s, n) = rem(s - 1, n) taken non-negative, plus 1: exact on
-            # integer-valued Float64s of this size.
-            one = _de_const(ctx, 1.0); nn = _de_const(ctx, Float64(n))
-            m = _de_bin(ctx, _hlo.remainder, _de_bin(ctx, _hlo.subtract, s, one), nn)
-            pred, L = _de_pred(ctx, "LT", m, _de_const(ctx, 0.0))
-            m = _de_select(ctx, pred, L, _de_bin(ctx, _hlo.add, m, nn), m)
-            s = _de_bin(ctx, _hlo.add, m, one)
-        elseif !inside
-            s = _de_bin(
-                ctx, _hlo.minimum,
-                _de_bin(ctx, _hlo.maximum, s, _de_const(ctx, 1.0)),
-                _de_const(ctx, Float64(n))
-            )
-        end
-        term = _de_bin(
-            ctx, _hlo.multiply,
-            _de_bin(ctx, _hlo.subtract, s, _de_const(ctx, 1.0)),
-            _de_const(ctx, Float64(cg.strides[d]))
-        )
-        off = off === nothing ? term : _de_bin(ctx, _hlo.add, off, term)
+        push!(subs, _de_un(ctx, _hlo.round_nearest_even, _de_bcast_any(ev(ch))))
+        push!(wraps, inside ? :none : pol)
     end
-    off === nothing && return _de_const(ctx, cg.flat[1])
-    lin = _de_bin(ctx, _hlo.add, off, _de_const(ctx, 1.0))
+    isempty(subs) && return _de_const(ctx, cg.flat[1])
+    # The rounded subscripts are integers in the working precision. Everything
+    # after the rounding is index arithmetic, done in Int64: binary32 holds
+    # integers exactly only up to 2^24, so a periodic wrap, a stride multiply
+    # or an offset sum done in it would address the wrong element of a larger
+    # table.
+    L = maximum(s -> s.len, subs)
+    lanes = map(s -> _de_traced(_de_cast(_de_bcast(ctx, s, L), ctx.precision, Float64)), subs)
     _de_tally!(ctx, :const_gather_computed)
     value = _de_untraced(
         Reactant.call_with_reactant(
-            _de_cg_take, cg.flat, _de_traced(_de_cast(lin, ctx.precision, Float64))
+            _de_cg_take, cg.flat, Tuple(cg.dims), Tuple(cg.strides), Tuple(wraps), lanes...
         )
     )
     return _de_cast(value, Float64, ctx.precision)
 end
 
+# The 1-based linear index of a computed-subscript const read from its rounded
+# 1-based subscripts `subs`: each wrapped by its axis policy (`:periodic`,
+# `:clamp`, or `:none` for a subscript proven in range), then combined with the
+# array's strides. Integer arithmetic on plain or traced integer vectors.
+function _de_cg_linear(subs, dims, strides, wraps)
+    lin = 1
+    for d in eachindex(subs)
+        s, n = subs[d], dims[d]
+        if wraps[d] === :periodic
+            s = mod.(s .- 1, n) .+ 1
+        elseif wraps[d] === :clamp
+            s = clamp.(s, 1, n)
+        end
+        lin = lin .+ (s .- 1) .* strides[d]
+    end
+    return lin
+end
+
+_de_cg_take(flat::Vector{Float64}, dims, strides, wraps, subs::TracedRArray{Float64, 1}...) =
+    _rx_take(flat, _de_cg_linear(map(_rx_int, subs), dims, strides, wraps))
+
 _de_bcast_any(v::_DEVal) = v
-_de_cg_take(flat::Vector{Float64}, lin::TracedRArray{Float64, 1}) =
-    _rx_take(flat, _rx_int(lin))
 
 # ---- the count ---------------------------------------------------------------
 

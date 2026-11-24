@@ -10,8 +10,70 @@ end
 function _de_vector_param(ctx::_DECtx, p::_DEParamVector, sym::Symbol)
     slot = get(p.slots, sym, 0)
     slot > 0 || return _de_refuse(ctx, "the parameter `$sym`", "it has no position in the parameter vector.")
+    ctx.keys64 === nothing || !haskey(ctx.keys64.slots, sym) || _de_refuse(
+        ctx, "the binary64 key `$sym` outside an exact comparison",
+        "it declares Float64 and is read only as an `==`/`!=` operand, which a binary32 " *
+            "fragment evaluates exactly only when the other operand is a parameter or a " *
+            "literal (esm-spec §11.3.3 P8); here the key reaches binary32 arithmetic."
+    )
     _de_tally!(ctx, :param_input)
     return _de_slice(ctx, p.values, slot, slot; why = :parameter)
+end
+
+# The declared-binary64 scalar parameters a binary32 fragment reads only as
+# `==`/`!=` operands (`OperatorIR.binary64_keys`): such a comparison runs on the
+# binary64 input and supplies an exact flag to the binary32 arithmetic
+# (esm-spec §11.3.3 P8). `p` is the parameter vector as passed.
+struct _DEExactKeys
+    p::_DEVal
+    slots::Dict{Symbol, Int}
+end
+
+# `nd` as an exact comparison of a binary64 key, or `nothing` when it compares
+# none. `nd` is a scalar or a lane-batched node.
+function _de_exact_compare(ctx::_DECtx, nd)
+    keys = ctx.keys64
+    keys === nothing && return nothing
+    (nd.op === :(==) || nd.op === :!=) || return nothing
+    any(ch -> ch.kind === _E._NK_PARAM && haskey(keys.slots, ch.sym), nd.children) || return nothing
+    length(nd.children) == 2 || _de_refuse(
+        ctx, "`$(nd.op)` with $(length(nd.children)) arguments", "a comparison takes two."
+    )
+    operands = map(nd.children) do ch
+        if ch.kind === _E._NK_PARAM && haskey(keys.slots, ch.sym)
+            slot = keys.slots[ch.sym]
+            _de_tally!(ctx, :param_input)
+            return _de_res(
+                _hlo.slice(
+                    keys.p.v; result_0 = _de_ty(1, Float64),
+                    start_indices = _MLIR.IR.DenseArrayAttribute(Int64[slot - 1]),
+                    limit_indices = _MLIR.IR.DenseArrayAttribute(Int64[slot]),
+                    strides = _MLIR.IR.DenseArrayAttribute(Int64[1]), location = _de_loc()
+                )
+            )
+        elseif ch.kind === _E._NK_LITERAL && _de_lanes_uniform(ch)
+            return _de_res(
+                _hlo.constant(;
+                    output = _de_ty(1, Float64),
+                    value = _MLIR.IR.DenseElementsAttribute([ch.literal]), location = _de_loc()
+                )
+            )
+        end
+        return _de_refuse(
+            ctx, "an exact comparison of a binary64 key with a computed operand",
+            "a declared-Float64 key compared in a binary32 fragment must meet a parameter " *
+                "or a literal, so the comparison can run in binary64 (esm-spec §11.3.3 P8)."
+        )
+    end
+    _de_tally!(ctx, :compare)
+    pred = _hlo.compare(
+        operands[1], operands[2]; result_0 = _de_ty_i1(1),
+        comparison_direction = _MLIR.API.stablehloComparisonDirectionAttrGet(
+            _MLIR.IR.current_context(), _DE_COMPARE[nd.op]
+        ),
+        location = _de_loc()
+    )
+    return _de_select(ctx, _de_res(pred), 1, _de_const(ctx, 1.0), _de_const(ctx, 0.0))
 end
 
 struct _StableHLOFragment{T, I, B} <: Function
@@ -38,8 +100,14 @@ function Reactant.make_tracer(
     return prev
 end
 
-function emit_fragment(ir::_E.OperatorIR; eltype::Type = Float64, fold::Symbol = :tree)
+function emit_fragment(ir::_E.OperatorIR; eltype::Type = ir.working_eltype, fold::Symbol = :tree)
     eltype in (Float32, Float64) || throw(ArgumentError("fragment eltype must be Float32 or Float64"))
+    eltype === ir.working_eltype || throw(
+        _E._range_error(
+            _E.ERROR_CODES.PRECISION_CHOICE_CONFLICT,
+            "emit_fragment requested $eltype for an operator resolved to $(ir.working_eltype)"
+        )
+    )
     fold in (:tree, :reduce) || throw(ArgumentError("fragment fold must be :tree or :reduce"))
     host = _E.forcing_buffers(ir.f)
     buffers = map(keys(host)) do name
@@ -58,7 +126,7 @@ function emit_fragment(ir::_E.OperatorIR; eltype::Type = Float64, fold::Symbol =
     # slices as the tile or lane capacity grows.
     return _StableHLOFragment{eltype, typeof(ir), typeof(buffers)}(
         ir, buffers, Vector{Float64}[values(host)...], names,
-        DirectEmitOptions(; read = :always), fold === :tree
+        DirectEmitOptions(; read = :always), eltype === Float64 && fold === :tree
     )
 end
 
@@ -312,10 +380,13 @@ function _fragment_context(f::_StableHLOFragment{T}, p, t, forcing, cells, param
     windows = f.ir.target isa _E.Tile ?
         Union{Nothing, _E._TileForcingWindow}[i isa Int ? f.ir.extra.windows[i] : nothing for i in f.buffers] : nothing
     params = _DEParamVector(_de_cast(_de_untraced(p), Float64, T), param_slots)
+    keys64 = isempty(f.ir.binary64_keys) ? nothing : _DEExactKeys(
+            _de_untraced(p), Dict(Symbol(k) => param_slots[Symbol(k)] for k in f.ir.binary64_keys)
+        )
     return _DECtx(
         rhs.n_states, rhs.n_total, params, _de_cast(_de_time(t), Float64, T),
         nothing, inputs, f.hostkeys, Dict{Int, String}(), f.options;
-        precision = T, tree_fold = f.tree_fold, windows
+        precision = T, tree_fold = f.tree_fold, windows, keys64
     )
 end
 

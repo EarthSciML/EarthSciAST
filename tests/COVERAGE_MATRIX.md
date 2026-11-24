@@ -150,6 +150,15 @@ Based on libraries spec Section 3.4:
    tests/invalid/scoped_ref_errors.esm     # Invalid reference patterns
    ```
 
+### Declared and unspecified precision
+
+| Fixture | Coverage |
+| --- | --- |
+| `conformance/mount_element_type/root_unspecified.esm`, `root_legacy.esm` | All bindings preserve a mounted binary64 declaration and inherited omission through load and emit, and read an undeclared root as unspecified from esm 2.4.0 and as `"Float64"` below it. |
+| `conformance/mount_element_type/reaction_f64_unspecified.esm`, `reaction_f64_legacy.esm` | All bindings refuse a `"Float64"` reaction-system leaf under an unspecified root with a message naming the fix, and load it under an esm 2.3.0 root. |
+| `conformance/precision_source/key_comparison.esm` | All bindings report `key_precision_unspecified` on the validation result's non-unit `warnings`. |
+| `conformance/precision_source/rounding.esm` | Rust checks exact per-operation rounding, flat precision slots, typed state buffers, and declared, legacy, mixed and key variants on the official RHS paths. |
+
 ### Progress Tracking
 
 **Current Status**: 13/39 test fixture categories completed (33%)

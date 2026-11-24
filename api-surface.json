@@ -94,18 +94,18 @@
     }
   },
   "counts": {
-    "symbols": 1000,
+    "symbols": 1010,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 371,
-      "typescript": 239,
-      "python": 270,
-      "rust": 397,
-      "go": 457
+      "julia": 373,
+      "typescript": 241,
+      "python": 272,
+      "rust": 404,
+      "go": 462
     },
     "by_tier": {
-      "extension": 690,
-      "stable": 310
+      "extension": 698,
+      "stable": 312
     }
   },
   "planned": [
@@ -1338,6 +1338,14 @@
       }
     },
     {
+      "name": "code_key_precision_unspecified",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeKeyPrecisionUnspecified"
+      }
+    },
+    {
       "name": "code_makearray_region_inverted",
       "kind": "constant",
       "tier": "extension",
@@ -1431,6 +1439,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeParseError"
+      }
+    },
+    {
+      "name": "code_precision_choice_conflict",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodePrecisionChoiceConflict"
       }
     },
     {
@@ -4568,6 +4584,14 @@
       }
     },
     {
+      "name": "group_precision_record",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "GroupPrecisionRecord"
+      }
+    },
+    {
       "name": "group_subexpressions_by_type",
       "kind": "function",
       "tier": "extension",
@@ -6121,6 +6145,34 @@
       }
     },
     {
+      "name": "precision_record",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PrecisionRecord"
+      }
+    },
+    {
+      "name": "precision_source",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "PrecisionSource",
+        "julia": "precision_source",
+        "python": "precision_source",
+        "rust": "precision_source",
+        "typescript": "precisionSource"
+      }
+    },
+    {
+      "name": "precision_source",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PrecisionSource"
+      }
+    },
+    {
       "name": "predecessors",
       "kind": "function",
       "tier": "extension",
@@ -6955,6 +7007,14 @@
       }
     },
     {
+      "name": "rhs_options",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "RhsOptions"
+      }
+    },
+    {
       "name": "rhs_program",
       "kind": "function",
       "tier": "stable",
@@ -6970,6 +7030,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "RhsProgram"
+      }
+    },
+    {
+      "name": "rhs_program_with_options",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "rhs_program_with_options"
       }
     },
     {
@@ -8756,9 +8824,13 @@
     {
       "name": "validation_warning",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "rust": "ValidationWarning"
+        "go": "ValidationWarning",
+        "julia": "ValidationWarning",
+        "python": "ValidationWarning",
+        "rust": "ValidationWarning",
+        "typescript": "ValidationWarning"
       }
     },
     {
@@ -8898,6 +8970,14 @@
         "python": "VariableNode",
         "rust": "VariableNode",
         "typescript": "VariableNode"
+      }
+    },
+    {
+      "name": "variable_precision_record",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "VariablePrecisionRecord"
       }
     },
     {

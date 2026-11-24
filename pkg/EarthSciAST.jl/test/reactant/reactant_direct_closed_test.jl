@@ -251,6 +251,19 @@ end
         end
     end
 
+    @testset "computed-subscript linear indices are integer arithmetic" begin
+        # Past 2^24 binary32 cannot hold every integer, so the index of an
+        # element of a large table must not be computed in it.
+        big = 2^24 + 3
+        dims, strides = (3, big), (1, 3)
+        lin = CT_EXT._de_cg_linear(
+            ([2, 3], [big - 1, big + 2]), dims, strides, (:none, :periodic)
+        )
+        @test lin == [2 + 3 * (big - 2), 3 + 3 * 1]
+        @test lin[1] != Int(Float32(lin[1]))
+        @test CT_EXT._de_cg_linear(([0, 5],), (4,), (1,), (:clamp,)) == [1, 4]
+    end
+
     @testset "a table read that can leave the array is refused by name" begin
         doc = _ct_doc(
             _ct_ix(_ct_cst([1.0, 2.0, 3.0]), _ct_o("floor", CT_X)), String[]

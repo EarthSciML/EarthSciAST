@@ -67,8 +67,11 @@ end
 KernelOutputs(spec; out_eltype = nothing) = KernelOutputs(spec, out_eltype)
 _kernel_output_eltype(T) = T in (Float16, Float32, Float64)
 
-"""Host-side tree-walk IR and input layouts for [`emit_fragment`](@ref)."""
-struct OperatorIR{F, L, M, T, E, K}
+"""Host-side tree-walk IR and input layouts for [`emit_fragment`](@ref).
+`W` is the working precision, `Float32` or `Float64`. `binary64_keys` names
+the declared-Float64 parameters a binary32 operator reads only as `==`/`!=`
+operands; their comparisons run in binary64 (esm-spec §11.3.3 P8)."""
+struct OperatorIR{F, L, M, T, E, K, W}
     f::F
     layout::L
     maps::M
@@ -77,26 +80,135 @@ struct OperatorIR{F, L, M, T, E, K}
     params::Vector{String}
     forcing::Vector{ForcingSlot}
     kernel::K
+    working_eltype::Type{W}
+    binary64_keys::Vector{String}
 end
-OperatorIR(f, layout, maps, target, extra, params, forcing) =
-    OperatorIR(f, layout, maps, target, extra, params, forcing, nothing)
+OperatorIR(f, layout, maps, target, extra, params, forcing, kernel = nothing) =
+    OperatorIR(f, layout, maps, target, extra, params, forcing, kernel, Float64, String[])
+
+# The working precision of `prog` under `unspecified_eltype = requested`, and
+# its binary64 comparison keys (`OperatorIR.binary64_keys`).
+
+function _operator_eltype(prog::RhsProgram, requested::Type)
+    requested in (Float32, Float64) ||
+        throw(ArgumentError("unspecified_eltype must be Float32 or Float64"))
+    requested === Float64 && return Float64, String[]
+
+    request = "operator_ir(…; unspecified_eltype = Float32)"
+    conflict(msg) = throw(_range_error(ERROR_CODES.PRECISION_CHOICE_CONFLICT, "$request: $msg"))
+    file = prog.seed.prep.file
+    if file === nothing
+        # A caller-supplied flattened system carries no format version, so an
+        # omitted `domain.element_type` is unspecified or a binary64
+        # declaration depending on a version gate it cannot answer.
+        dom = prog.flat.domain
+        declared = dom === nothing ? nothing : dom.element_type
+        declared === nothing && conflict(
+            "the program has no source document, so whether its omitted " *
+                "`domain.element_type` leaves precision unspecified (esm 2.4.0 and later) " *
+                "or declares Float64 cannot be determined (esm-spec §11.3.3)"
+        )
+        conflict("the document declares $declared working precision")
+    end
+    source = precision_source(file)
+    source == "unspecified" || conflict("the document declares $source working precision")
+
+    flat = expand_flattened_refs(prog.flat)
+    variables = merge(flat.parameters, flat.observed_variables, flat.state_variables)
+    # `quantities` holds every name read or written as a quantity; a name used
+    # only as an `==`/`!=` operand or a `join.on` key is in `used` alone.
+    quantities = Set{String}(prog.writes)
+    union!(quantities, prog.aux_names)
+    used = copy(quantities)
+    compared = Set{String}()
+    for (i, eq) in enumerate(flat.equations), expr in (eq.lhs, eq.rhs)
+        _quantity_var_names(expr, quantities)
+        _visit_keys(expr, String[]) do key, op
+            var = get(variables, key, nothing)
+            var === nothing && return
+            push!(used, key)
+            op == "join.on" || push!(compared, key)
+            var.element_type === nothing && throw(
+                _range_error(
+                    ERROR_CODES.KEY_PRECISION_UNSPECIFIED,
+                    "$request: $key has unspecified precision in $op in operator equation $i"
+                )
+            )
+        end
+    end
+    union!(used, quantities)
+    names = sort!([name for name in used if haskey(variables, name)])
+    eligible = filter(n -> variables[n].element_type === nothing, names)
+    isempty(eligible) && conflict(
+        "no variable read or written has unspecified precision; variables: " * join(names, ", ")
+    )
+    # A declared-binary64 key compared exactly supplies only its flag to the
+    # binary32 group (esm-spec §11.3.3 P8), so only quantities can conflict.
+    # A `join.on` key is matched while the program is built, in binary64; an
+    # `==`/`!=` key is compared in the fragment, which reads a scalar
+    # parameter in binary64.
+    params = Set(parameter_names(prog))
+    keys = String[]
+    for name in names
+        variables[name].element_type == "Float64" || continue
+        name in quantities && conflict(
+            "$name declares Float64, while $(first(eligible)) resolves to Float32. " *
+                "A fragment uses one working precision."
+        )
+        name in compared || continue
+        name in params || conflict(
+            "$name declares Float64 and is compared with `==`/`!=`, but a binary32 " *
+                "fragment compares a binary64 key exactly only when it is a scalar parameter"
+        )
+        push!(keys, name)
+    end
+    return Float32, keys
+end
+
+# The variable names `expr` reads as quantities: every reference except a
+# direct operand of `==` or `!=` (through any `index` chain, whose subscripts
+# are quantities), which `_visit_keys` reports as a key. A subexpression
+# shared by identity is walked once.
+function _quantity_var_names(expr, acc::Set{String}, seen = IdDict{OpExpr, Nothing}())
+    if expr isa VarExpr
+        push!(acc, expr.name)
+    elseif expr isa OpExpr && !haskey(seen, expr)
+        seen[expr] = nothing
+        expr.wrt === nothing || push!(acc, expr.wrt::String)
+        walk(e) = _quantity_var_names(e, acc, seen)
+        if expr.op == "==" || expr.op == "!="
+            for arg in expr.args
+                while arg isa OpExpr && arg.op == "index" && !isempty(arg.args)
+                    foreach(walk, @view arg.args[2:end])
+                    arg = arg.args[1]
+                end
+                arg isa VarExpr || walk(arg)
+            end
+        else
+            foreach_child(walk, expr)
+        end
+    end
+    return acc
+end
 
 """
-    operator_ir(prob; select = RhsSelection(), target = Whole(), outputs = :du)
-    operator_ir(prog::RhsProgram; target = Whole())
+    operator_ir(prob; select = RhsSelection(), target = Whole(), outputs = :du, unspecified_eltype = Float64)
+    operator_ir(prog::RhsProgram; target = Whole(), unspecified_eltype = Float64)
 
 Build the out-of-place tree-walk IR for a selected operator. Its state and
 forcing tensors are described by [`ir_layout`](@ref), [`parameter_names`](@ref)
 and [`forcing_slots`](@ref). With `outputs = KernelOutputs(spec)`, compile the
 named kernel against the Problem, using its `u` and `z` inputs.
+Set `unspecified_eltype = Float32` to build a binary32 fragment for a group
+whose variables all resolve to Float32 under esm-spec §11.3.3.
 """
 function operator_ir(
         prob::EsmProblem; select::RhsSelection = RhsSelection(),
-        target = Whole(), outputs = :du
+        target = Whole(), outputs = :du, unspecified_eltype::Type = Float64
     )
     if outputs isa KernelOutputs
         (select.writes === :all && select.terms === :all) || throw(ArgumentError("kernel specifications define their own selection"))
-        return _kernel_operator_ir(prob, outputs, target)
+        return _kernel_operator_ir(prob, outputs, target; unspecified_eltype)
     end
     outputs === :du || throw(ArgumentError("outputs must be :du or a KernelOutputs"))
     op = rhs_program(prob)
@@ -112,7 +224,7 @@ function operator_ir(
         )
         op = EarthSciAST.select(op; select.writes, select.terms)
     end
-    return operator_ir(op; target)
+    return operator_ir(op; target, unspecified_eltype)
 end
 
 function _operator_build(prog::RhsProgram)
@@ -125,19 +237,45 @@ function _operator_build(prog::RhsProgram)
     return f
 end
 
-operator_ir(prog::RhsProgram; target = Whole()) = _rhs_operator_ir(prog, target)
+operator_ir(prog::RhsProgram; target = Whole(), unspecified_eltype::Type = Float64) =
+    _rhs_operator_ir(prog, target; unspecified_eltype)
 
 # `slots` is the forcing signature of the IR. Tile forcing windows are
 # computed against it by name, so `ir.extra.windows[i]` is the window of
 # `ir.forcing[i]`: a kernel's IR passes its kernel set's signature, which the
 # kernel program reads by name.
 function _rhs_operator_ir(
-        prog::RhsProgram, target; shared_aux = Set{String}(), slots = forcing_slots(prog)
+        prog::RhsProgram, target; shared_aux = Set{String}(), slots = forcing_slots(prog),
+        unspecified_eltype::Type = Float64
     )
+    T, keys = _operator_eltype(prog, unspecified_eltype)
+    T === Float64 && return _rhs_operator_ir(prog, target, T, keys; shared_aux, slots)
+    # The native build computes in binary64. A binary32 operator reuses it
+    # only when the build evaluated none of the model's arithmetic on the
+    # host, since those results would be rounded once instead of per
+    # operation (esm-spec §11.3.1). A tile or lane build may be memoized from
+    # before this call, so the whole-domain build of the same equations is
+    # recorded for it too.
+    ir, sites = _recording_host_arithmetic() do
+        target isa Whole || _operator_build(prog)
+        _rhs_operator_ir(prog, target, T, keys; shared_aux, slots)
+    end
+    isempty(sites) || throw(
+        _range_error(
+            ERROR_CODES.FLOAT32_UNSUPPORTED,
+            "operator_ir(…; unspecified_eltype = Float32): the Julia build evaluates " *
+                join(sites, "; ") * " once in binary64, so a binary32 fragment would " *
+                "round each result once rather than per operation (esm-spec §11.3.1)"
+        )
+    )
+    return ir
+end
+
+function _rhs_operator_ir(prog::RhsProgram, target, T::DataType, keys::Vector{String}; shared_aux, slots)
     params = parameter_names(prog)
     slots = copy(slots)
     if target isa Whole
-        return OperatorIR(_operator_build(prog), prog.layout, prog.maps, target, nothing, params, slots)
+        return OperatorIR(_operator_build(prog), prog.layout, prog.maps, target, nothing, params, slots, nothing, T, keys)
     elseif target isa Tile
         if target.class === nothing
             tile = _restrict(prog, target.decomposition; target.owned, target.storage, form = :oop)
@@ -151,13 +289,13 @@ function _rhs_operator_ir(
             windows = target.class.windows[Tuple(tile.origin)]
         end
         info = (; tile.reach, windows, tile.coordinates)
-        return OperatorIR(tile.f!, tile.layout, tile.maps, target, info, params, slots)
+        return OperatorIR(tile.f!, tile.layout, tile.maps, target, info, params, slots, nothing, T, keys)
     elseif target isa Lanes
         lane = _lanes(prog, target.kind, target.sets, target.capacity; form = :oop, shared_aux)
         maps = _lane_operator_maps(lane, target.capacity)
         return OperatorIR(
             lane.f!, lane.layout, maps, target, (lane.gathers, _lane_state_index(prog, lane.layout)),
-            params, slots
+            params, slots, nothing, T, keys
         )
     end
     throw(ArgumentError("target must be Whole, Tile or Lanes"))
@@ -243,12 +381,15 @@ function forcing_reach(ir::OperatorIR, origin = nothing)
 end
 
 """
-    emit_fragment(ir; eltype = Float64, fold = :tree)
+    emit_fragment(ir; eltype = ir.working_eltype, fold = :tree)
 
 With Reactant loaded, create a host callable that emits a StableHLO fragment
 into the caller's trace. Call it on traced arguments `(u, aux, p, t, forcing)`;
 tile classes also take `origin` and lane targets take `cells`. If an output
-kernel reads a time step, append `dt`. See the compiled backend guide for layouts and precision.
+kernel reads a time step, append `dt`. The fragment uses the IR's working
+precision, including when `eltype` is supplied explicitly. Binary32 operations
+and reductions accumulate in expression order. See the compiled backend
+guide for layouts and precision.
 """
 function emit_fragment end
 

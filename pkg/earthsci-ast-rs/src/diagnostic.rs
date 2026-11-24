@@ -259,6 +259,8 @@ diagnostic_code_registry! {
     /// origin. The message names `/solver/time_span` (and the origin's pointer
     /// when the origin is at fault).
     SOLVER_TIME_SPAN_INVALID = "solver_time_span_invalid";
+    /// A relative tolerance below 2⁻²² for a Float32 state (esm-spec §11.3.2),
+    /// or for binary32 state storage chosen by an external consumer (§11.3.3 P7).
     TOLERANCE_BELOW_WORKING_PRECISION = "tolerance_below_working_precision";
     /// A timestamp handed to the §2.2.7 clock accessor `timestamp_to_seconds`
     /// that is not in the `solver.time_span` bound form
@@ -406,6 +408,10 @@ diagnostic_code_registry! {
     /// parameters have no per-variable `element_type`. Refused rather than
     /// evaluated in the mounting document's precision.
     ELEMENT_TYPE_UNCARRIED = "element_type_uncarried";
+    /// An external precision choice conflicts with the declarations (§11.3.3 P4).
+    PRECISION_CHOICE_CONFLICT = "precision_choice_conflict";
+    /// A variable without declared precision is used as a key (§11.3.3 P8).
+    KEY_PRECISION_UNSPECIFIED = "key_precision_unspecified";
     /// A `subsystem` ref pointing at a COUPLING library, which exports roles
     /// rather than a mountable system.
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY = "subsystem_ref_is_coupling_library";
@@ -892,6 +898,7 @@ mod error_code_tests {
             "join_side_ambiguous",
             "join_syms_unknown_symbol",
             "kernel_output_unresolved",
+            "key_precision_unspecified",
             "makearray_region_inverted",
             "metaparameter_name_conflict",
             "metaparameter_type_error",
@@ -928,6 +935,7 @@ mod error_code_tests {
             "operator_variable_missing",
             "operator_version_too_old",
             "parse_error",
+            "precision_choice_conflict",
             "ragged_values_not_gathered",
             "range_box_invalid",
             "range_global_locality",

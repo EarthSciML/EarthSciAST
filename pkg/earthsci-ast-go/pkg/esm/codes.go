@@ -351,8 +351,13 @@ const (
 	// a reaction system, whose species and parameters have no per-variable
 	// `element_type`.
 	CodeElementTypeUncarried = "element_type_uncarried"
+	// CodePrecisionChoiceConflict: an external precision choice conflicts with declarations (§11.3.3 P4).
+	CodePrecisionChoiceConflict = "precision_choice_conflict"
+	// CodeKeyPrecisionUnspecified: a variable with unspecified precision is used as a key (§11.3.3 P8).
+	CodeKeyPrecisionUnspecified = "key_precision_unspecified"
 	// CodeToleranceBelowWorkingPrecision: a relative tolerance below 2⁻²² for
-	// a Float32 state (esm-spec §11.3.2). Go does not integrate, so it never
+	// a Float32 state (esm-spec §11.3.2), or for binary32 state storage chosen
+	// by an external consumer (§11.3.3 P7). Go does not integrate, so it never
 	// raises it; the constant exists because the code table is cross-language
 	// uniform.
 	CodeToleranceBelowWorkingPrecision = "tolerance_below_working_precision"

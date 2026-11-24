@@ -95,7 +95,7 @@ use crate::compile_error::CompileError;
 
 use crate::precision::{Env, Precision, VarPrecisions};
 use crate::types::{
-    Equation, Expr, ExpressionNode, HasSubsystems, Model, TreeOrder, subsystem_tree,
+    Equation, Expr, ExpressionNode, HasSubsystems, Model, TreeOrder, component_tree, subsystem_tree,
 };
 
 /// The engine-internal operator that marks a precision boundary.
@@ -459,6 +459,151 @@ pub fn annotated(
         annotate_models_with(models, &subs, document)?;
     }
     Ok(Some(out))
+}
+
+/// An unspecified model variable in an identity comparison or equality join.
+pub(crate) struct KeySite {
+    pub path: String,
+    pub message: String,
+}
+
+pub(crate) fn unspecified_keys(file: &crate::EsmFile) -> Vec<KeySite> {
+    if !matches!(
+        crate::precision_source(file, None),
+        Ok(crate::PrecisionSource::Unspecified)
+    ) {
+        return Vec::new();
+    }
+    let mut declarations = HashMap::new();
+    let mut expressions = Vec::new();
+    for (name, model) in file.models.iter().flatten() {
+        let pointer = format!("/models/{}", name.replace('~', "~0").replace('/', "~1"));
+        for component in component_tree(model, name, &pointer, TreeOrder::Declared) {
+            for (name, var) in &component.component.variables {
+                declarations.insert(
+                    format!("{}.{name}", component.path),
+                    var.element_type.is_none(),
+                );
+            }
+            collect_equation_key_sites(
+                &mut expressions,
+                &component.path,
+                &component.pointer,
+                "equations",
+                &component.component.equations,
+            );
+            if let Some(init) = &component.component.initialization_equations {
+                collect_equation_key_sites(
+                    &mut expressions,
+                    &component.path,
+                    &component.pointer,
+                    "initialization_equations",
+                    init,
+                );
+            }
+        }
+    }
+    for (name, system) in file.reaction_systems.iter().flatten() {
+        let pointer = format!(
+            "/reaction_systems/{}",
+            name.replace('~', "~0").replace('/', "~1")
+        );
+        for component in component_tree(system, name, &pointer, TreeOrder::Declared) {
+            let system = component.component;
+            for name in system.species.keys().chain(system.parameters.keys()) {
+                declarations.insert(format!("{}.{name}", component.path), true);
+            }
+            for (i, reaction) in system.reactions.iter().enumerate() {
+                expressions.push((
+                    component.path.clone(),
+                    format!("{}/reactions/{i}/rate", component.pointer),
+                    &reaction.rate,
+                ));
+            }
+            if let Some(eq) = &system.constraint_equations {
+                collect_equation_key_sites(
+                    &mut expressions,
+                    &component.path,
+                    &component.pointer,
+                    "constraint_equations",
+                    eq,
+                );
+            }
+        }
+    }
+    let mut sites = Vec::new();
+    for (scope, path, expr) in expressions {
+        visit_keys(expr, &mut Vec::new(), &mut |key, op| {
+            let local = format!("{scope}.{key}");
+            let resolved = declarations
+                .get_key_value(&local)
+                .or_else(|| declarations.get_key_value(key));
+            if let Some((variable, true)) = resolved {
+                sites.push(KeySite {
+                    path: path.clone(),
+                    message: format!("{variable} has unspecified precision in {op} at {path}"),
+                });
+            }
+        });
+    }
+    sites
+}
+
+fn collect_equation_key_sites<'a>(
+    expressions: &mut Vec<(String, String, &'a Expr)>,
+    scope: &str,
+    pointer: &str,
+    block: &str,
+    equations: &'a [Equation],
+) {
+    for (i, eq) in equations.iter().enumerate() {
+        for (side, expr) in [("lhs", &eq.lhs), ("rhs", &eq.rhs)] {
+            expressions.push((
+                scope.to_owned(),
+                format!("{pointer}/{block}/{i}/{side}"),
+                expr,
+            ));
+        }
+    }
+}
+
+/// Visit the variables used directly as keys. An indexed read carries its
+/// array's identity. An arithmetic operand yields a value instead.
+fn visit_keys<'a>(expr: &'a Expr, bound: &mut Vec<&'a str>, visit: &mut impl FnMut(&str, &str)) {
+    let Expr::Operator(node) = expr else { return };
+    let outer = bound.len();
+    bound.extend(
+        node.ranges
+            .iter()
+            .flat_map(|ranges| ranges.keys().map(String::as_str)),
+    );
+    bound.extend(node.output_idx.iter().flatten().map(String::as_str));
+    bound.extend(node.int_var.as_deref());
+    if matches!(node.op.as_str(), "==" | "!=") {
+        for mut arg in &node.args {
+            while let Expr::Operator(index) = arg {
+                if !matches!(index.op.as_str(), "index" | MARKER_OP) {
+                    break;
+                }
+                let Some(array) = index.args.first() else {
+                    break;
+                };
+                arg = array;
+            }
+            if let Expr::Variable(name) = arg
+                && !bound.contains(&name.as_str())
+            {
+                visit(name, &node.op);
+            }
+        }
+    }
+    for clause in node.join.iter().flatten() {
+        for name in clause.on.iter().flatten() {
+            visit(name, "join.on");
+        }
+    }
+    node.for_each_child(&mut |child| visit_keys(child, bound, visit));
+    bound.truncate(outer);
 }
 
 /// Check a FLATTENED system's equations for `mixed_element_type` (esm-spec

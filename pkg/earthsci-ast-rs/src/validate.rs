@@ -309,6 +309,21 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
         }
     }
 
+    // esm-spec §11.3.3 P8: an unspecified variable used directly as an
+    // equality or join key cannot be evaluated in binary32.
+    let mut warnings = Vec::new();
+    if scope == ValidationScope::Full {
+        warnings.extend(
+            crate::precision_infer::unspecified_keys(esm_file)
+                .into_iter()
+                .map(|site| ValidationWarning {
+                    code: crate::diagnostic::codes::KEY_PRECISION_UNSPECIFIED.to_string(),
+                    path: site.path,
+                    message: site.message,
+                }),
+        );
+    }
+
     // An inline test's assertion targets, override keys and assertion ranks
     // (esm-spec §6.6.2, §6.6.3, §6.6.5).
     crate::inline_test_checks::validate_inline_tests(esm_file, &mut structural_errors);
@@ -336,7 +351,6 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
     // coupled-system reference check MUST see the expanded edges.
     crate::coupling::validate_imported_coupling(esm_file, &system_refs, &mut structural_errors);
 
-    let mut warnings = Vec::new();
     let floor = crate::precision::FLOAT32_RELTOL_FLOOR;
     if scope == ValidationScope::Full
         && has_float32_state(esm_file)

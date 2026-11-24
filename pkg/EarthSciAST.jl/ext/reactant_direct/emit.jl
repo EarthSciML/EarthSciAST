@@ -186,6 +186,8 @@ function _de_walk_node(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
         _de_is_cgather(nd) && return _de_cgather(
             ctx, nd, ch -> _de_walk(ctx, fr, ch), x -> _de_cached_term(fr, x)
         )
+        exact = _de_exact_compare(ctx, nd)
+        exact === nothing || return exact
         if (nd.op === :^ || nd.op === :pow) && length(nd.children) == 2 &&
                 nd.children[2].kind === _E._NK_LITERAL
             base = _de_walk(ctx, fr, nd.children[1])
