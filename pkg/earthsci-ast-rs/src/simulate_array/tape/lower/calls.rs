@@ -98,6 +98,30 @@ pub(super) struct FuncTable {
     /// Build-time payloads passed as [`ArgKind::Known`], by address (held, so
     /// the address is not reused).
     known_vals: FxHashMap<usize, Arc<Vec<f64>>>,
+    /// Each function's program text ([`fingerprint`]): two instances that
+    /// compile to the same program are one function.
+    by_program: FxHashMap<String, (u32, FuncResult)>,
+}
+
+/// The whole text of an assembled function program: its instructions, its
+/// tables, its state variables, its parameter count, its precision and its
+/// result. Two programs with the same text compute the same function of
+/// their arguments.
+fn fingerprint(prog: &TapeProgram) -> String {
+    format!(
+        "{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{}",
+        prog.instrs,
+        prog.tables,
+        prog.state_vars
+            .iter()
+            .map(|sv| (&sv.shape, &sv.origin))
+            .collect::<Vec<_>>(),
+        prog.params_len,
+        prog.precision,
+        prog.exports.iter().map(|(_, s)| *s).collect::<Vec<_>>(),
+        prog.n_const,
+        prog.n_segment
+    )
 }
 
 pub(super) type SharedFuncs = Rc<RefCell<FuncTable>>;
@@ -430,11 +454,18 @@ impl<'m> TapeBuilder<'m> {
                 let mut t = funcs.borrow_mut();
                 match built {
                     Ok(Built::Function(prog, res)) => {
-                        let id = tape_index(t.progs.len(), "functions")?;
-                        t.progs.push(*prog);
+                        let text = fingerprint(&prog);
                         t.held.push(Arc::clone(&inst));
-                        t.by_key.insert(key, Some((id, res.clone())));
-                        (id, res)
+                        if let Some(same) = t.by_program.get(&text).cloned() {
+                            t.by_key.insert(key, Some(same.clone()));
+                            same
+                        } else {
+                            let id = tape_index(t.progs.len(), "functions")?;
+                            t.progs.push(*prog);
+                            t.by_program.insert(text, (id, res.clone()));
+                            t.by_key.insert(key, Some((id, res.clone())));
+                            (id, res)
+                        }
                     }
                     Ok(Built::Value(v)) => {
                         // No instruction: the body is a literal, the time, or

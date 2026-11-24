@@ -3207,7 +3207,7 @@ pub(crate) struct SlabLayout {
 /// The tables a program's instructions index, and the slots they define:
 /// one type for the builder that grows them and the program that holds them,
 /// so a rollback names every table by construction ([`ProgramTables::mark`]).
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(crate) struct ProgramTables {
     pub slots: Vec<SlotDesc>,
     pub plans: Vec<GatherPlan>,
