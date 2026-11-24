@@ -992,6 +992,7 @@ pub(super) fn build(
     let empty = TileLowering {
         states: Vec::new(),
         observed: FxHashMap::default(),
+        names: Vec::new(),
     };
     let build_tape = |c: &ArrayCompiled| -> Result<TapeProgram, SimulateError> {
         let _env = compiled.precision.enter();

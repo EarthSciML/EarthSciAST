@@ -1255,6 +1255,10 @@ impl FaultTrack {
 pub(crate) struct TileLowering {
     pub(crate) states: Vec<Vec<TileAxisDom>>,
     pub(crate) observed: FxHashMap<String, TileObserved>,
+    /// The name a diagnostic gives each state, in `var_shapes` order, where
+    /// it is not the state's own: a called function's array argument is the
+    /// caller's array (`tape/lower/calls.rs`). Empty in a tile's own build.
+    pub(crate) names: Vec<String>,
 }
 
 /// An array observed of a tile build, materialized over its need: a slot
@@ -1282,7 +1286,7 @@ pub(crate) struct TilePiece {
 /// One axis of a range-restricted source: the global domain `lo..=hi` its
 /// reads are classified against, the period of a periodic axis, and the
 /// index-set name a diagnostic reports.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct TileAxisDom {
     pub(crate) lo: i64,
     pub(crate) hi: i64,
@@ -1794,8 +1798,11 @@ impl<'m> TapeBuilder<'m> {
         match lv {
             LV::State(ix) => {
                 let axes = tile.states.get(*ix as usize)?;
-                (!axes.is_empty())
-                    .then(|| (self.state_vars[*ix as usize].name.clone(), axes.clone()))
+                let name = tile
+                    .names
+                    .get(*ix as usize)
+                    .unwrap_or(&self.state_vars[*ix as usize].name);
+                (!axes.is_empty()).then(|| (name.clone(), axes.clone()))
             }
             LV::Arr(slot) => {
                 let axes = self.tile_slots.get(slot)?;

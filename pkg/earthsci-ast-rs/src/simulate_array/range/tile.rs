@@ -11,7 +11,7 @@
 //! flattened.
 
 use super::forcing::{ForcingSet, ForcingSlot, RhsError};
-use super::walk::{AxisSpec, Read, Refusal, Scope, VarInfo, Walker};
+use super::walk::{AxisSpec, Read, Refusal, RestrictedDef, Scope, VarInfo, Walker};
 use super::{
     Blocks, Decomposition, InputPrecisions, ProgramModel, RhsProgram, RhsWorkspace, TileBox,
     TileInput, TileLayout, WsExec, check_forcing, check_lengths, check_owner, index_set_sizes,
@@ -438,6 +438,31 @@ pub(super) struct ClippedRules {
     pub(super) rhs: Vec<RhsRule>,
     pub(super) observed: Vec<AlgebraicRule>,
     pub(super) need: FxHashMap<String, TileObserved>,
+    /// The definitions restricted to the tile that the rewritten rules'
+    /// references name, by name.
+    pub(super) restricted: IndexMap<String, RestrictedDef>,
+}
+
+/// Keep the definitions `w` restricted, each name once.
+fn keep_restricted(
+    w: &mut Walker<'_>,
+    into: &mut IndexMap<String, RestrictedDef>,
+) -> Result<(), SimulateError> {
+    for d in w.restricted.drain(..) {
+        match into.get(&d.name) {
+            Some(prev) if prev.body != d.body => {
+                return Err(refused(format!(
+                    "tile restriction: two restrictions of operator `{}` hash alike",
+                    d.name.split('\0').next().unwrap_or("")
+                )));
+            }
+            Some(_) => {}
+            None => {
+                into.insert(d.name.clone(), d);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Rewrite `compiled`'s rules for a tile whose derivative of each written
@@ -449,6 +474,7 @@ pub(super) fn clip_rules(
 ) -> Result<ClippedRules, SimulateError> {
     let mut reads: AxisReads = HashMap::new();
     let mut needed: HashSet<String> = HashSet::new();
+    let mut restricted: IndexMap<String, RestrictedDef> = IndexMap::new();
     let mut rhs = Vec::new();
     for rule in &compiled.rhs_rules {
         match rule {
@@ -505,13 +531,14 @@ pub(super) fn clip_rules(
                     sets,
                     contracted: contract_names.clone(),
                 };
-                let mut w = Walker::new(vars, rule_name);
+                let mut w = Walker::new(vars, &compiled.operators, rule_name);
                 let body = w.expr(body, &sc).map_err(refusal_error)?;
                 let filter = match filter {
                     Some(f) => Some(Box::new(w.expr(f, &sc).map_err(refusal_error)?)),
                     None => None,
                 };
                 collect_reads(&w.reads, &mut reads, vars);
+                keep_restricted(&mut w, &mut restricted)?;
                 needed.extend(crate::expression::free_variables(&body));
                 if let Some(f) = &filter {
                     needed.extend(crate::expression::free_variables(f));
@@ -590,9 +617,10 @@ pub(super) fn clip_rules(
                             sets: sets.clone(),
                             contracted: Vec::new(),
                         };
-                        let mut w = Walker::new(vars, var.clone());
+                        let mut w = Walker::new(vars, &compiled.operators, var.clone());
                         let b = w.expr(body, &sc).map_err(refusal_error)?;
                         collect_reads(&w.reads, &mut reads, vars);
+                        keep_restricted(&mut w, &mut restricted)?;
                         needed.extend(crate::expression::free_variables(&b));
                         pieces.push(TilePiece {
                             ranges,
@@ -652,6 +680,7 @@ pub(super) fn clip_rules(
         rhs,
         observed: kept.into_iter().flatten().collect(),
         need,
+        restricted,
     })
 }
 
@@ -772,9 +801,22 @@ pub(super) fn build(
     let lowering = TileLowering {
         states: doms,
         observed: clipped.need,
+        names: Vec::new(),
     };
     let held: HashSet<String> = prog.inner.aux.iter().cloned().collect();
-    let shell = shell(compiled, var_shapes, clipped.rhs, clipped.observed, held);
+    let mut shell = shell(compiled, var_shapes, clipped.rhs, clipped.observed, held);
+    if !clipped.restricted.is_empty() {
+        let defs = clipped
+            .restricted
+            .into_values()
+            .map(|d| (d.name, d.params, d.body));
+        shell.operators = Arc::new(
+            compiled
+                .operators
+                .with_definitions(defs)
+                .map_err(|why| refused(format!("tile restriction: {why}")))?,
+        );
+    }
     let tape = {
         let _env = compiled.precision.enter();
         shell
