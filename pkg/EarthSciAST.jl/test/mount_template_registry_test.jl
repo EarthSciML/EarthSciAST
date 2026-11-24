@@ -51,7 +51,8 @@ end
         reg = file.component_templates["models.Host"]
         # One definition per leaf template, in the leaf's own names.
         @test sort!(collect(keys(reg))) == ["Host.rate", "Sub1.rate", "loss", "pull"]
-        @test JSON3.write(reg["Sub1.rate"]["body"]) == JSON3.write(Dict("op" => "*", "args" => ["k", "x"]))
+        @test JSON3.read(JSON3.write(reg["Sub1.rate"]["body"]), Dict{String, Any}) ==
+            Dict{String, Any}("op" => "*", "args" => ["k", "x"])
         # Each mount's references read its own `k`: Expand substitutes the body
         # into the subsystem, and the native run agrees with the expanded run.
         n = _mtr_du(file)

@@ -16,6 +16,7 @@ use super::tile::refusal_error;
 use super::walk::{AxisSpec, Scope, VarInfo, Walker};
 use super::{Decomposition, HaloReport, RhsProgram, range_error, var_infos};
 use crate::diagnostic::codes;
+use crate::operator_refs::Instances;
 use crate::simulate::SimulateError;
 use crate::simulate_array::{AlgebraicRule, RhsRule};
 use crate::types::Expr;
@@ -54,6 +55,7 @@ fn offset(g: i64, c: i64, spec: &AxisSpec) -> i64 {
 /// output axis `d` along the cut set `sets[d]`.
 #[allow(clippy::too_many_arguments)]
 fn local_reach(
+    ops: &Instances,
     vars: &HashMap<String, VarInfo>,
     rule: &str,
     syms: &[String],
@@ -77,7 +79,7 @@ fn local_reach(
                 sets: sets.to_vec(),
                 contracted: contracted.to_vec(),
             };
-            let mut w = Walker::new(vars, rule.to_string());
+            let mut w = Walker::new(vars, ops, rule.to_string());
             for b in bodies {
                 w.expr(b, &sc).map_err(refusal_error)?;
             }
@@ -110,11 +112,12 @@ fn local_reach(
 /// `states` holds the walker's view of the states and the state-dependent
 /// observeds only.
 fn wholesale_reach(
+    ops: &Instances,
     states: &HashMap<String, VarInfo>,
     var: &str,
     body: &Expr,
 ) -> Result<(), SimulateError> {
-    let mut w = Walker::new(states, var.to_string());
+    let mut w = Walker::new(states, ops, var.to_string());
     w.expr(body, &Scope::default()).map_err(refusal_error)?;
     for r in &w.reads {
         if let Some(AxisSpec::Cut { set, .. }) = states[&r.var].axes.get(r.axis) {
@@ -159,6 +162,7 @@ pub(super) fn halo(prog: &RhsProgram, dec: &Decomposition) -> Result<HaloReport,
             bodies.push(f);
         }
         let local = local_reach(
+            &compiled.operators,
             &vars,
             &format!("D({var_name})"),
             output_idx_names,
@@ -237,7 +241,7 @@ pub(super) fn halo(prog: &RhsProgram, dec: &Decomposition) -> Result<HaloReport,
             }
             AlgebraicRule::Scalar { var, body, .. } => {
                 if read.contains(var) && dependent.contains(var) {
-                    wholesale_reach(&dependent_vars, var, body)?;
+                    wholesale_reach(&compiled.operators, &dependent_vars, var, body)?;
                 }
                 continue;
             }
@@ -257,6 +261,7 @@ pub(super) fn halo(prog: &RhsProgram, dec: &Decomposition) -> Result<HaloReport,
             continue;
         }
         let local = local_reach(
+            &compiled.operators,
             &vars,
             var,
             output_idx_names,

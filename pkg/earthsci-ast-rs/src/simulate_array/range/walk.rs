@@ -16,14 +16,30 @@
 //!   region value over its own ranges placed by shape, so the ranges are
 //!   clipped by the same amounts.
 //! * `index(faq(…), subs…)` likewise clips the `faq`'s output ranges.
+//! * An operator reference (esm-spec §9.6.4) is read through, never expanded:
+//!   the walk enters the body of the instance it names with each parameter
+//!   standing for what the reference binds to it, as the tape's call does
+//!   (`tape/lower/calls.rs`). A parameter bound to a state or observed is that
+//!   array, passed whole and read in place, so a read the body makes of the
+//!   parameter is a read of the array at the same cells, recorded against it;
+//!   a binding that reads a loop symbol is read where the body reads the
+//!   parameter, in the frame it was written in; any other binding is a value
+//!   the caller computes, walked at the call site. The halo is therefore the
+//!   one the expansion has. When restricting the body to the box changes it,
+//!   the reference is pointed at a restricted definition of its own
+//!   ([`RestrictedDef`]): the restricted body, compiled as a function like any
+//!   other instance; the caller holds the call, not the body.
 //!
 //! What cannot be restricted exactly is refused, never approximated.
 
 use super::super::vectorized::{
     AxisIndex, AxisRole, VecBox, classify_axis_role, region_value_axes,
 };
+use crate::binders::{Binders, free_names};
+use crate::operator_refs::{APPLY_OP, Instances, reference_node};
 use crate::types::{Expr, ExpressionNode, RangeSpec, RegionBound};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// One axis of a state or observed under a decomposition.
@@ -234,6 +250,19 @@ fn contracted_of(node: &ExpressionNode) -> Vec<String> {
     c
 }
 
+/// A 128-bit hash of `text`: the name of a restricted definition is its
+/// definition's name and the hash of its body, so equal restrictions share
+/// one definition.
+fn text_hash(text: &str) -> u128 {
+    use std::hash::{Hash, Hasher};
+    let mut a = std::collections::hash_map::DefaultHasher::new();
+    let mut b = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut a);
+    0x5bd1_e995u32.hash(&mut b);
+    text.hash(&mut b);
+    (u128::from(a.finish()) << 64) | u128::from(b.finish())
+}
+
 /// A makearray of literal zeros over `bx`: what a gather of a region-free box
 /// reads, as one constant the lowering builds without reading anything.
 fn zero_makearray(bx: &[(i64, i64)]) -> Expr {
@@ -250,20 +279,135 @@ fn zero_makearray(bx: &[(i64, i64)]) -> Expr {
     Expr::operator(node)
 }
 
+/// What a definition parameter stands for inside a body the walk entered.
+#[derive(Clone, Debug)]
+enum Bound {
+    /// A state or observed of the program, passed whole and read in place:
+    /// the body's reads of the parameter are reads of it.
+    Array(String),
+    /// A binding that reads a loop symbol (of the call's box or of the body):
+    /// read where the body reads the parameter, its names resolved in the
+    /// frame it was written in.
+    Inline(Expr, Rc<Frame>),
+    /// A value the caller computes, walked at the call site: reading it in
+    /// the body reads nothing more. `true` when it reads a decomposed array.
+    Value(bool),
+}
+
+/// The parameters in force: empty at a rule (the root frame), else those of
+/// the body being walked. A body reads only its parameters and its own loop
+/// symbols (esm-spec §9.6.4 rule 7), so any other name it reads is none of
+/// the program's arrays.
+#[derive(Debug, Default)]
+struct Frame {
+    params: HashMap<String, Bound>,
+    in_body: bool,
+}
+
+/// What a variable leaf names where the walk reads it.
+enum Leaf {
+    /// A loop symbol in force, or a name that is none of the program's arrays.
+    Plain,
+    /// The program's state or observed of that name.
+    Array(String),
+    /// A parameter bound to a binding read at its use.
+    Inline(Expr, Rc<Frame>),
+    /// A parameter bound to a value the caller computes from a decomposed
+    /// array.
+    CutValue,
+}
+
+/// A definition restricted to a box: the reference the walk rewrote names it
+/// in place of the definition it restricts. Its parameters are the
+/// definition's, less those the instance spelled into its body; its body is
+/// the instance body restricted, already through every build pass.
+#[derive(Clone, Debug)]
+pub(crate) struct RestrictedDef {
+    pub(crate) name: String,
+    pub(crate) params: Vec<String>,
+    pub(crate) body: Expr,
+}
+
+/// Where a reference sits, which decides how its body is read.
+#[derive(Clone, Copy)]
+enum Ctx<'e> {
+    /// An ordinary operand, over the box.
+    Plain,
+    /// The base of an `index` at these subscripts.
+    Indexed(&'e [Expr]),
+    /// A makearray region value, the region clipped from `ro` to `rc`, its
+    /// axes along `sets`.
+    Region {
+        ro: &'e [(i64, i64)],
+        rc: &'e [(i64, i64)],
+        sets: &'e [Option<String>],
+    },
+}
+
+/// How deep references may nest before the walk gives up (a definition that
+/// reaches itself is refused by the build before this matters).
+const MAX_REFERENCE_DEPTH: usize = 64;
+
 pub(crate) struct Walker<'a> {
     pub(crate) vars: &'a HashMap<String, VarInfo>,
     /// The rule being walked, as a diagnostic names it.
     pub(crate) rule: String,
     pub(crate) reads: Vec<Read>,
+    /// The instances the rule's references name.
+    ops: &'a Instances,
+    frame: Rc<Frame>,
+    depth: usize,
+    /// The restricted definitions the rewritten rule's references name.
+    pub(crate) restricted: Vec<RestrictedDef>,
 }
 
 impl<'a> Walker<'a> {
-    pub(crate) fn new(vars: &'a HashMap<String, VarInfo>, rule: impl Into<String>) -> Self {
+    pub(crate) fn new(
+        vars: &'a HashMap<String, VarInfo>,
+        ops: &'a Instances,
+        rule: impl Into<String>,
+    ) -> Self {
         Walker {
             vars,
             rule: rule.into(),
             reads: Vec::new(),
+            ops,
+            frame: Rc::new(Frame::default()),
+            depth: 0,
+            restricted: Vec::new(),
         }
+    }
+
+    /// What the variable leaf `v` names over `sc`, in the current frame.
+    fn leaf(&self, v: &str, sc: &Scope) -> Leaf {
+        if sc.syms.iter().any(|s| s == v) || sc.contracted.iter().any(|s| s == v) {
+            return Leaf::Plain;
+        }
+        match self.frame.params.get(v) {
+            Some(Bound::Array(root)) => Leaf::Array(root.clone()),
+            Some(Bound::Inline(e, fr)) => Leaf::Inline(e.clone(), Rc::clone(fr)),
+            Some(Bound::Value(true)) => Leaf::CutValue,
+            Some(Bound::Value(false)) => Leaf::Plain,
+            None if self.frame.in_body => Leaf::Plain,
+            None if self.vars.contains_key(v) => Leaf::Array(v.to_string()),
+            None => Leaf::Plain,
+        }
+    }
+
+    /// Walk `e` over `sc` with `frame` in force (a binding read at its use).
+    /// The walk records its reads; the rewritten binding is not kept, so a
+    /// binding the box would rewrite is refused.
+    fn walk_in(&mut self, frame: Rc<Frame>, e: &Expr, sc: &Scope) -> WResult<()> {
+        let saved = std::mem::replace(&mut self.frame, frame);
+        let r = self.expr(e, sc);
+        self.frame = saved;
+        if r? != *e {
+            return self.refuse(
+                "passes an operator reference a binding that reads a loop symbol and that the \
+                 tile's box would rewrite",
+            );
+        }
+        Ok(())
     }
 
     fn refuse<T>(&self, what: impl std::fmt::Display) -> WResult<T> {
@@ -289,27 +433,30 @@ impl<'a> Walker<'a> {
     pub(crate) fn expr(&mut self, e: &Expr, sc: &Scope) -> WResult<Expr> {
         match e {
             Expr::Number(_) | Expr::Integer(_) => Ok(e.clone()),
-            Expr::Variable(v) => {
-                if sc.syms.contains(v) || sc.contracted.contains(v) {
-                    return Ok(e.clone());
+            Expr::Variable(v) => match self.leaf(v, sc) {
+                Leaf::Plain | Leaf::CutValue => Ok(e.clone()),
+                Leaf::Inline(b, fr) => {
+                    self.walk_in(fr, &b, sc)?;
+                    Ok(e.clone())
                 }
-                if let Some(info) = self.vars.get(v) {
+                Leaf::Array(root) => {
+                    let info = &self.vars[&root];
                     if info.is_cut() {
                         return self.refuse(format_args!(
-                            "reads the decomposed array `{v}` whole, not through a subscript"
+                            "reads the decomposed array `{root}` whole, not through a subscript"
                         ));
                     }
                     for (axis, &(lo, hi)) in info.extent.iter().enumerate() {
                         self.reads.push(Read {
-                            var: v.clone(),
+                            var: root.clone(),
                             axis,
                             lo,
                             hi,
                         });
                     }
+                    Ok(e.clone())
                 }
-                Ok(e.clone())
-            }
+            },
             Expr::Operator(node) => self.op(node, sc),
         }
     }
@@ -317,6 +464,7 @@ impl<'a> Walker<'a> {
     fn op(&mut self, node: &Arc<ExpressionNode>, sc: &Scope) -> WResult<Expr> {
         match node.op.as_str() {
             "index" if !node.args.is_empty() => self.index(node, sc),
+            APPLY_OP => self.reference(node, Ctx::Plain, sc),
             "makearray" => {
                 let regions = node
                     .regions
@@ -403,91 +551,256 @@ impl<'a> Walker<'a> {
             n.args = std::iter::once(base).chain(subs).collect();
             Expr::operator(n)
         };
-        match base {
-            Expr::Variable(v) if self.vars.contains_key(v) => {
-                let info = &self.vars[v];
-                if info.axes.len() == subs.len() {
-                    for (d, s) in subs.iter().enumerate() {
-                        let runs = match &info.axes[d] {
-                            AxisSpec::Whole { .. } => vec![info.extent[d]],
-                            AxisSpec::Cut { cell, set, .. } => {
-                                if mentions_any(s, &sc.contracted) {
-                                    return self.global(format_args!("contracts `{v}`"), set);
-                                }
-                                match sc.role(s) {
-                                    Some(AxisRole::Map { out_axis, ax }) => {
-                                        if let Some(other) = &sc.sets[out_axis]
-                                            && other != cell
-                                        {
-                                            return self.refuse(format_args!(
-                                                "reads `{v}` along `{set}` at a subscript that runs \
-                                                 along `{other}`"
-                                            ));
-                                        }
-                                        sc.image_runs(out_axis, &ax)
-                                    }
-                                    Some(AxisRole::Const(g)) => vec![(g, g)],
-                                    None => {
-                                        return self.global(
-                                            format_args!(
-                                                "reads `{v}` at a data-dependent subscript"
-                                            ),
-                                            set,
-                                        );
-                                    }
-                                }
-                            }
-                        };
-                        for (lo, hi) in runs {
-                            self.reads.push(Read {
-                                var: v.clone(),
-                                axis: d,
-                                lo,
-                                hi,
-                            });
-                        }
-                    }
-                } else if info.is_cut() {
+        if let Expr::Variable(v) = base {
+            match self.leaf(v, sc) {
+                Leaf::Array(root) => {
+                    self.index_array(&root, subs, sc)?;
+                    return Ok(rebuilt(base.clone(), new_subs));
+                }
+                Leaf::Inline(b, fr) => {
+                    self.walk_in(fr, &b, sc)?;
+                    return Ok(rebuilt(base.clone(), new_subs));
+                }
+                // The call computes the value over its own box, so a read of
+                // it at other cells is not a read of the array it came from.
+                Leaf::CutValue => {
                     return self.refuse(format_args!(
-                        "reads `{v}` with {} subscripts for its {} axes",
-                        subs.len(),
-                        info.axes.len()
+                        "subscripts the operator parameter `{v}`, bound to a value computed \
+                         from a decomposed array"
                     ));
                 }
-                Ok(rebuilt(base.clone(), new_subs))
+                Leaf::Plain => {}
             }
-            Expr::Operator(inner) if inner.op == "makearray" => {
-                let (bx, sets) = self.image_box(subs, sc, "a makearray")?;
-                let m = self.makearray(inner, &bx, &sets, sc)?;
-                Ok(rebuilt(m, new_subs))
+        }
+        if let Expr::Operator(inner) = base {
+            if inner.op == APPLY_OP {
+                let r = self.reference(inner, Ctx::Indexed(subs), sc)?;
+                return Ok(rebuilt(r, new_subs));
             }
-            Expr::Operator(inner)
-                if (inner.op == "faq")
-                    && inner.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
-            {
-                let (bx, sets) = self.image_box(subs, sc, "an array-valued faq")?;
-                let out_idx = inner.output_idx.clone().unwrap_or_default();
-                let Some(ranges) = faq_ranges(inner, &out_idx) else {
-                    return self.refuse("holds a faq whose output ranges do not resolve");
-                };
-                if ranges.len() != bx.len() {
-                    return self.refuse("subscripts a faq with the wrong number of indices");
+            if let Some(b) = self.indexed_base(inner, subs, sc)? {
+                return Ok(rebuilt(b, new_subs));
+            }
+        }
+        let b = self.expr(base, sc)?;
+        Ok(rebuilt(b, new_subs))
+    }
+
+    /// Record the reads of `index(v, subs…)` over `sc`, `v` the program's
+    /// state or observed of that name.
+    fn index_array(&mut self, v: &str, subs: &[Expr], sc: &Scope) -> WResult<()> {
+        let info = &self.vars[v];
+        if info.axes.len() != subs.len() {
+            if info.is_cut() {
+                return self.refuse(format_args!(
+                    "reads `{v}` with {} subscripts for its {} axes",
+                    subs.len(),
+                    info.axes.len()
+                ));
+            }
+            return Ok(());
+        }
+        for (d, s) in subs.iter().enumerate() {
+            let runs = match &info.axes[d] {
+                AxisSpec::Whole { .. } => vec![info.extent[d]],
+                AxisSpec::Cut { cell, set, .. } => {
+                    if mentions_any(s, &sc.contracted) {
+                        return self.global(format_args!("contracts `{v}`"), set);
+                    }
+                    match sc.role(s) {
+                        Some(AxisRole::Map { out_axis, ax }) => {
+                            if let Some(other) = &sc.sets[out_axis]
+                                && other != cell
+                            {
+                                return self.refuse(format_args!(
+                                    "reads `{v}` along `{set}` at a subscript that runs \
+                                     along `{other}`"
+                                ));
+                            }
+                            sc.image_runs(out_axis, &ax)
+                        }
+                        Some(AxisRole::Const(g)) => vec![(g, g)],
+                        None => {
+                            return self.global(
+                                format_args!("reads `{v}` at a data-dependent subscript"),
+                                set,
+                            );
+                        }
+                    }
                 }
-                let clipped: Vec<(i64, i64)> = ranges
-                    .iter()
-                    .zip(&bx)
-                    .map(|(&(lo, hi), &(a, b))| (lo.max(a), hi.min(b)))
-                    .collect();
-                if clipped.iter().any(|(lo, hi)| lo > hi) {
-                    return Ok(rebuilt(zero_makearray(&bx), new_subs));
+            };
+            for (lo, hi) in runs {
+                self.reads.push(Read {
+                    var: v.to_string(),
+                    axis: d,
+                    lo,
+                    hi,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// `index(base, subs…)` of a makearray or an array-valued `faq` over
+    /// `sc`: the base restricted to the image of the box. `None` for any
+    /// other base.
+    fn indexed_base(
+        &mut self,
+        inner: &Arc<ExpressionNode>,
+        subs: &[Expr],
+        sc: &Scope,
+    ) -> WResult<Option<Expr>> {
+        if inner.op == "makearray" {
+            let (bx, sets) = self.image_box(subs, sc, "a makearray")?;
+            return self.makearray(inner, &bx, &sets, sc).map(Some);
+        }
+        if inner.op != "faq" || inner.output_idx.as_ref().is_none_or(|o| o.is_empty()) {
+            return Ok(None);
+        }
+        let (bx, sets) = self.image_box(subs, sc, "an array-valued faq")?;
+        let out_idx = inner.output_idx.clone().unwrap_or_default();
+        let Some(ranges) = faq_ranges(inner, &out_idx) else {
+            return self.refuse("holds a faq whose output ranges do not resolve");
+        };
+        if ranges.len() != bx.len() {
+            return self.refuse("subscripts a faq with the wrong number of indices");
+        }
+        let clipped: Vec<(i64, i64)> = ranges
+            .iter()
+            .zip(&bx)
+            .map(|(&(lo, hi), &(a, b))| (lo.max(a), hi.min(b)))
+            .collect();
+        if clipped.iter().any(|(lo, hi)| lo > hi) {
+            return Ok(Some(zero_makearray(&bx)));
+        }
+        self.faq(inner, &clipped, &sets, sc).map(Some)
+    }
+
+    /// The operator reference `node` over `sc`, read through the body of the
+    /// instance it names, in the position `ctx`. The reference is kept; when
+    /// the box restricts the body, it is pointed at a [`RestrictedDef`]
+    /// holding the restricted body.
+    fn reference(&mut self, node: &Arc<ExpressionNode>, ctx: Ctx<'_>, sc: &Scope) -> WResult<Expr> {
+        // A call in a region value is lowered over the region's box: its
+        // bindings are read there.
+        let region_sc;
+        let bsc = match ctx {
+            Ctx::Region { rc, sets, .. } => {
+                region_sc = self.region_scope(rc, sets, sc)?;
+                &region_sc
+            }
+            _ => sc,
+        };
+        let name = node.name.as_deref().unwrap_or("");
+        let ops = self.ops;
+        if self.depth >= MAX_REFERENCE_DEPTH {
+            return self.refuse(format_args!(
+                "nests operator references more than {MAX_REFERENCE_DEPTH} deep at `{name}`"
+            ));
+        }
+        let inst = match ops.instance_of_node(node) {
+            Ok(i) => i,
+            Err(e) => return self.refuse(format_args!("holds an operator reference: {e}")),
+        };
+        let Some(r) = reference_node(node) else {
+            return self.refuse("holds an operator reference without a name");
+        };
+        // The loop symbols the expansion binds around a binding: those the
+        // instance body binds and those of the bodies it reaches.
+        let mut binders: HashSet<String> = inst.binders().clone();
+        binders.extend(
+            ops.registry()
+                .captured_symbols(&inst.definition.name)
+                .iter()
+                .cloned(),
+        );
+        let reads_loop = |e: &Expr| {
+            free_names(e, Binders::SCOPE)
+                .iter()
+                .any(|n| bsc.syms.contains(n) || bsc.contracted.contains(n) || binders.contains(n))
+        };
+        let mut frame = Frame {
+            params: HashMap::new(),
+            in_body: true,
+        };
+        let mut bindings = node.bindings.clone().unwrap_or_default();
+        let mut params = Vec::new();
+        for p in &inst.definition.params {
+            // An instance parameter is spelled into the instance body.
+            if inst.instance_params.contains(p) {
+                continue;
+            }
+            params.push(p.clone());
+            let Some(b) = r.binding(p) else { continue };
+            let leaf = match b {
+                Expr::Variable(n) => Some(self.leaf(n, bsc)),
+                _ => None,
+            };
+            let bound = match leaf {
+                Some(Leaf::Array(root)) => Bound::Array(root),
+                Some(Leaf::Inline(x, fr)) => Bound::Inline(x, fr),
+                _ if reads_loop(b) => Bound::Inline(b.clone(), Rc::clone(&self.frame)),
+                _ => {
+                    let first = self.reads.len();
+                    let nb = self.expr(b, bsc)?;
+                    if nb != *b {
+                        bindings.insert(p.clone(), nb);
+                    }
+                    let cut = self.reads[first..]
+                        .iter()
+                        .any(|r| self.vars[&r.var].axes[r.axis].cut_cell().is_some());
+                    Bound::Value(cut)
                 }
-                let f = self.faq(inner, &clipped, &sets, sc)?;
-                Ok(rebuilt(f, new_subs))
+            };
+            frame.params.insert(p.clone(), bound);
+        }
+        let saved = std::mem::replace(&mut self.frame, Rc::new(frame));
+        self.depth += 1;
+        let walked = self.body_root(&inst.body, ctx, sc);
+        self.depth -= 1;
+        self.frame = saved;
+        let body = walked?;
+        let same_bindings = node
+            .bindings
+            .as_ref()
+            .map_or(bindings.is_empty(), |b| *b == bindings);
+        if body == inst.body && same_bindings {
+            return Ok(Expr::Operator(Arc::clone(node)));
+        }
+        let mut n = ExpressionNode::clone(node);
+        if body != inst.body {
+            let text = serde_json::to_string(&body).unwrap_or_default();
+            let restricted = format!("{}\0tile\0{:032x}", inst.definition.name, text_hash(&text));
+            self.restricted.push(RestrictedDef {
+                name: restricted.clone(),
+                params,
+                body,
+            });
+            n.name = Some(restricted);
+        }
+        if !same_bindings {
+            n.bindings = Some(bindings);
+        }
+        Ok(Expr::operator(n))
+    }
+
+    /// The body `e` of an instance the walk entered, in the position `ctx`
+    /// of its reference: read as the expansion reads that position, so a
+    /// makearray or `faq` there is restricted as it would be in place.
+    fn body_root(&mut self, e: &Expr, ctx: Ctx<'_>, sc: &Scope) -> WResult<Expr> {
+        match ctx {
+            Ctx::Plain => self.expr(e, sc),
+            Ctx::Indexed(subs) => {
+                if let Expr::Operator(node) = e {
+                    if node.op == APPLY_OP {
+                        return self.reference(node, ctx, sc);
+                    }
+                    if let Some(b) = self.indexed_base(node, subs, sc)? {
+                        return Ok(b);
+                    }
+                }
+                self.expr(e, sc)
             }
-            other => {
-                let b = self.expr(other, sc)?;
-                Ok(rebuilt(b, new_subs))
-            }
+            Ctx::Region { ro, rc, sets } => self.region_value(e, ro, rc, sets, sc),
         }
     }
 
@@ -619,6 +932,11 @@ impl<'a> Walker<'a> {
                 }
                 self.faq(node, &ranges, &fsets, sc)
             }
+            // A call is lowered over the region's box, and its body is the
+            // region value the expansion holds there.
+            Expr::Operator(node) if node.op == APPLY_OP => {
+                self.reference(node, Ctx::Region { ro, rc, sets }, sc)
+            }
             Expr::Operator(node)
                 if node.op != "index" && node.op != "faq" && node.op != "makearray" =>
             {
@@ -637,19 +955,29 @@ impl<'a> Walker<'a> {
                 }
             }
             _ => {
-                // The box's symbols rebound to the region, as the lowering's
-                // region box rebinds them.
-                if sc.syms.len() < rc.len() {
-                    return self.refuse("holds a makearray whose rank exceeds its box");
-                }
-                let mut inner = sc.clone();
-                for d in 0..rc.len() {
-                    inner.lo[d] = rc[d].0;
-                    inner.hi[d] = rc[d].1;
-                    inner.sets[d] = sets[d].clone().or_else(|| sc.sets[d].clone());
-                }
+                let inner = self.region_scope(rc, sets, sc)?;
                 self.expr(v, &inner)
             }
         }
+    }
+
+    /// `sc` with the box's symbols rebound to the region `rc`, as the
+    /// lowering's region box rebinds them.
+    fn region_scope(
+        &self,
+        rc: &[(i64, i64)],
+        sets: &[Option<String>],
+        sc: &Scope,
+    ) -> WResult<Scope> {
+        if sc.syms.len() < rc.len() {
+            return self.refuse("holds a makearray whose rank exceeds its box");
+        }
+        let mut inner = sc.clone();
+        for d in 0..rc.len() {
+            inner.lo[d] = rc[d].0;
+            inner.hi[d] = rc[d].1;
+            inner.sets[d] = sets[d].clone().or_else(|| sc.sets[d].clone());
+        }
+        Ok(inner)
     }
 }

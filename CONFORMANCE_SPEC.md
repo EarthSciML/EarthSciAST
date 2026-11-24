@@ -6140,7 +6140,7 @@ rewrite-only ports with no simulator and no inline-test runner, and are
 
 esm-spec §4.2 ("The derivative axis") fixes the derivative axis to the
 **literal** name `t`: a `D` whose `wrt` is `"t"`, or absent, is the structural
-time derivative. *(Draft 2.4.0.)* So is a `D` whose `wrt` names the document's
+time derivative. *(Since 2.4.0.)* So is a `D` whose `wrt` names the document's
 own `domain.independent_variable` (when that is declared and is not `"t"`): a
 loader reads it at the wire boundary as the same node with `wrt: "t"`, so every
 later layer still reads the literal rule, and an emitted document writes
@@ -7949,7 +7949,7 @@ a definition import reaches it.
 `pkg/earthsci-ast-ts/src/source-documents.test.ts` (TypeScript) and
 `pkg/earthsci-ast-go/pkg/esm/source_documents_test.go` (Go).
 
-### 5.62 Core Names Are Reserved (normative, draft 2.4.0)
+### 5.62 Core Names Are Reserved (normative, esm 2.4.0)
 
 **Decision pinned.** The closed §4.2 set is the **core operators**; every other
 operator is a **defined operator**, given by definitions (esm-spec §9.6.12). A
@@ -7965,7 +7965,7 @@ operators, not core ops.
 `compound_rule_exempt.esm` (a rule keyed `exp` whose `match` is rooted at
 `sqrt`) loads. Every binding that loads documents MUST assert all three.
 
-**Emitted rules are reference-only** *(draft 2.4.0, esm-spec §9.6.1 `reference_only`, §9.6.4
+**Emitted rules are reference-only** *(esm 2.4.0, esm-spec §9.6.1 `reference_only`, §9.6.4
 rule 5)*. `tests/conformance/expression_templates/reference_only_round_trip/`: `fixture.esm`
 holds a referenced rule with a `where` and a compound rule keyed `exp` rooted at `sqrt`; its
 `emitted.esm` writes both `reference_only`, and every binding re-emits `emitted.esm` byte for
