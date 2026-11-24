@@ -99,9 +99,11 @@ end
 # contents, and each node's number under each environment of loop binders it
 # was keyed in.
 # Content numbers of constant-array buffers: equal contents, equal numbers.
-# Every gather site's `_ConstGatherArray` holds its own `vec` of the source
-# array, aliasing one buffer (`_const_gather_node`), so a buffer is looked up by
-# its address and length first and its contents hashed once, not once per site.
+# A build gives each const array one `_ConstGatherArray` (`_const_gather_payload`),
+# but a gather made outside a build, or under another registry name, holds its
+# own `vec` of the source array aliasing the same buffer, so a buffer is looked
+# up by its address and length first and its contents hashed once, not once per
+# payload.
 # The table holds each buffer it has seen, so no address is reused under it.
 struct _FlatContentIds
     bufs::Dict{Tuple{UInt, Int}, Tuple{Vector{Float64}, Int}}

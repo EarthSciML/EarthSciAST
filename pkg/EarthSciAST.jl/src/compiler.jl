@@ -554,15 +554,25 @@ mutable struct _BuildState
     calls::Any
     # While a call target's body compiles: its argument map (`_ArgMap`).
     argmap::Any
+    # The one `_ConstGatherArray` of each const array the build reads at a
+    # run-time subscript (`_const_gather_payload`): source array (by identity)
+    # => registry name => wrapper. Every gather of one array then holds one
+    # payload object, so the passes that key a gather by its payload's identity
+    # (the per-cell merge signature, the kernel class merge) group the cells
+    # reading one table and keep different tables apart. `nothing` on a state
+    # that is not a build's, where each gather gets its own wrapper. A child
+    # state shares its parent's.
+    const_tables::Union{Nothing, IdDict{Any, Any}}
 end
 _BuildState(
     count::Base.RefValue{Int} = Ref(0);
     scatter_keep::Union{Nothing, IdDict{Any, Nothing}} = nothing,
-    calls = nothing
+    calls = nothing,
+    const_tables::Union{Nothing, IdDict{Any, Any}} = nothing
 ) = _BuildState(
     Dict{String, Tuple{Vector{Int}, Int, Vector{Int}}}(),
     Dict{Symbol, Base.RefValue{Int}}(), count, 0, nothing, scatter_keep,
-    Dict{String, Float64}(), calls, nothing
+    Dict{String, Float64}(), calls, nothing, const_tables
 )
 
 """
@@ -684,7 +694,8 @@ function _new_build_ctx(plan::CompilerPlan, record::Union{Nothing, _BuildRecord}
         plan, record,
         _BuildState(
             count; scatter_keep = IdDict{Any, Nothing}(),
-            calls = outer === nothing ? nothing : outer.state.calls
+            calls = outer === nothing ? nothing : outer.state.calls,
+            const_tables = IdDict{Any, Any}()
         ), outer
     )
 end
@@ -699,7 +710,7 @@ function _child_build_ctx()
         outer.plan, outer.record,
         _BuildState(
             outer.state.loopvar_count; scatter_keep = outer.state.scatter_keep,
-            calls = outer.state.calls
+            calls = outer.state.calls, const_tables = outer.state.const_tables
         ),
         outer.tuning, outer.range_spec, outer.ws_capture, outer.counts, outer.merge_recheck
     )
@@ -909,6 +920,31 @@ end
 _note_percell!() = (r = _percell_counter(); r === nothing || (r[] += 1); nothing)
 _percell_mark() = (r = _percell_counter(); r === nothing ? 0 : r[])
 _percell_restore!(n::Int) = (r = _percell_counter(); r === nothing || (r[] = n); nothing)
+
+# ---------------------------------------------------------------------------
+# Arithmetic a build evaluates on the host
+# ---------------------------------------------------------------------------
+#
+# A build evaluates some of a model's arithmetic once, in binary64, and hands
+# the result to the right-hand side as data: setup-time arrays and the tables
+# of build-time-evaluable subexpressions. A binary32 consumer of the build
+# (`operator_ir(…; unspecified_eltype = Float32)`) would then round each result
+# once instead of rounding every operation, so it records what the build
+# evaluated (`_recording_host_arithmetic`) and refuses. `_note_host_arithmetic!`
+# is a no-op outside a recording.
+const _HOST_ARITHMETIC_KEY = :earthsci_host_arithmetic
+
+function _recording_host_arithmetic(f)
+    sites = String[]
+    v = task_local_storage(f, _HOST_ARITHMETIC_KEY, sites)
+    return v, unique!(sites)
+end
+
+function _note_host_arithmetic!(site::AbstractString)
+    sites = get(task_local_storage(), _HOST_ARITHMETIC_KEY, nothing)
+    sites === nothing || push!(sites, String(site))
+    return nothing
+end
 
 # ---------------------------------------------------------------------------
 # The refusal

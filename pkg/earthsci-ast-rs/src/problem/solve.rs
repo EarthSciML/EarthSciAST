@@ -29,7 +29,6 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
     let _precision_guard = prob.precision.enter();
-    reject_f32_integration(prob)?;
     let effective = effective_options(prob, opts);
     match &*prob.backend {
         Backend::Static(reason) => Err(SimulateError::NotDynamic {
@@ -39,7 +38,7 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
             let mut insp = BuildInspection::default();
             let sink = prob.inspect.then_some(&mut insp);
             let mut forcing = ProviderRefresh::new(prob, compiled);
-            let run = forcing.run_spec();
+            let run = forcing.run_spec(opts);
             let sol = compiled
                 .solve_run(&run, &effective, sink, &mut |t| forcing.at(t))
                 .map_err(|e| compiled.show_error(e))?;
@@ -85,7 +84,7 @@ impl<'p> ProviderRefresh<'p> {
 
     /// The run over the Problem's span and bindings, with the refresh
     /// boundaries and the discrete-cadence forcing this refresh serves.
-    fn run_spec(&self) -> crate::simulate_array::RunSpec<'p> {
+    fn run_spec(&self, opts: &SolveOptions) -> crate::simulate_array::RunSpec<'p> {
         static NONE: std::sync::OnceLock<std::collections::HashSet<String>> =
             std::sync::OnceLock::new();
         let prob = self.prob;
@@ -102,6 +101,17 @@ impl<'p> ProviderRefresh<'p> {
             initial_conditions: &prob.u0,
             discrete_forcing,
             boundaries,
+            reltol_source: if opts.reltol.is_some() {
+                "call site"
+            } else if prob
+                .solver
+                .as_ref()
+                .is_some_and(|solver| solver.reltol.is_some())
+            {
+                "solver.reltol"
+            } else {
+                "binding default"
+            },
         }
     }
 
@@ -158,9 +168,7 @@ impl<'p> ProviderRefresh<'p> {
 /// # Errors
 ///
 /// [`SimulateError::NotDynamic`] for a Problem with no right-hand side to
-/// integrate, and [`crate::compile_error::CompileError::Float32Unsupported`]
-/// for a Float32 document that integrates (the answers [`solve`] gives them),
-/// and every error building the initial state raises in a solve:
+/// integrate, and every error building the initial state raises in a solve:
 /// [`SimulateError::InvalidInitialCondition`] for an element none of the four
 /// sources values, and the error of an initial condition that cannot be
 /// evaluated.
@@ -169,7 +177,6 @@ pub fn initial_state(prob: &EsmProblem) -> Result<Vec<f64>, SimulateError> {
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
     let _precision_guard = prob.precision.enter();
-    reject_f32_integration(prob)?;
     // The discrete-cadence fields the solve's own refresh would write: none
     // when the Problem holds no executor, as in `solve`. An `ic` right-hand
     // side reads each at its value at the start of the run (esm-spec
@@ -451,7 +458,6 @@ pub fn init<'a>(
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
     let _precision_guard = prob.precision.enter();
-    reject_f32_integration(prob)?;
     let compiled = match &*prob.backend {
         Backend::Static(reason) => {
             return Err(SimulateError::NotDynamic {
@@ -461,6 +467,12 @@ pub fn init<'a>(
         Backend::Array(compiled) => compiled,
     };
     let (t0, t_end) = prob.tspan;
+    // The session checks only the output times the caller asked for, as
+    // `solve` does: the default stepping grid below is not a request.
+    let requested: &[f64] = match &opts.saveat {
+        Some(g) if g.len() >= 2 => g,
+        _ => &[],
+    };
     let grid = match &opts.saveat {
         Some(g) if g.len() >= 2 => g.clone(),
         _ => {
@@ -471,9 +483,9 @@ pub fn init<'a>(
         }
     };
     let mut forcing = ProviderRefresh::new(prob, compiled);
-    let run = forcing.run_spec();
-    let session =
-        compiled.open_session(&run, effective_options(prob, opts), &mut |t| forcing.at(t))?;
+    let run = forcing.run_spec(opts);
+    let effective = effective_options(prob, opts);
+    let session = compiled.open_session(&run, effective, requested, &mut |t| forcing.at(t))?;
     let names = prob.state_variable_names();
     let u = names
         .iter()
@@ -498,7 +510,7 @@ pub fn init<'a>(
 impl Integrator<'_> {
     /// The independent-variable value reached so far.
     pub fn t(&self) -> f64 {
-        self.t
+        self.session.output_time(self.t)
     }
 
     /// Why the integration stopped, once it has.
@@ -545,7 +557,7 @@ impl Integrator<'_> {
                     row.push(*v);
                 }
             }
-            self.t = sol.time[k];
+            self.t = t_next;
         }
         // The leading names are the state's, in state-vector order.
         for (name, v) in self.names.iter().zip(self.session.state()) {

@@ -5,18 +5,29 @@
 
 # ---- elementwise -------------------------------------------------------------
 
+# Preserve the per-operation binary32 rounding required by §11.3.1. In
+# particular, reassociating a cancellation chain or fusing multiply-add
+# can change its result even though every tensor has the correct type.
+function _de_rounded(ctx::_DECtx, op, len::Int)
+    value = _de_res(op)
+    if ctx.precision === Float32
+        value = _de_res(_hlo.optimization_barrier([value]; location = _de_loc()))
+    end
+    return _DEVal(value, len)
+end
+
 function _de_bin(ctx::_DECtx, f::F, a::_DEVal, b::_DEVal)::_DEVal where {F}
     L = max(a.len, b.len)
     a = _de_bcast(ctx, a, L); b = _de_bcast(ctx, b, L)
     _de_tally!(ctx, :arith)
-    op = f(a.v, b.v; result = _de_ty(L), location = _de_loc())
-    return _DEVal(_de_res(op), L)
+    op = f(a.v, b.v; result = _de_ty(ctx, L), location = _de_loc())
+    return _de_rounded(ctx, op, L)
 end
 
 function _de_un(ctx::_DECtx, f::F, a::_DEVal)::_DEVal where {F}
     _de_tally!(ctx, :arith)
-    op = f(a.v; result = _de_ty(a.len), location = _de_loc())
-    return _DEVal(_de_res(op), a.len)
+    op = f(a.v; result = _de_ty(ctx, a.len), location = _de_loc())
+    return _de_rounded(ctx, op, a.len)
 end
 
 function _de_pred(ctx::_DECtx, dir::String, a::_DEVal, b::_DEVal)
@@ -36,7 +47,7 @@ end
 function _de_select(ctx::_DECtx, pred, L::Int, a::_DEVal, b::_DEVal)::_DEVal
     a = _de_bcast(ctx, a, L); b = _de_bcast(ctx, b, L)
     _de_tally!(ctx, :select)
-    op = _hlo.select(pred, a.v, b.v; result = _de_ty(L), location = _de_loc())
+    op = _hlo.select(pred, a.v, b.v; result = _de_ty(ctx, L), location = _de_loc())
     return _DEVal(_de_res(op), L)
 end
 
@@ -119,8 +130,8 @@ function _de_reduce_terms(
     )::_DEVal
     n = length(terms)
     flat = _de_concat(ctx, _DEVal[_de_bcast(ctx, x, L) for x in terms])
-    x2 = Reactant.Ops.reshape(_de_traced(flat), L, n)
-    init = Reactant.promote_to(TracedRNumber{Float64}, zbar)
+    x2 = Reactant.Ops.reshape(_de_traced(flat, ctx.precision), L, n)
+    init = Reactant.promote_to(TracedRNumber{ctx.precision}, ctx.precision(zbar))
     r = Reactant.Ops.reduce(x2, init, Int[2], _de_semiring_jl(ctx, op))
     _de_tally!(ctx, :reduce)
     return _de_untraced(r)
@@ -131,6 +142,7 @@ end
 # operator node has no 0̄ to seed a monoid with, and seeding `+` with `0.0`
 # would turn a sum of `-0.0`s into `0.0`.
 function _de_chain(ctx::_DECtx, f::F, c::Vector{_DEVal})::_DEVal where {F}
+    ctx.tree_fold && return _de_balanced_fold(ctx, f, c, 1, length(c))
     r = c[1]
     for i in 2:length(c)
         r = _de_bin(ctx, f, r, c[i])
@@ -145,7 +157,11 @@ function _de_fold_terms(
     )::_DEVal
     isempty(terms) && return _de_const(ctx, zbar)
     L = maximum(x.len for x in terms)
-    if length(terms) >= ctx.opts.reduce_min
+    if ctx.tree_fold
+        f = _de_semiring_fn(ctx, op)
+        return _de_balanced_fold(ctx, f, [_de_const(ctx, zbar); terms], 1, length(terms) + 1)
+    end
+    if ctx.precision === Float64 && length(terms) >= ctx.opts.reduce_min
         return _de_reduce_terms(ctx, op, zbar, terms, L)
     end
     f = _de_semiring_fn(ctx, op)
@@ -154,6 +170,16 @@ function _de_fold_terms(
         s = _de_bin(ctx, f, s, x)
     end
     return s
+end
+
+# Include the seed as term one, preserving the same order on every target.
+function _de_balanced_fold(ctx::_DECtx, f::F, terms, lo, hi) where {F}
+    lo == hi && return terms[lo]
+    mid = (lo + hi) ÷ 2
+    return _de_bin(
+        ctx, f, _de_balanced_fold(ctx, f, terms, lo, mid),
+        _de_balanced_fold(ctx, f, terms, mid + 1, hi)
+    )
 end
 
 # ---- the operator table ------------------------------------------------------
@@ -325,42 +351,63 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
     if k === _E._NK_LITERAL
         return nd.literal
     elseif k === _E._NK_LOOPVAR
-        return Float64((nd.payload::Base.RefValue{Int})[])
+        return Float64(_de_counter(ctx, nd.payload::Base.RefValue{Int}))
     elseif k === _E._NK_PARAM
         return Float64(getfield(ctx.p, nd.sym)::Real)
     elseif k === _E._NK_CONST_GATHER
         cg = nd.payload::_E._ConstGatherArray
         off = _E._const_gather_offset(
-            cg, length(nd.children), d -> _de_index_int(nd.children[d])
+            cg, length(nd.children), d -> _de_index_int(ctx, nd.children[d])
         )
         return Float64(cg.flat[off])
     elseif k === _E._NK_CONTRACTION
-        s = nd.literal
-        f = _de_semiring_jl(ctx, nd.op)
-        for ch in nd.children
-            s = f(s, _de_hostval(ctx, ch))
-        end
-        return s
+        terms = Float64[_de_hostval(ctx, ch) for ch in nd.children]
+        return _de_host_fold(ctx, nd.op, nd.literal, terms)
     elseif k === _E._NK_CONTRACTION_LOOP
         spec = nd.payload::_E._ContractLoop
-        s = nd.literal
-        f = _de_semiring_jl(ctx, nd.op)
         body = nd.children[1]
+        terms = Float64[]
         for kk in spec.lo:spec.step:spec.hi
-            spec.ref[] = kk
-            s = f(s, _de_hostval(ctx, body))
+            _de_set_counter!(ctx, spec.ref, kk)
+            push!(terms, _de_hostval(ctx, body))
         end
-        return s
+        return _de_host_fold(ctx, nd.op, nd.literal, terms)
     end
     # `_NK_OP`: the host ladder, generated as the interpreter's (`_op_ladder`),
     # so a folded subtree is bit-identical to what `f!` computes for it.
     c = Any[_de_hostval(ctx, ch) for ch in nd.children]
-    return _E._scalar_op(nd.op, c)
+    return _de_host_op(ctx, nd.op, c)
 end
+
+# The host twins of `_de_fold_terms` and `_de_chain`. Under `tree_fold` they
+# group as `_de_balanced_fold` does, so a subtree folded on the host and the
+# same subtree emitted (where another target cannot fold it) round alike.
+function _de_host_fold(ctx::_DECtx, op::Symbol, zbar::Float64, terms::Vector{Float64})::Float64
+    f = _de_semiring_jl(ctx, op)
+    ctx.tree_fold && return _de_host_balanced(f, [zbar; terms], 1, length(terms) + 1)
+    return foldl(f, terms; init = zbar)
+end
+
+function _de_host_op(ctx::_DECtx, op::Symbol, c::Vector{Any})::Float64
+    if ctx.tree_fold && length(c) > 2 && op in (:+, :*, :max, :min)
+        return _de_host_balanced((a, b) -> _E._scalar_op(op, Any[a, b]), c, 1, length(c))
+    end
+    return _E._scalar_op(op, c)
+end
+
+function _de_host_balanced(f::F, xs, lo, hi) where {F}
+    lo == hi && return xs[lo]
+    mid = (lo + hi) ÷ 2
+    return f(_de_host_balanced(f, xs, lo, mid), _de_host_balanced(f, xs, mid + 1, hi))
+end
+
+const _DE_FOLD_KINDS = (_E._NK_OP, _E._NK_CONTRACTION, _E._NK_CONTRACTION_LOOP)
 
 # Fold if we can; `nothing` if the subtree is not host data.
 function _de_try_fold(ctx::_DECtx, nd::_E._Node)::Union{Nothing, _DEVal}
     nd.kind === _E._NK_LITERAL && return nothing   # already one constant
+    # A Float32 fragment evaluates in Float32, which a Float64 host fold does not.
+    (ctx.precision !== Float64 && nd.kind in _DE_FOLD_KINDS) && return nothing
     _de_static(ctx, nd) || return nothing
     _de_tally!(ctx, :const_folded)
     return _de_const(ctx, _de_hostval(ctx, nd))
@@ -368,4 +415,4 @@ end
 
 # Host integer evaluation of a gather subscript (loop counters + literals),
 # reusing the emitter's own resolver — no state can appear in a subscript.
-_de_index_int(nd::_E._Node) = _E._index_int(nd)
+_de_index_int(ctx::_DECtx, nd::_E._Node) = _E._index_int(nd, r -> _de_counter(ctx, r))

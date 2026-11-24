@@ -521,6 +521,17 @@ export const ERROR_CODES = {
    * whose species and parameters have no per-variable `element_type`.
    */
   ELEMENT_TYPE_UNCARRIED: 'element_type_uncarried',
+  /** An external precision choice conflicts with declarations (§11.3.3 P4). */
+  PRECISION_CHOICE_CONFLICT: 'precision_choice_conflict',
+  /** An unspecified variable is used as a key (§11.3.3 P8). */
+  KEY_PRECISION_UNSPECIFIED: 'key_precision_unspecified',
+  /**
+   * A relative tolerance below 2⁻²² for a Float32 state (esm-spec §11.3.2),
+   * or for binary32 state storage chosen by an external consumer (§11.3.3 P7).
+   * This binding does not integrate; the code stays because the table is
+   * cross-language uniform.
+   */
+  TOLERANCE_BELOW_WORKING_PRECISION: 'tolerance_below_working_precision',
   SUBSYSTEM_REF_IS_COUPLING_LIBRARY: 'subsystem_ref_is_coupling_library',
   SUBSYSTEM_REF_IS_OPERATOR_LIBRARY: 'subsystem_ref_is_operator_library',
 

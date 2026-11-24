@@ -2625,8 +2625,56 @@ pub fn validate_equation_dimensions(
 /// elsewhere in the same equation. The LHS/RHS comparison itself is only made
 /// when BOTH sides resolved: comparing against an unknown dimension could only
 /// ever produce a false mismatch.
+///
+/// `env` holds no operator registry, so an operator reference
+/// (`apply_operator`, esm-spec §9.6.4) is undeterminable here and a mismatch
+/// inside the body of the definition it names goes unreported. For an
+/// equation of a loaded document use
+/// [`check_equation_dimensions_with_operators`] with its component's registry,
+/// as validation does.
 pub fn check_equation_dimensions(eq: &Equation, env: &HashMap<String, Unit>) -> Vec<UnitFinding> {
     equation_findings(eq, env)
+}
+
+/// [`check_equation_dimensions`] typing each operator reference against
+/// `operators` (esm-spec §9.6.12 "Units"): the registry of the component the
+/// equation belongs to ([`crate::EsmFile::component_operators`]), or a
+/// flattened system's ([`crate::FlattenedSystem::operators`]).
+pub fn check_equation_dimensions_with_operators(
+    eq: &Equation,
+    env: &HashMap<String, Unit>,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> Vec<UnitFinding> {
+    equation_findings(eq, &MapWithOperators::new(env, operators))
+}
+
+/// A name-to-unit map with the operator registry its references resolve
+/// against: the environment of the public `*_with_operators` checks.
+struct MapWithOperators<'a> {
+    units: &'a HashMap<String, Unit>,
+    operators: Option<OperatorUnits>,
+}
+
+impl<'a> MapWithOperators<'a> {
+    fn new(
+        units: &'a HashMap<String, Unit>,
+        operators: &crate::operator_refs::OperatorRegistry,
+    ) -> Self {
+        MapWithOperators {
+            units,
+            operators: (!operators.is_empty()).then(|| OperatorUnits::new(operators.clone())),
+        }
+    }
+}
+
+impl UnitEnv for MapWithOperators<'_> {
+    fn unit_of(&self, name: &str) -> Option<&Unit> {
+        self.units.get(name)
+    }
+
+    fn operators(&self) -> Option<&OperatorUnits> {
+        self.operators.as_ref()
+    }
 }
 
 /// [`check_equation_dimensions`] against any [`UnitEnv`].
@@ -3003,11 +3051,30 @@ pub enum EquationDimensionVerdict {
 /// an equation skipped because of an indeterminate operand — a bare literal in a
 /// product, a `const` node that declares no `units`, a variable with no declared
 /// units — is never reported as fine.
+///
+/// As with [`check_equation_dimensions`], `env` holds no operator registry:
+/// an equation with an operator reference is judged by
+/// [`equation_dimension_verdict_with_operators`].
 pub fn equation_dimension_verdict(
     eq: &Equation,
     env: &HashMap<String, Unit>,
 ) -> EquationDimensionVerdict {
-    let errors: Vec<String> = check_equation_dimensions(eq, env)
+    equation_verdict(eq, env)
+}
+
+/// [`equation_dimension_verdict`] typing each operator reference against
+/// `operators`, the registry of the component the equation belongs to
+/// ([`crate::EsmFile::component_operators`]).
+pub fn equation_dimension_verdict_with_operators(
+    eq: &Equation,
+    env: &HashMap<String, Unit>,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> EquationDimensionVerdict {
+    equation_verdict(eq, &MapWithOperators::new(env, operators))
+}
+
+fn equation_verdict(eq: &Equation, env: &dyn UnitEnv) -> EquationDimensionVerdict {
+    let errors: Vec<String> = equation_findings(eq, env)
         .into_iter()
         .filter(UnitFinding::is_error)
         .map(|f| f.message)
@@ -6437,5 +6504,47 @@ mod tests {
             propagate_dim(&Expr::operator(node), &env, &mut f);
             assert!(f.iter().any(UnitFinding::is_error), "{name}: {f:?}");
         }
+    }
+
+    /// A unit mismatch inside the body of a definition a reference names is
+    /// reported by the public equation checks once they are given the
+    /// component's registry, as validation reports it.
+    #[test]
+    fn a_mismatch_inside_a_reference_is_reported() {
+        let doc = serde_json::json!({
+            "esm": "2.0.0",
+            "metadata": {"name": "ref_units"},
+            "models": {"M": {
+                "variables": {
+                    "x": {"type": "parameter", "units": "m", "default": 1.0},
+                    "y": {"type": "parameter", "units": "s", "default": 1.0},
+                    "z": {"type": "unknown", "units": "m"}
+                },
+                "equations": [{"lhs": "z", "rhs": {"op": "apply_operator", "args": [],
+                    "name": "add", "bindings": {"a": "x", "b": "y"}}}],
+                "operators": {"add": {"params": ["a", "b"], "body": {"op": "+", "args": ["a", "b"]}}}
+            }}
+        });
+        let file = crate::load_string(&doc.to_string()).expect("loads");
+        let model = &file.models.as_ref().unwrap()["M"];
+        let (env, _) = model_unit_env(&file, model);
+        let eq = &model.equations[0];
+        // Without the registry the reference is undeterminable: not checked.
+        assert!(
+            !check_equation_dimensions(eq, &env)
+                .iter()
+                .any(UnitFinding::is_error)
+        );
+        assert!(matches!(
+            equation_dimension_verdict(eq, &env),
+            EquationDimensionVerdict::NotChecked(_)
+        ));
+        let ops = file.component_operators("models.M");
+        let findings = check_equation_dimensions_with_operators(eq, &env, &ops);
+        assert!(findings.iter().any(UnitFinding::is_error), "{findings:?}");
+        assert!(matches!(
+            equation_dimension_verdict_with_operators(eq, &env, &ops),
+            EquationDimensionVerdict::Mismatch(_)
+        ));
     }
 }

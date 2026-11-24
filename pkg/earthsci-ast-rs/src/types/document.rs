@@ -201,6 +201,18 @@ impl Default for EsmFile {
     }
 }
 
+impl EsmFile {
+    /// Copy into `self` the fields of `from` that are not on the wire
+    /// (`component_templates`, `coupling_import_base`, `document_base`): a
+    /// pass that rebuilds a document through its JSON form loses them, and
+    /// they describe the same document.
+    pub(crate) fn carry_non_wire_fields(&mut self, from: &EsmFile) {
+        self.component_templates = from.component_templates.clone();
+        self.coupling_import_base = from.coupling_import_base.clone();
+        self.document_base = from.document_base.clone();
+    }
+}
+
 /// Academic citation or data source reference
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reference {

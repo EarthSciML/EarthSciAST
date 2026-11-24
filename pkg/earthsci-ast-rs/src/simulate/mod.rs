@@ -89,6 +89,7 @@ mod tests {
             state_variable_names: names.iter().map(|n| n.to_string()).collect(),
             retcode: ReturnCode::Success,
             metadata: SolutionMetadata {
+                integrator_precision: None,
                 namespace: namespace.map(str::to_string),
                 ..Default::default()
             },

@@ -25,6 +25,20 @@ export interface ValidationResult {
   schema_errors: ValidationError[]
   structural_errors: ValidationError[]
   unit_warnings: UnitWarning[]
+  /** Non-unit diagnostics that do not invalidate the document. */
+  warnings: ValidationWarning[]
+}
+
+/**
+ * An advisory validation finding that is not about units. It never changes
+ * `is_valid`.
+ */
+export interface ValidationWarning {
+  /** Stable diagnostic code. */
+  code: string
+  /** JSON pointer to the finding. */
+  path: string
+  message: string
 }
 
 /**

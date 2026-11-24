@@ -554,6 +554,13 @@ struct _OopRHS{F, B} <: Function
     buffer_index::Dict{String, Int}  # buffer name -> position in `buffers`
 end
 
+# Printed short. A callable struct prints field by field, and this one's fields
+# are the whole compiled IR, whose shared subexpressions `show` writes out at
+# every reference. A compiled backend asks for that text without anyone reading
+# it: Reactant names each program it compiles with `string(f)`.
+Base.show(io::IO, f::_OopRHS) =
+    print(io, "EarthSciAST._OopRHS(", f.rhs.n_states, " states)")
+
 # Host evaluation of this form is a compiled backend's job. The in-place `f!`
 # (`form = :inplace`, the default) is the host evaluator, and it is also the
 # reference the compiled backends are gated against; `compiler=:interpreter`

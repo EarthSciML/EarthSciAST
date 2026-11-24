@@ -1075,6 +1075,7 @@ impl<'a> Emitter<'a> {
                 let p = self.wrap(a.eq(&zero), "not")?;
                 self.pred_to_f64(p)
             }
+            UnCode::RoundF32 => Err(self.err("the XLA emitter does not lower binary32 reads")),
             UnCode::Unknown => Err(self.err(
                 "unary operator resolved to UnCode::Unknown (the interpreter's NaN \
                  sentinel); refusing rather than emitting a silent NaN",

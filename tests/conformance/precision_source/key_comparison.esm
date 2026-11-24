@@ -1,0 +1,22 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "UnspecifiedKeyComparison",
+    "description": "Two parameters with unspecified precision compared with ==. Validation warns key_precision_unspecified for each (esm-spec §11.3.3 P8)."
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "a": { "type": "parameter", "default": 2260007005.0, "units": "1" },
+        "b": { "type": "parameter", "default": 2260007015.0, "units": "1" },
+        "x": { "type": "unknown", "units": "1" }
+      },
+      "equations": [
+        {
+          "lhs": "x",
+          "rhs": { "op": "ifelse", "args": [{ "op": "==", "args": ["a", "b"] }, 1.0, 0.0] }
+        }
+      ]
+    }
+  }
+}

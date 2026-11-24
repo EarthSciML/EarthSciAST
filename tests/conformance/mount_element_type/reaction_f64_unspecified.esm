@@ -1,0 +1,12 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "mount_element_type_reaction_f64_unspecified",
+    "description": "An esm 2.4.0 root that declares no domain mounts the Float64 reaction-system leaf at a top-level reaction_systems.<k> {ref}. The root's precision is unspecified, which differs from the leaf's Float64 declaration, and species and reaction parameters cannot carry it: element_type_uncarried at load."
+  },
+  "reaction_systems": {
+    "Chem": {
+      "ref": "./reaction_leaf_f64.esm"
+    }
+  }
+}

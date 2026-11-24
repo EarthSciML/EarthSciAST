@@ -208,6 +208,7 @@ function _build_partition_and_materialize(
     # index-set ranges are resolved.
     geom_setup_arrays = Dict{String, AbstractArray{Float64}}()
     if !isempty(cls.geom_setup_vars)
+        _note_host_arithmetic!("the setup-time arrays " * join(sort!(collect(cls.geom_setup_vars)), ", "))
         geom_setup_arrays = _with_param_reads(param_reads) do
             _materialize_geometry_setup(
                 cls.geom_setup_vars,

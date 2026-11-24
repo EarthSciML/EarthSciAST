@@ -76,8 +76,9 @@ pub(super) fn eval_call(node: &std::sync::Arc<ExpressionNode>, ctx: &mut EvalCtx
 /// through its body without assembling the array, when its instance body is a
 /// `makearray` whose region holding the cell has a pointwise `faq` value over
 /// exactly that region (written in place or as a reference to one): the value
-/// is that `faq`'s body evaluated with its output symbols bound to the cell,
-/// as the build reads a stencil region it gathers per cell (the region value
+/// is that `faq`'s body evaluated with its output symbols bound to the cell's
+/// coordinate (element `raw` of an array whose regions start at `lo` sits at
+/// `lo + raw - 1`), as the build reads a stencil region it gathers per cell (the region value
 /// inlined onto the cell's loop symbols, `inline_region_aggregates`). A cell in
 /// no region is the fill, `0.0`. `None` where this does not apply; the caller
 /// then gathers from the whole value.
@@ -162,10 +163,10 @@ fn eval_reference_cell(
             instance: std::sync::Arc::clone(vi),
         });
     }
-    // The output symbols take the cell's subscripts, as the region value
+    // The output symbols take the cell's coordinates, as the region value
     // inlined onto the gather's loop symbols reads them.
     let saved: Vec<Option<i64>> = idx.iter().map(|n| ctx.loop_binds.get(n).copied()).collect();
-    for (n, &v) in idx.iter().zip(raw) {
+    for (n, &v) in idx.iter().zip(&at) {
         set_bind(&mut ctx.loop_binds, n, v);
     }
     let v = eval(&fbody, ctx);
@@ -1338,6 +1339,8 @@ pub(crate) enum UnCode {
     Acosh,
     Atanh,
     Not,
+    /// Narrow a context-adopting value at a binary32 read in the tape.
+    RoundF32,
     Unknown,
 }
 
@@ -6631,6 +6634,46 @@ mod saturated_subscript_tests {
                 Value::Scalar(v) => assert_eq!(v.to_bits(), 0.0f64.to_bits(), "{raw}"),
                 _ => panic!("scalar expected"),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod reference_cell_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A gather of the array a reference denotes, read cell by cell through
+    /// its body: element 1 of a `makearray` whose only region starts at 2 is
+    /// the region value at coordinate 2, so the `faq`'s output symbol is 2
+    /// there, as in the assembled array.
+    #[test]
+    fn a_reference_cell_binds_the_output_symbol_to_the_coordinate() {
+        let reg = crate::operator_refs::OperatorRegistry::from_json(
+            json!({"mk": {"params": [], "body": {
+                "op": "makearray", "args": [], "regions": [[[2, 9]]],
+                "values": [{"op": "faq", "args": [], "output_idx": ["i"],
+                            "ranges": {"i": [2, 9]}, "expr": "i"}]}}})
+            .as_object()
+            .unwrap(),
+        );
+        let ops = Instances::new(reg);
+        let inputs = ArrMap::default();
+        let scope = StandaloneScope {
+            inputs: &inputs,
+            params: &[],
+            param_names: &[],
+            t: 0.0,
+            derived_extents: crate::faq::empty_derived_extents(),
+            const_arrays: ConstArrayScope::empty(),
+            ops: &ops,
+        };
+        let r = json!({"op": "apply_operator", "args": [], "name": "mk"});
+        for (k, want) in [(1, 2.0), (3, 4.0), (8, 9.0)] {
+            let e: Expr =
+                serde_json::from_value(json!({"op": "index", "args": [r.clone(), k]})).unwrap();
+            let got = scope.eval_fast(&e).expect("evaluates").as_scalar();
+            assert_eq!(got, Some(want), "element {k}");
         }
     }
 }

@@ -23,6 +23,7 @@ This document maps ESM format specifications to test fixtures to ensure complete
 | 9. Operators | By reference, needed_vars | ❌ Missing | **GAP**: Need operator fixtures |
 | 10. Coupling | All 6 coupling types | ✅ Created | `coupling/` (couple, operator_apply, callback) |
 | 11. Domain | Temporal, spatial, BCs, ICs | ❌ Partial | Basic spatial in minimal_chemistry.esm |
+| 11.3.2 Integration precision | Binary32 state, RHS and clock semantics, solver metadata, and precision refusals | ✅ Created | `conformance/precision_integration/` (CONFORMANCE_SPEC §5.18.5) |
 | 12. Solver | All 3 solver strategies | ❌ Partial | Only strang_threads in minimal_chemistry.esm |
 | 13. Complete Example | MinimalChemAdvection | ✅ Created | `valid/minimal_chemistry.esm` |
 
@@ -148,6 +149,15 @@ Based on libraries spec Section 3.4:
    tests/scoping/scoped_coupling.esm       # Cross-system references
    tests/invalid/scoped_ref_errors.esm     # Invalid reference patterns
    ```
+
+### Declared and unspecified precision
+
+| Fixture | Coverage |
+| --- | --- |
+| `conformance/mount_element_type/root_unspecified.esm`, `root_legacy.esm` | All bindings preserve a mounted binary64 declaration and inherited omission through load and emit, and read an undeclared root as unspecified from esm 2.4.0 and as `"Float64"` below it. |
+| `conformance/mount_element_type/reaction_f64_unspecified.esm`, `reaction_f64_legacy.esm` | All bindings refuse a `"Float64"` reaction-system leaf under an unspecified root with a message naming the fix, and load it under an esm 2.3.0 root. |
+| `conformance/precision_source/key_comparison.esm` | All bindings report `key_precision_unspecified` on the validation result's non-unit `warnings`. |
+| `conformance/precision_source/rounding.esm` | Rust checks exact per-operation rounding, flat precision slots, typed state buffers, and declared, legacy, mixed and key variants on the official RHS paths. |
 
 ### Progress Tracking
 

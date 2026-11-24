@@ -22,7 +22,7 @@
 //!   the §6.6/§6.6.5 inline tests through [`earthsci_ast::solve`].
 //! - `convergence` [`earthsci_ast::load_path_with_options`] once
 //!   per resolution (loader-API metaparameter binding, esm-spec §9.7.6 site
-//!   4) → `simulate` → `evaluate_cellwise(reference)` → `field_reduce`.
+//!   4) → `simulate` → `evaluate_cellwise_with_operators(reference)` → `field_reduce`.
 //! - `reproject`   a runner-built invocation document importing the library
 //!   (the manifest's `fixture: null` contract), loaded so §9.7.3 body
 //!   composition inlines the template bodies, then
@@ -45,7 +45,7 @@ use earthsci_ast::simulate_array::BuildInspection;
 use earthsci_ast::{Alg, SolveOptions};
 use earthsci_ast::{EsmFile, Expr};
 use earthsci_ast::{LoadOptions, load_path, load_path_with_options, load_string_with_options};
-use earthsci_ast::{evaluate_cellwise, field_reduce, run_inline_tests, state_cells};
+use earthsci_ast::{evaluate_cellwise_with_operators, field_reduce, run_inline_tests, state_cells};
 use serde_json::{Value, json};
 
 fn parse_solver(name: &str) -> Result<Alg, String> {
@@ -340,7 +340,16 @@ fn cmd_convergence(
             .collect();
         // Analytic convergence reference over domain dimensions (no parameters).
         let no_params: HashMap<String, f64> = HashMap::new();
-        let reference_field = evaluate_cellwise(&reference, &cell_tuples, &index_sets, &no_params)?;
+        // A reference may call a definition of the model (a grid-geometry
+        // template); it resolves against the model's registry.
+        let operators = file.component_operators(&format!("models.{model}"));
+        let reference_field = evaluate_cellwise_with_operators(
+            &reference,
+            &cell_tuples,
+            &index_sets,
+            &no_params,
+            &operators,
+        )?;
         let mut row = serde_json::Map::new();
         row.insert("n".to_string(), json!(n));
         for norm in &norms {

@@ -378,10 +378,9 @@ function _attach_exprtbl_evals!(
         ce = _cell_evaluator(
             spec.expr, spec.idx_names, const_arrays, _EMPTY_PARAMS; index_outputs = true
         )
-        ce === nothing && _decline(
-            :subtree_table_declined,
-            "op '" * (spec.expr isa OpExpr ? (spec.expr::OpExpr).op : string(typeof(spec.expr))) * "'"
-        )
+        what = "op '" * (spec.expr isa OpExpr ? (spec.expr::OpExpr).op : string(typeof(spec.expr))) * "'"
+        ce === nothing && _decline(:subtree_table_declined, what)
+        _note_host_arithmetic!("a table of a build-time-evaluable subexpression ($what)")
         spec.ce = ce
     end
     return rs
