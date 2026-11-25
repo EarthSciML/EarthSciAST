@@ -1529,59 +1529,68 @@ fn column_lanes_read_a_whole_array_faq_at_a_vertical_subscript() {
 }
 
 /// A `makearray` whose region values are array `faq`s that are filtered or
-/// contract, on a band of the vertical (non-lane) axis that starts above 1
-/// and on a single level whose value's range starts elsewhere: each value
-/// is read at the region's element, as the whole-domain program places it.
+/// contract, each over exactly its region: a band of the vertical (non-lane)
+/// axis that starts above 1, and a single level. A value over other bounds
+/// than its region's is refused.
 #[test]
 fn makearray_faq_region_values_build_lanes() {
     let (nx, ny, nz) = (3, 2, 4);
     let u3 = |k: serde_json::Value| ix("u", vec![json!("i"), json!("j"), k]);
     let all = |n: i64| json!([1, n]);
-    let doc = model(
-        json!({"x": {"kind": "interval", "size": nx},
+    let doc = |k4: serde_json::Value| {
+        model(
+            json!({"x": {"kind": "interval", "size": nx},
                "y": {"kind": "interval", "size": ny},
                "z": {"kind": "interval", "size": nz}}),
-        json!({
-            "u": {"type": "unknown", "units": "1", "shape": ["x", "y", "z"], "default": 1.0},
-            "v": {"type": "unknown", "units": "1", "shape": ["x", "y"], "default": 1.0},
-            "c": {"type": "parameter", "units": "1", "shape": ["z"], "default": [0.5, 1.5, 2.5, 3.5]}
-        }),
-        json!([
-            {"lhs": d_of(json!("u")),
-             "rhs": {"op": "makearray", "args": [],
-                     "regions": [
-                         [all(nx), all(ny), all(nz)],
-                         [all(nx), all(ny), [2, 3]],
-                         [all(nx), all(ny), [4, 4]]],
-                     "values": [
-                         -1.0,
-                         // A filtered band on levels 2..3.
-                         {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
-                          "ranges": {"i": {"from": "x"}, "j": {"from": "y"}, "k": [2, 3]},
-                          "filter": {"op": "!=", "args": ["i", "k"]},
-                          "expr": {"op": "*", "args": [ix("c", vec![json!("k")]), u3(json!("k"))]}},
-                         // Level 4 holds a column sum over `m`, its own range
-                         // `k` running 1..1.
-                         {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
-                          "ranges": {"i": {"from": "x"}, "j": {"from": "y"}, "k": [1, 1], "m": {"from": "z"}},
-                          "expr": {"op": "*", "args": ["k", ix("c", vec![json!("m")]), u3(json!("m"))]}}
-                     ]}},
-            {"lhs": d_of(json!("v")),
-             "rhs": {"op": "makearray", "args": [],
-                     "regions": [[all(nx), all(ny)]],
-                     "values": [
-                         {"op": "faq", "args": [], "output_idx": ["i", "j"],
-                          "ranges": {"i": {"from": "x"}, "j": {"from": "y"}, "m": {"from": "z"}},
-                          "filter": {"op": "!=", "args": ["m", "i"]},
-                          "expr": {"op": "*", "args": ["j", u3(json!("m"))]}}
-                     ]}}
-        ]),
-    );
-    let prog = program(&doc, Compiler::Native);
+            json!({
+                "u": {"type": "unknown", "units": "1", "shape": ["x", "y", "z"], "default": 1.0},
+                "v": {"type": "unknown", "units": "1", "shape": ["x", "y"], "default": 1.0},
+                "c": {"type": "parameter", "units": "1", "shape": ["z"], "default": [0.5, 1.5, 2.5, 3.5]}
+            }),
+            json!([
+                {"lhs": d_of(json!("u")),
+                 "rhs": {"op": "makearray", "args": [],
+                         "regions": [
+                             [all(nx), all(ny), all(nz)],
+                             [all(nx), all(ny), [2, 3]],
+                             [all(nx), all(ny), [4, 4]]],
+                         "values": [
+                             -1.0,
+                             // A filtered band on levels 2..3.
+                             {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
+                              "ranges": {"i": {"from": "x"}, "j": {"from": "y"}, "k": [2, 3]},
+                              "filter": {"op": "!=", "args": ["i", "k"]},
+                              "expr": {"op": "*", "args": [ix("c", vec![json!("k")]), u3(json!("k"))]}},
+                             // Level 4 holds a column sum over `m`.
+                             {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
+                              "ranges": {"i": {"from": "x"}, "j": {"from": "y"}, "k": k4, "m": {"from": "z"}},
+                              "expr": {"op": "*", "args": ["k", ix("c", vec![json!("m")]), u3(json!("m"))]}}
+                         ]}},
+                {"lhs": d_of(json!("v")),
+                 "rhs": {"op": "makearray", "args": [],
+                         "regions": [[all(nx), all(ny)]],
+                         "values": [
+                             {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                              "ranges": {"i": {"from": "x"}, "j": {"from": "y"}, "m": {"from": "z"}},
+                              "filter": {"op": "!=", "args": ["m", "i"]},
+                              "expr": {"op": "*", "args": ["j", u3(json!("m"))]}}
+                         ]}}
+            ]),
+        )
+    };
+    let prog = program(&doc(json!([4, 4])), Compiler::Native);
     let lanes = prog
         .lanes(columns(&["x", "y"]), 4)
         .expect("a makearray of filtered and contracted faq values builds column lanes");
     assert_lanes_match(&prog, &lanes, &[nx, ny], 0.5);
+    // A value over other bounds than its region's is refused.
+    let err = program(&doc(json!([1, 1])), Compiler::Native)
+        .lanes(columns(&["x", "y"]), 4)
+        .expect_err("a value that does not fit its region exactly has no lane form");
+    assert!(
+        err.to_string().contains("does not run over its region"),
+        "{err}"
+    );
 }
 
 /// An array `faq` carrying `args` (or a `key`) names its output indices
