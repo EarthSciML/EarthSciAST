@@ -19,6 +19,7 @@ import Esm.Closed.Geometry.TemplateAst
 import Esm.Closed.Geometry.Padding
 import Esm.Closed.Relational.Keys
 import Esm.Closed.Relational.Count
+import Esm.Determinism
 import Esm.Closed.Enums
 import Esm.Units.Identities
 import Esm.Units.GrammarLaws

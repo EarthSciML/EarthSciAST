@@ -63,6 +63,21 @@ per-binding producers (the M2 value-equality joins and the M3 relational engine
    fails CI; `scripts/test-conformance.sh` drives each via
    `EARTHSCI_DETERMINISM_ADAPTER_<BINDING>`.
 
+The Lean model is an optional producer for the same three fixtures and their
+variants. Use the workflow's commands to build and score it locally.
+
+```sh
+(cd formal && lake build)
+EARTHSCI_DETERMINISM_ADAPTER_LEAN="formal/.lake/build/bin/esm-lean determinism" \
+  python3 scripts/run-determinism-conformance.py --bindings lean
+```
+
+The determinism adapter takes the manifest's producer inputs directly. It
+covers exact integer tuples and string-keyed integer sums. The proofs in
+`formal/Esm/Determinism.lean` also cover exact equality match sets, while
+the relational template tier exercises ESM's scalar key encodings and
+arg-witness templates.
+
 ## The contract (summary — normative text is `CONFORMANCE_SPEC.md` §5.5)
 
 Every emitted set, key, and dense ID is a **pure function of a defined total
