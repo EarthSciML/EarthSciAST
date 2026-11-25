@@ -754,13 +754,14 @@ impl Rewriter<'_> {
 
 impl Rewriter<'_> {
     /// An array `faq` region value of a makearray read at `subs`, at one
-    /// cell of its region: the region's element `r` along a covered axis is
-    /// the value's element `r - region_lo` from the start of its range
-    /// (§4.3.2; a value of lower rank covers the region's non-singleton
-    /// axes, in order), so an output index along a lane set is bound to the
-    /// lane's cell, and one along another axis to `origin + s - region_lo +
-    /// range_lo - 1` at that axis's subscript `s`. A value whose extents do
-    /// not fit the region is refused.
+    /// cell of its region. The value must fit the region exactly — each
+    /// output axis over the region's own bounds, along a lane set the whole
+    /// set (`from` it or `[1, n]`) — and the assembled array must start at 1
+    /// along every other axis; then the region's element at the read is the
+    /// value's element at the same coordinate, so an output index along a
+    /// lane set is bound to the lane's cell and one along another axis to
+    /// that axis's subscript. Anything else is refused (the Julia binding
+    /// refuses the same documents).
     fn region_faq(
         &mut self,
         f: &ExpressionNode,
@@ -771,73 +772,58 @@ impl Rewriter<'_> {
         sc: &LScope,
     ) -> RResult<Expr> {
         let outs = f.output_idx.as_deref().unwrap_or_default();
-        let ranges = f.ranges.clone().unwrap_or_default();
-        let mut value = Vec::with_capacity(outs.len());
-        for o in outs {
-            match ranges.get(o).and_then(|r| self.range_bounds(r)) {
-                Some(b) => value.push(b),
-                None => {
-                    return self.refuse(format_args!(
-                        "holds a faq region value whose axis `{o}` has no fixed range"
-                    ));
-                }
-            }
-        }
-        let mut bounds = Vec::with_capacity(region.len());
-        for b in region {
-            let Some([lo, hi]) = crate::types::region_bounds(b) else {
-                return self.refuse("holds a makearray with a symbolic region bound");
-            };
-            bounds.push((lo, hi));
-        }
-        let extent = |(lo, hi): (i64, i64)| (hi - lo + 1).max(0);
-        let value_ext: Vec<i64> = value.iter().map(|&b| extent(b)).collect();
-        let region_ext: Vec<i64> = bounds.iter().map(|&b| extent(b)).collect();
-        let covered: Vec<usize> = if value_ext == region_ext {
-            (0..region.len()).collect()
-        } else {
-            (0..region.len()).filter(|&d| region_ext[d] != 1).collect()
-        };
-        let fits = covered.len() == outs.len()
-            && covered
-                .iter()
-                .zip(&value_ext)
-                .all(|(&d, &e)| region_ext[d] == e);
-        if !fits {
+        if outs.len() != region.len() {
             return self.refuse("holds a faq region value that does not fit its region");
         }
+        let ranges = f.ranges.clone().unwrap_or_default();
         let mut binds = Vec::with_capacity(outs.len());
-        for ((o, &d), &(v_lo, _)) in outs.iter().zip(&covered).zip(&value) {
-            let off = origin[d] - bounds[d].0 + v_lo - 1;
+        for (d, o) in outs.iter().enumerate() {
+            let Some([lo, hi]) = crate::types::region_bounds(&region[d]) else {
+                return self.refuse("holds a makearray with a symbolic region bound");
+            };
+            let range = ranges.get(o);
             let b = match &lane_axes[d] {
-                Some(set) if off == 0 => OutBind::Lane(set.clone()),
                 Some(set) => {
-                    return self.refuse(format_args!(
-                        "holds a faq region value whose axis `{o}` is shifted along the lane set \
-                         `{set}`"
-                    ));
+                    if !range.is_some_and(|r| self.whole_lane_range(r, set)) {
+                        return self.refuse(format_args!(
+                            "holds a faq region value whose axis `{o}` does not run over the \
+                             whole lane set `{set}`"
+                        ));
+                    }
+                    OutBind::Lane(set.clone())
                 }
                 None => {
+                    if range.and_then(|r| self.range_bounds(r)) != Some((lo, hi)) {
+                        return self.refuse(format_args!(
+                            "holds a faq region value whose axis `{o}` does not run over its \
+                             region {lo}..{hi}"
+                        ));
+                    }
+                    if origin[d] != 1 {
+                        return self.refuse(
+                            "holds a faq region value in a makearray that does not start at 1",
+                        );
+                    }
                     let Expr::Variable(x) = &subs[d] else {
                         return self.refuse("subscripts a makearray at a computed position");
                     };
-                    let s = match sc.alias(x) {
-                        Some(e) => e.clone(),
-                        None => subs[d].clone(),
-                    };
-                    match off {
-                        0 => OutBind::At(s),
-                        _ => OutBind::At(Expr::operator(ExpressionNode {
-                            op: "+".to_string(),
-                            args: vec![s, Expr::Integer(off)],
-                            ..Default::default()
-                        })),
-                    }
+                    OutBind::At(sc.alias(x).cloned().unwrap_or_else(|| subs[d].clone()))
                 }
             };
             binds.push((o.clone(), b));
         }
         self.faq_at(f, binds, sc)
+    }
+
+    /// Whether the range `r` runs over the whole lane set `set`: `from` it,
+    /// or `[1, n]`.
+    fn whole_lane_range(&self, r: &crate::types::RangeSpec, set: &str) -> bool {
+        let n = self.sizes.get(set).copied().unwrap_or(-1);
+        match r {
+            crate::types::RangeSpec::IndexSetRef { from, of: None } => from == set,
+            crate::types::RangeSpec::Interval([lo, hi]) => *lo == 1 && *hi == n,
+            _ => false,
+        }
     }
 
     /// `index(faq{output_idx o, ranges, expr}, s…)` at the lane's own cell:
@@ -867,8 +853,7 @@ impl Rewriter<'_> {
             };
             let range = ranges.get(o).and_then(|r| self.range_bounds(r));
             if let Some(set) = sc.lane_set(x) {
-                let n = self.sizes.get(set).copied().unwrap_or(-1);
-                if range != Some((1, n)) {
+                if !ranges.get(o).is_some_and(|r| self.whole_lane_range(r, set)) {
                     return self.refuse(format_args!(
                         "reads an array faq whose axis `{o}` does not run over the whole lane \
                          set `{set}`"
