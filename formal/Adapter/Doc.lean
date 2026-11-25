@@ -1,4 +1,5 @@
 import Lean.Data.Json
+import Esm.Float64.Decimal
 import Esm.Document.Source.TypstDoc
 
 /-! `esm-lean canon|print-md|parse-md|print-typ|parse-typ <file>`: the document source formats.
@@ -19,7 +20,7 @@ document value type with numbers in the canonical form of CONFORMANCE §5.5.3.1.
 
 namespace Adapter.Doc
 
-open Esm.Document
+open Esm.Document Esm.F64.Decimal
 
 /-! ### Numbers
 
@@ -30,45 +31,15 @@ and in `Int64`, else its shortest round-trip decimal digits. All arithmetic is e
 natural-number fractions (`Float.ofScientific` truncates before it rounds, so it is not
 correctly rounded). Unproved adapter code, pinned by the golden files. -/
 
-/-- `n / d` rounded to a natural number, ties to even (`d > 0`). -/
-def roundHalfEven (n d : Nat) : Nat :=
-  let q := n / d
-  let r := n % d
-  if 2 * r > d then q + 1 else if 2 * r < d then q else if q % 2 = 0 then q else q + 1
-
-/-- The fraction `n / d` times `2^k`. -/
-def scale2 (n d : Nat) (k : Int) : Nat × Nat :=
-  if 0 ≤ k then (n * 2 ^ k.toNat, d) else (n, d * 2 ^ (-k).toNat)
+/-- Round a positive rational to binary64 for the JSON serializers. -/
+abbrev toBinary64 := Esm.F64.Decimal.toBinary64
 
 /-- The fraction `n / d` times `10^k`. -/
 def scale10 (n d : Nat) (k : Int) : Nat × Nat :=
   if 0 ≤ k then (n * 10 ^ k.toNat, d) else (n, d * 10 ^ (-k).toNat)
 
-/-- `⌊log_b (n / d)⌋` for `n, d > 0`: the first guess `g`, moved one step at a time
-(`fuel` bounds the steps). `le e` decides `b^e ≤ n / d`. -/
-def floorLog (le : Int → Bool) (g : Int) : Nat → Int
-  | 0 => g
-  | fuel + 1 =>
-    if !le g then floorLog le (g - 1) fuel
-    else if le (g + 1) then floorLog le (g + 1) fuel
-    else g
-
-/-- `2^e ≤ n / d`. -/
-def pow2Le (n d : Nat) (e : Int) : Bool := let (a, b) := scale2 d 1 e; decide (a ≤ n * b)
-
 /-- `10^e ≤ n / d`. -/
 def pow10Le (n d : Nat) (e : Int) : Bool := let (a, b) := scale10 d 1 e; decide (a ≤ n * b)
-
-/-- The positive fraction `n / d` rounded to binary64, ties to even: `(M, k)` with value
-`M × 2^k`, `M < 2^53`, and `2^52 ≤ M` unless `k = -1074` (a subnormal). `none` when it
-overflows. -/
-def toBinary64 (n d : Nat) : Option (Nat × Int) :=
-  let t := floorLog (pow2Le n d) ((Nat.log2 n : Int) - Nat.log2 d) 4
-  let k := max (t - 52) (-1074)
-  let (a, b) := scale2 n d (-k)
-  let m := roundHalfEven a b
-  let (m, k) := if m = 2 ^ 53 then (2 ^ 52, k + 1) else (m, k)
-  if k > 971 then none else some (m, k)
 
 /-- The digits of a positive natural number, most significant first. -/
 def natDigits (c : Nat) : List Nat := (Nat.toDigits 10 c).map (fun ch => ch.toNat - 48)

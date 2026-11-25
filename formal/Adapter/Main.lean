@@ -1,4 +1,5 @@
 import Adapter.Templates
+import Adapter.Static
 import Adapter.Units
 import Adapter.Doc
 
@@ -9,6 +10,7 @@ def usage : String :=
   "usage: esm-lean <mode> <args>…\n" ++
   "modes:\n" ++
   "  templates <document.esm> [model [case.json]] evaluate the apply_operator equations of a document\n" ++
+  "  static-assertions <doc.esm> <model> evaluate requested static assertions (JSON on stdin)\n" ++
   "  units <unit_verdicts.json> resolve every unit string in a unit-registry golden\n" ++
   "  canon <doc.esm>              print a document in canonical form (compact JSON)\n" ++
   "  print-md <doc.esm>           print a document as Markdown\n" ++
@@ -19,6 +21,7 @@ def usage : String :=
 def main (args : List String) : IO UInt32 := do
   match args with
   | "templates" :: rest => Adapter.Templates.main rest
+  | "static-assertions" :: rest => Adapter.Static.main rest
   | "units" :: rest => Adapter.Units.main rest
   | m :: rest =>
     if m ∈ ["canon", "print-md", "parse-md", "print-typ", "parse-typ"] then Adapter.Doc.main m rest
