@@ -1335,6 +1335,12 @@ catch e
         occursin("lane", sprint(showerror, e)) ? :refused : e
 end
 
+# A lane spec for calling the lane rewrite directly: :cells lanes over `x` (3).
+_rrt_lane_spec() = RRT._LaneSpec(
+    :cells, ["x"], 4, Dict("u" => ["x"]), Dict("x" => zeros(4)), RRT._LaneGather[],
+    Set{String}(["u"]), Dict{String, Vector{String}}(), Dict{String, Int}(), Dict("x" => 3), false
+)
+
 # The renaming of an array faq's output indices to the subscripts it is read
 # at, and where the faq sits in a `makearray` region (#780 review).
 @testset "lanes read an array faq at exactly its own cells" begin
@@ -1401,6 +1407,46 @@ end
         ]
     )
     @test _rrt_lane_refusal(() -> lanes(rhs_program(prob), :cells, ["x", "y"]; chunk = 4)) === :refused
+
+    # An array faq carrying `join` or `distinct` is refused. No whole-domain
+    # program reads one this way (it is a value-invention producer), so the
+    # lane rewrite is called directly.
+    let ESA = EarthSciAST, V = EarthSciAST.VarExpr
+        spec = _rrt_lane_spec()
+        scope = ESA._LaneScope(
+            Dict("l" => "x"), "l", Dict{String, UnitRange{Int}}(), Dict{String, Any}("l" => Dict("from" => "x"))
+        )
+        for extra in ((; distinct = true), (; join = Any[Dict("on" => Any["i"])]))
+            F = ESA.OpExpr(
+                "faq", ESA.ASTExpr[]; output_idx = Any["i"],
+                ranges = Dict{String, Any}("i" => Dict("from" => "x")),
+                expr_body = ESA.OpExpr("index", ESA.ASTExpr[V("u"), V("i")]), extra...
+            )
+            read = ESA.OpExpr("index", ESA.ASTExpr[F, V("l")])
+            @test _rrt_lane_refusal(
+                () -> ESA._lane_rewrite(spec, (; arrays = Dict{String, Any}()), read, scope, "rule")
+            ) === :refused
+        end
+    end
+
+    # A bare read on a non-lane axis whose subscript runs over a range that
+    # does not start at 1 is refused (a read by position).
+    lhs_b(name, brange) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["a", "b"],
+        "ranges" => Dict("a" => Dict("from" => "x"), "b" => brange),
+        "expr" => Dict("op" => "D", "args" => Any[ix(name, "a", "b")], "wrt" => "t")
+    )
+    xk25 = Dict("i" => Dict("from" => "x"), "k" => Any[2, 5])
+    prob = _rrt_doc_of(
+        "laneoffset", Dict("x" => 3, "z" => 5), Dict("u" => st(["x", "z"])), Any[
+            Dict("lhs" => lhs_b("u", Any[1, 1]), "rhs" => op("*", -1.0, ix("u", "a", "b"))),
+            Dict(
+                "lhs" => lhs_b("u", Any[2, 5]),
+                "rhs" => ix(faq(["i", "k"], xk25, op("*", "k", ix("u", "i", "k"))), "a", "b")
+            ),
+        ]
+    )
+    @test _rrt_lane_refusal(() -> lanes(rhs_program(prob), :columns, ["x"]; chunk = 4)) === :refused
 
     # A makearray band whose value fits its region on a non-lane axis that
     # starts above 1: read at the absolute subscript, as the whole domain does.

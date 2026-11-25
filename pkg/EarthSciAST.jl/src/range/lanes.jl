@@ -440,9 +440,14 @@ function _lane_faq_read(
     )
     outs = _output_idx_strings(F)
     length(outs) == length(subs) || _lane_refuse(rule, "an array faq is read at the wrong rank")
-    # `args` and `key` are scoped to the node itself; the body alone moves.
-    (isempty(F.args) && F.key === nothing) ||
-        _lane_refuse(rule, "an array faq read inside the lane scope carries `args` or `key`")
+    # `args`, `key`, `join` and `distinct` are scoped to the node itself (they
+    # name its output indices); the body alone moves.
+    (
+        isempty(F.args) && F.key === nothing &&
+            (F.join === nothing || isempty(F.join)) && F.distinct !== true
+    ) || _lane_refuse(
+        rule, "an array faq read inside the lane scope carries `args`, `key`, `join` or `distinct`"
+    )
     renames = Dict{String, ASTExpr}()
     names = Set{String}()
     for (d, (o, s)) in enumerate(zip(outs, subs))
@@ -463,7 +468,8 @@ function _lane_faq_read(
             lane_ok
         else
             sr = get(sc.ranges, sn, nothing)
-            rb !== nothing && sr !== nothing && _lane_range_bounds(spec, sr) == rb
+            # Read by position, as Rust does: the subscript's range starts at 1.
+            rb !== nothing && sr !== nothing && _lane_range_bounds(spec, sr) == rb && rb[1] == 1
         end
         fits || _lane_refuse(
             rule, "an array faq's axis '$o' does not run over the whole of what reads it"
