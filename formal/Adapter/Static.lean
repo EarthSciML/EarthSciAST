@@ -102,22 +102,44 @@ private def evalRequest (model : Model) (tests : Array Json) (request : Json) : 
   let value ← model.value name atTime (test.getObjValD "parameter_overrides")
   return .str (toString value.toBits)
 
+private def evaluateRequests (doc : Json) (name : String) (requests : Json) : Except String Json := do
+  let component ← (← doc.getObjVal? "models").getObjVal? name
+  let model ← readModel doc component
+  let tests ← (← component.getObjVal? "tests").getArr?
+  return .arr (← (← requests.getArr?).mapM (evalRequest model tests))
+
 def main : List String → IO UInt32
   | [path, name] => do
     let source ← IO.FS.readFile path
     let input ← (← IO.getStdin).readToEnd
-    let result : Except String Json := do
-      let doc ← Json.parse source
-      let component ← (← doc.getObjVal? "models").getObjVal? name
-      let model ← readModel doc component
-      let tests ← (← component.getObjVal? "tests").getArr?
-      let requests ← (← Json.parse input).getArr?
-      return .arr (← requests.mapM (evalRequest model tests))
+    let result := do evaluateRequests (← Json.parse source) name (← Json.parse input)
     match result with
     | .ok values => IO.println values.compress; return 0
     | .error message => IO.eprintln message; return 1
   | _ => do
     IO.eprintln "usage: esm-lean static-assertions <document.esm> <model>"
+    return 2
+
+/-- One request per line, with failures returned in-band so the next request
+can still be evaluated. The fixture and request shapes match the file mode. -/
+def batch : List String → IO UInt32
+  | [name] => do
+    let stdin ← IO.getStdin
+    let stdout ← IO.getStdout
+    repeat
+      let line ← stdin.getLine
+      if line.isEmpty then break
+      let result : Except String Json := do
+        let input ← Json.parse line
+        evaluateRequests (← input.getObjVal? "document") name (← input.getObjVal? "requests")
+      let response := match result with
+        | .ok values => Json.mkObj [("values", values)]
+        | .error message => Json.mkObj [("error", .str message)]
+      stdout.putStrLn response.compress
+      stdout.flush
+    return 0
+  | _ => do
+    IO.eprintln "usage: esm-lean static-assertions-jsonl <model>"
     return 2
 
 end Adapter.Static
