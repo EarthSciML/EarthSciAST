@@ -13,6 +13,7 @@ def usage : String :=
   "modes:\n" ++
   "  templates <document.esm> [model [case.json]] evaluate the apply_operator equations of a document\n" ++
   "  static-assertions <doc.esm> <model> evaluate requested static assertions (JSON on stdin)\n" ++
+  "  static-assertions-jsonl <model> evaluate static assertions for a stream of ESM documents\n" ++
   "  units <unit_verdicts.json> resolve every unit string in a unit-registry golden\n" ++
   "  expressions <fixture.json> … parse and emit bare expressions for property-corpus conformance\n" ++
   "  canon <doc.esm>              print a document in canonical form (compact JSON)\n" ++
@@ -27,6 +28,7 @@ def main (args : List String) : IO UInt32 := do
   | "determinism" :: rest => Adapter.Determinism.main rest
   | "templates" :: rest => Adapter.Templates.main rest
   | "static-assertions" :: rest => Adapter.Static.main rest
+  | "static-assertions-jsonl" :: rest => Adapter.Static.batch rest
   | "units" :: rest => Adapter.Units.main rest
   | "expressions" :: rest => Adapter.Expressions.main rest
   | m :: rest =>

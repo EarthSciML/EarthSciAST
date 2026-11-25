@@ -159,6 +159,7 @@ instance : ExprLaws Bin64Z where
   sub_int m k h1 h2 h3 := ExprLaws.sub_int (α := Bin64) m k h1 h2 h3
   toInt_int m := ExprLaws.toInt_int (α := Bin64) m
   isNaN_fin r := ExprLaws.isNaN_fin (α := Bin64) r
+  ltExtrema_fin _ _ := rfl
 
 end Bin64Z
 

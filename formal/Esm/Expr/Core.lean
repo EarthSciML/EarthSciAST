@@ -261,11 +261,14 @@ def ofBool (b : Bool) : α := if b then one else zero
 /-- An `ifelse` condition holds when it is a nonzero number (false for NaN). -/
 def truthy (v : α) : Bool := lt zero v || lt v zero
 
-/-- IEEE 754-2019 `maximum` on the model's values: NaN if either side is. -/
-def fmax (a b : α) : α := if isNaN a then a else if isNaN b then b else if lt a b then b else a
+/-- IEEE 754-2019 `maximum`: NaN if either side is NaN. At `Float`, the
+extrema order places `-0.0` below `+0.0`. -/
+def fmax (a b : α) : α :=
+  if isNaN a then a else if isNaN b then b else if ltExtrema a b then b else a
 
 /-- IEEE 754-2019 `minimum`. -/
-def fmin (a b : α) : α := if isNaN a then a else if isNaN b then b else if lt b a then b else a
+def fmin (a b : α) : α :=
+  if isNaN a then a else if isNaN b then b else if ltExtrema b a then b else a
 
 def asNum : Val α → Except EvalError α
   | .num v => .ok v
