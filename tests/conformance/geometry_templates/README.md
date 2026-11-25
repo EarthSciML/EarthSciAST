@@ -17,8 +17,19 @@ right areas.
 |---|---|---|
 | `planar_overlap` | `fixtures/planar_overlap.esm` | 4 × 3 cell pairs: identical cells (padded differently), an adjacent pair (shared edge, opposite directions), corner and edge touches, nested and partial overlaps, a clockwise ring, a pentagon in a hexagon slot, and padding by a closing duplicate, trailing repeats and a leading repeat. The template, the template behind the overlap join gate, and the template again in `A_leaf` (the variable that held the leaf before esm 2.0.0) are each asserted exactly (tolerance 0): every coordinate and area is dyadic. |
 | `spherical_fan` | `fixtures/spherical_fan.esm` | A meridian fan on the unit sphere: four 15° triangles tiling two 30° triangles along shared great-circle arcs, every ring padded to four slots, the unit-vector stacks built by a `faq` over `lonlat_to_unit`. Nested pairs give `π/12` sr by Girard's theorem (CONFORMANCE_SPEC §5.8.2 band), touching pairs exactly `0`, and each target's row sum `π/6`. |
+| `nested_overlap_regrid` | `fixtures/nested_overlap_regrid.esm` | The EarthSciDiscretizations conservative-overlap regrid (`regridding/conservative_overlap.esm`) as reseact's NEI emissions apply it: a definition whose body applies another definition (the narrow phase `A_ij` is the pairwise skeleton `pairs(area = area_ij(…))`, and `area_ij` reads the skeleton's loop symbols `i` and `j`), gated behind the overlap join and dense, then the gated row sum and apply; the rings live in a second component, and the gated skeleton takes its envelopes as parameters in a structural position. 3 × 3 unit cells onto 2 × 2 cells of side 1.5: every area exact, each target's covered area, and the regridded field integrated for one unit of time. Every definition is compiled as its own function, called from the one that applies it. |
 
 The goldens are the Julia interpreter's.
+
+Rust and Python passed `nested_overlap_regrid` as authored. Julia failed it under
+both compilers, twice over: a structural instance a validation pass registered
+reached the document's own registry, where flatten closed it as a declaration
+and the build then refused the gated narrow phase ("cannot be compiled as a
+call: body (top apply_operator)"); and the dense skeleton's binding
+`area_ij(…)` was evaluated in the caller, where the loop symbol it reads is no
+name ("unbound name 'i'"). Julia now keeps what a template table registers in
+a registry of its own, and compiles a binding that reads a name any body it
+reaches binds into the instance, as the expansion captures it.
 
 ## What is not here
 

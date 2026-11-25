@@ -1,0 +1,487 @@
+{
+  "fixture": "nested_overlap_regrid",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 1,
+      "variable": "A_ij",
+      "actual": 1.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 2,
+      "variable": "A_dense",
+      "actual": 1.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 3,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 4,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 5,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 6,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 7,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 8,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 9,
+      "variable": "A_ij",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 10,
+      "variable": "A_dense",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 11,
+      "variable": "A_ij",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 12,
+      "variable": "A_dense",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 13,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 14,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 15,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 16,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 17,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 18,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 19,
+      "variable": "A_ij",
+      "actual": 1.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 20,
+      "variable": "A_dense",
+      "actual": 1.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 21,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 22,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 23,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 24,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 25,
+      "variable": "A_ij",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 26,
+      "variable": "A_dense",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 27,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 28,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 29,
+      "variable": "A_ij",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 30,
+      "variable": "A_dense",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 31,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 32,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 33,
+      "variable": "A_ij",
+      "actual": 0.25
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 34,
+      "variable": "A_dense",
+      "actual": 0.25
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 35,
+      "variable": "A_ij",
+      "actual": 0.25
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 36,
+      "variable": "A_dense",
+      "actual": 0.25
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 37,
+      "variable": "A_ij",
+      "actual": 0.25
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 38,
+      "variable": "A_dense",
+      "actual": 0.25
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 39,
+      "variable": "A_ij",
+      "actual": 0.25
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 40,
+      "variable": "A_dense",
+      "actual": 0.25
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 41,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 42,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 43,
+      "variable": "A_ij",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 44,
+      "variable": "A_dense",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 45,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 46,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 47,
+      "variable": "A_ij",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 48,
+      "variable": "A_dense",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 49,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 50,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 51,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 52,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 53,
+      "variable": "A_ij",
+      "actual": 1.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 54,
+      "variable": "A_dense",
+      "actual": 1.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 55,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 56,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 57,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 58,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 59,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 60,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 61,
+      "variable": "A_ij",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 62,
+      "variable": "A_dense",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 63,
+      "variable": "A_ij",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 64,
+      "variable": "A_dense",
+      "actual": 0.5
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 65,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 66,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 67,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 68,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 69,
+      "variable": "A_ij",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 70,
+      "variable": "A_dense",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 71,
+      "variable": "A_ij",
+      "actual": 1.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 72,
+      "variable": "A_dense",
+      "actual": 1.0
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 73,
+      "variable": "A_j",
+      "actual": 2.25
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 74,
+      "variable": "A_j",
+      "actual": 2.25
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 75,
+      "variable": "A_j",
+      "actual": 2.25
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 76,
+      "variable": "A_j",
+      "actual": 2.25
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 77,
+      "variable": "E[1]",
+      "actual": 2.3333333333333326
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 78,
+      "variable": "E[2]",
+      "actual": 3.666666666666665
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 79,
+      "variable": "E[3]",
+      "actual": 6.333333333333331
+    },
+    {
+      "test_id": "nested_overlap_regrid",
+      "assertion_idx": 80,
+      "variable": "E[4]",
+      "actual": 7.666666666666665
+    }
+  ]
+}

@@ -436,7 +436,13 @@ function _call_target(ct::_CallTable, call::OpExpr)
     ibody = _call_ibody(ct.tt, def, S, outs)
     # Each read the caller makes is the argument `"\0lane\0k"`.
     hp === nothing || (ibody = hp.body)
-    isempty(inl) || (ibody = _tpl_subst_scoped(ibody, inl, IdDict{OpExpr, ASTExpr}()))
+    if !isempty(inl)
+        ibody = _tpl_subst_scoped(ibody, inl, IdDict{OpExpr, ASTExpr}())
+        # A captured name an element call in the body binds as an output
+        # index is that call's subscript (`_call_capture_subscripts`).
+        cap = _call_captured_reads(ct.tt, def.name, inl)
+        isempty(cap) || (ibody = _call_capture_subscripts(ct.tt, ibody, cap, IdDict{OpExpr, ASTExpr}()))
+    end
     isempty(ainl) || (ibody = _call_subst_arrays(ibody, _call_array_skels(ainl), IdDict{OpExpr, ASTExpr}()))
     arrslots = sort!(collect(keys(arrkind)))
     # Scalar slots: the argument sentinels in the order the body first reads
@@ -827,7 +833,7 @@ function _call_inl_mode(tt::_TplTable, info::_TplCallInfo, def::_TplDef, p::Stri
     sn = _TPL_ARG * p
     (sn in info.arrays || sn in info.fixed || !(sn in info.scalars)) && return :none
     _inl_is_marked(v) && return :marked
-    B = _tpl_body_binders(tt, def.name)
+    B = _tpl_capture_names(tt, def.name)
     rb = !isempty(B) && _tpl_reads_any(v, B)
     if !rb
         sn in info.uncond && return :none
@@ -838,9 +844,8 @@ function _call_inl_mode(tt::_TplTable, info::_TplCallInfo, def::_TplDef, p::Stri
         # range only on a branch the body does not take is never read.
         _tpl_value_leaf(v) && return :none
     end
-    # A template call in a binding that reads a name the body binds is not
-    # compiled in (`_tpl_compiles` refuses it).
-    _tpl_inlinable(v, rb ? nothing : tt) || return :none
+    # A template call in a binding stays a call inside the instance.
+    _tpl_inlinable(v, tt) || return :none
     return (rb || _inl_has_index(v)) ? :marked : :plain
 end
 
@@ -920,6 +925,68 @@ function _inl_mkey(v::ASTExpr)
         return string("(call ", v.name, " ", join((string(repr(k), "=", _inl_mkey(b[k])) for k in sort!(collect(keys(b)))), " "), ")")
     end
     return string("(", v.op, " ", join((_inl_mkey(x) for x in v.args), " "), ")")
+end
+
+# ---- Captured names ---------------------------------------------------------------
+# A binding compiled into the instance keeps each name a body binds as a name
+# (`_inl_mark`): the expansion substitutes the binding into the body, where
+# that name is the binder's. A body reached through a reference binds it there
+# too (frames.jl `_tpl_capture_names`): the name stays in the binding of that
+# reference inside the instance, and the reference's own call compiles it in
+# again, down to the body that binds it. Where that is an element call, whose
+# output index is no binder of its element body but an argument
+# (`"\0out\0o"`), the captured name is read as the call's subscript for
+# that output, which is the value the expansion's loop gives it there.
+
+# The captured names the compiled-in bindings `inl` of a reference to `name`
+# read.
+function _call_captured_reads(tt::_TplTable, name::String, inl::Dict{String, ASTExpr})
+    B = _tpl_capture_names(tt, name)
+    out = Set{String}()
+    isempty(B) && return out
+    for (_, v) in inl
+        foreach_subexpr(v) do x
+            x isa VarExpr && x.name in B && push!(out, x.name)
+        end
+        v isa VarExpr && v.name in B && push!(out, v.name)
+    end
+    return out
+end
+
+# `e` with each read of a captured name `c` (of `cap`) in a binding of an
+# element call whose template has `c` as an output index replaced by the
+# call's subscript for it. A node that binds `c` itself scopes it.
+function _call_capture_subscripts(tt::_TplTable, e::ASTExpr, cap::Set{String}, memo::IdDict{OpExpr, ASTExpr})
+    e isa OpExpr || return e
+    r = get(memo, e, nothing)
+    r === nothing || return r
+    bound = intersect(cap, _bound_symbols(e))
+    inner = isempty(bound) ? cap : setdiff(cap, bound)
+    if isempty(inner)
+        r = e
+    elseif _tpl_is_call(e) && _tpl_is_elem(e)
+        info = _tpl_call_info(tt, e.name)
+        b = e.bindings::AbstractDict
+        m = Dict{String, ASTExpr}()
+        if info !== nothing
+            for o in info.outs
+                o in inner && (m[o] = b[_TPL_OUT * o])
+            end
+        end
+        rest = isempty(m) ? inner : setdiff(inner, keys(m))
+        nb = Dict{String, ASTExpr}()
+        for (k, v) in b
+            x = startswith(k, _TPL_OUT) || isempty(m) ? v : _tpl_subst_scoped(v, m, IdDict{OpExpr, ASTExpr}())
+            nb[k] = isempty(rest) ? x : _call_capture_subscripts(tt, x, rest, IdDict{OpExpr, ASTExpr}())
+        end
+        r = reconstruct(e; bindings = nb)
+    else
+        # The memo is per set of names in scope.
+        mm = inner === cap ? memo : IdDict{OpExpr, ASTExpr}()
+        r = map_children(c -> _call_capture_subscripts(tt, c, inner, mm), e)
+    end
+    memo[e] = r
+    return r
 end
 
 # ---- Array expressions compiled into the instance -------------------------------
@@ -1005,7 +1072,7 @@ function _call_mark_inlined(leaf, arr, tt::_TplTable, call::OpExpr)
     (info === nothing || call.bindings === nothing) && return call
     def = _tpl_def(tt, call.name)
     def.closed === nothing && return call
-    B = _tpl_body_binders(tt, call.name)
+    B = _tpl_capture_names(tt, call.name)
     nb = nothing
     for p in def.params
         v = get(call.bindings, p, nothing)

@@ -1309,9 +1309,9 @@ function _build_evaluator_impl_inner(
     # (`serialize_esm_file` emits them verbatim — R1).
     if _template_reg !== nothing
         model = _expansion_copy(model)
-        # The build's own registry: structural instances and view parts are
-        # registered in it, never in the caller's (call.jl `_tpl_prepare_model!`).
-        _template_reg = copy(_template_reg)
+        # Structural instances and view parts are registered in the template
+        # table's own copy of the registry, never in the caller's (frames.jl
+        # `_TplTable`).
         model, calls = _tpl_prepare_model!(model, _template_reg, index_sets, _vi_extents)
         # A computed array bound to an array parameter becomes the build's own
         # array observed, passed by name (call.jl `_hoist_array_arguments`).

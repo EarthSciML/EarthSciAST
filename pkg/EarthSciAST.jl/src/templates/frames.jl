@@ -78,6 +78,16 @@ end
 
 The template instances of one build or analysis against the registry `reg`:
 the prepared bodies, the frames by instance key, and the binding-key memo.
+
+The table reads a COPY of `reg` (a shallow one: the declarations are shared,
+never mutated). What it registers — a structural instance
+(`_tpl_register_instance!`), a view part (`_tpl_skel`) — is the table's own and
+never reaches the caller's registry. A validation or analysis table is built on
+a document's own registry (`file.component_templates`), and an instance left
+there would be read later as one of the document's declarations: flatten closes
+every declaration (`_tpl_explicit_free`), which makes the names an instance's
+body was substituted with into parameters again, so its instance would be a
+structural template that no build can call.
 """
 mutable struct _TplTable
     reg::Any
@@ -89,7 +99,7 @@ mutable struct _TplTable
     root_memos::Dict{Symbol, Any}
 end
 _TplTable(reg) = _TplTable(
-    reg, Dict{String, _TplDef}(), Dict{Tuple{String, String}, _TplClosed}(),
+    reg isa AbstractDict ? copy(reg) : reg, Dict{String, _TplDef}(), Dict{Tuple{String, String}, _TplClosed}(),
     Dict{String, _TplFrame}(), IdDict{Any, IdDict{ASTExpr, String}}(), Set{String}(),
     Dict{Symbol, Any}()
 )
@@ -1575,11 +1585,12 @@ function _tpl_compiles(tt::_TplTable, call::OpExpr)
         # A parameter the body never reads: its binding is never made.
         s in info.scalars || continue
         # A binding that reads a name the body binds (a reduction index the
-        # body runs, which the expansion would capture) is compiled into the
-        # instance, read where the body binds the name.
-        B = _tpl_body_binders(tt, call.name)
+        # body runs, or one a body it references binds, which the expansion
+        # would capture) is compiled into the instance, read where that body
+        # binds the name. A template call in it stays a call there.
+        B = _tpl_capture_names(tt, call.name)
         if !isempty(B) && _tpl_reads_any(v, B)
-            _tpl_inlinable(v) || return false
+            _tpl_inlinable(v, tt) || return false
             continue
         end
         s in info.uncond && continue
@@ -1680,6 +1691,43 @@ function _tpl_body_binders(tt::_TplTable, name)
         walk(b)
         out
     end
+end
+
+# The names a binding of a reference to `name` is CAPTURED by: those the
+# template's prepared body binds (`_tpl_body_binders`), and through every
+# reference in that body, the names the referenced template captures in turn,
+# with the output indices of an array-valued one. The expansion substitutes a
+# binding into the body, and a body passes it on into the bodies it
+# references, so a name any of those binds is the binder's there, not the
+# caller's (EarthSciAST Rust `captured_symbols`: the binders of the instance
+# body and of every body it reaches). The library's narrow phase
+# (`A_ij(i = i)` around `pairs(area = area_ij(i = i))`, whose `faq` binds
+# `i`) reads its loop symbols this way.
+function _tpl_capture_names(tt::_TplTable, name)
+    memo = _tpl_memo(tt, nothing, :capture_names, () -> Dict{String, Set{String}}())
+    got = get(memo, String(name), nothing)
+    got === nothing || return got
+    # The template graph is acyclic (esm-spec §9.7.3); the placeholder only
+    # keeps a malformed registry from recursing forever.
+    memo[String(name)] = Set{String}()
+    out = copy(_tpl_body_binders(tt, name))
+    def = _tpl_def(tt, name)
+    if def.closed !== nothing
+        seen = IdDict{OpExpr, Nothing}()
+        function walk(e)
+            e isa OpExpr || return
+            haskey(seen, e) && return
+            seen[e] = nothing
+            if _tpl_is_call(e) && e.name isa AbstractString
+                union!(out, _tpl_capture_names(tt, e.name))
+                info = _tpl_call_info(tt, e.name)
+                info === nothing || union!(out, info.outs)
+            end
+            return foreach_child(walk, e)
+        end
+        walk(def.closed.body)
+    end
+    return memo[String(name)] = out
 end
 
 # Does `e` read (as a variable leaf) any of the names `B`?

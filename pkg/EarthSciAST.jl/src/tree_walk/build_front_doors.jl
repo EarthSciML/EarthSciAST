@@ -432,10 +432,11 @@ function _front_door(
         if _tmpl_reg !== nothing
             # The pre-passes read the model as the build does: references
             # compiled as calls, with the template table in the build state
-            # (`_tpl_prepare_model!`, on a copy and against a copy of the
-            # registry; the impl prepares its own from `file`).
+            # (`_tpl_prepare_model!`, on a copy; the template table registers
+            # into a copy of the registry of its own, and the impl prepares its
+            # own from `file`).
             model = _expansion_copy(model)
-            model, _ = _tpl_prepare_model!(model, copy(_tmpl_reg), file.index_sets, Dict{String, Int}(); refuse = false)
+            model, _ = _tpl_prepare_model!(model, _tmpl_reg, file.index_sets, Dict{String, Int}(); refuse = false)
         end
     end
 
