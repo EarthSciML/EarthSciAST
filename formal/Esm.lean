@@ -30,6 +30,7 @@ import Esm.Digits
 import Esm.Units.Canonical
 import Esm.Units.Typeset
 import Esm.Units.CanonicalExamples
+import Esm.Units.ScalarCheck
 import Esm.Document.Notation
 import Esm.Document.Json
 import Esm.Document.Number
