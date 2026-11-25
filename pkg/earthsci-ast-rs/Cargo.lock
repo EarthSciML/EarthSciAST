@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "earthsci-ast"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "criterion",
  "diffsol",
@@ -1013,10 +1013,10 @@ dependencies = [
 
 [[package]]
 name = "earthsci-ast-cli"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "clap",
- "earthsci-ast 0.15.0",
+ "earthsci-ast 0.15.1",
  "earthsci-integrator",
  "earthsci-integrator-planner",
  "indexmap",
