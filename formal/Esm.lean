@@ -20,6 +20,7 @@ import Esm.Closed.Geometry.Padding
 import Esm.Closed.Relational.Keys
 import Esm.Closed.Relational.Count
 import Esm.Closed.Enums
+import Esm.Semiring.Laws
 import Esm.Units.Identities
 import Esm.Units.GrammarLaws
 import Esm.Units.Exec

@@ -608,6 +608,7 @@ theorem ev_faqw_min {k : String} {P body : Ast} {args : List Ast} {env : Env α}
     simpa using toInt_nat (α := α) 1
   have hi : indices 1 (n : ℤ) = (List.range n).map (fun i : ℕ => (1 : ℤ) + (i : ℤ)) := by
     simp [indices]
+  have hred : ("min" : String) ≠ "bool_and_or" := by decide
   simp only [eval, asNum, asInt, o1, t1, toInt_n hn, bind, Except.bind, pure, Except.pure,
     Option.bind, hi]
   rw [foldlM_opt fmin Pb g n _ ?_ n le_rfl]
@@ -639,6 +640,7 @@ theorem ev_faqw_max {k : String} {P body : Ast} {args : List Ast} {env : Env α}
     simpa using toInt_nat (α := α) 1
   have hi : indices 1 (n : ℤ) = (List.range n).map (fun i : ℕ => (1 : ℤ) + (i : ℤ)) := by
     simp [indices]
+  have hred : ("max" : String) ≠ "bool_and_or" := by decide
   simp only [eval, asNum, asInt, o1, t1, toInt_n hn, bind, Except.bind, pure, Except.pure,
     Option.bind, hi]
   rw [foldlM_opt fmax Pb g n _ ?_ n le_rfl]

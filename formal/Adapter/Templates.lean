@@ -92,7 +92,7 @@ partial def astOf (j : Json) : Except String Ast := do
     let allowed : List String := ["id", "expect_cadence"] ++
       (if op == "const" then ["op", "args", "value", "units"]
       else if op == "apply_operator" || op == "apply_expression_template" then ["op", "args", "name", "bindings"]
-      else if op == "faq" then ["op", "args", "output_idx", "reduce", "ranges", "expr", "filter"]
+      else if op == "faq" then ["op", "args", "output_idx", "reduce", "semiring", "ranges", "expr", "filter"]
       else ["op", "args"])
     for f in fields do
       unless allowed.contains f do throw s!"{op} node field {f} is outside the modelled slice"
@@ -110,7 +110,11 @@ partial def astOf (j : Json) : Except String Ast := do
       let out ← match j.getObjVal? "output_idx" with
         | .ok (.arr a) => a.toList.mapM (fun o => o.getStr?)
         | _ => pure []
-      let red := (j.getObjValAs? String "reduce").toOption.getD "+"
+      let semiring ← match j.getObjVal? "semiring" with
+        | .ok field => some <$> field.getStr?
+        | .error _ => pure none
+      let legacy := (j.getObjValAs? String "reduce").toOption
+      let red ← Esm.Semiring.resolveReduction semiring legacy
       let ranges ← match j.getObjVal? "ranges" with
         | .ok (.obj rs) =>
           rs.toArray.toList.foldrM (fun (k, t) acc => do
@@ -187,7 +191,8 @@ def mapFaq (sets : Json) (derived : List (String × Nat)) (rhs : Json) :
     Except String (List String × List String × List Nat × Json) := do
   for f in ["join", "filter", "distinct", "key"] do
     if (rhs.getObjVal? f).toOption.isSome then throw s!"faq with {f}"
-  if let .ok sr := rhs.getObjValAs? String "semiring" then
+  if let .ok srField := rhs.getObjVal? "semiring" then
+    let sr ← srField.getStr?
     unless sr == "sum_product" do throw s!"faq with semiring {sr}"
   let out ← (← rhs.getObjVal? "output_idx").getArr?
   let syms ← out.toList.mapM (·.getStr?)
@@ -210,7 +215,7 @@ def mapFaq (sets : Json) (derived : List (String × Nat)) (rhs : Json) :
   let cell := if contracted.isEmpty then rhs.getObjValD "expr"
     else Json.mkObj ([("op", Json.str "faq"), ("output_idx", Json.arr #[]),
       ("ranges", Json.mkObj contracted), ("expr", rhs.getObjValD "expr")] ++
-      ((rhs.getObjVal? "reduce").toOption.map (fun r => ("reduce", r))).toList)
+      (["semiring", "reduce"].filterMap (fun k => (rhs.getObjVal? k).toOption.map (k, ·))))
   return (syms, names, sizes, cell)
 
 /-- The literal `{"op": "true"}` (a value-invention body or filter that always

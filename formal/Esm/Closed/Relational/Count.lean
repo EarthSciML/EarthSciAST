@@ -492,6 +492,8 @@ theorem ev_fromSet {red : String} (hred : red ∈ ["+", "*", "min", "max"]) {k S
   have m4 : ("max" : String) ≠ "+" := by decide
   have m5 : ("max" : String) ≠ "*" := by decide
   have m6 : ("max" : String) ≠ "min" := by decide
+  have hbool : red ≠ "bool_and_or" := by
+    rcases hred with rfl | rfl | rfl | rfl <;> decide
   rcases hred with rfl | rfl | rfl | rfl
   · simp only [eval, setSize, hS, foldRed, asNum, asInt, toInt_nat, ofDec_nat hn, o1, t1, bind,
       Except.bind, pure, Except.pure, ↓reduceIte]
