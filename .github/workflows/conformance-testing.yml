@@ -756,10 +756,8 @@ jobs:
   # per-language job still fails the workflow on its own, exactly as before.
   standard-conformance-testing:
     runs-on: ubuntu-latest
-    # Each inline-test tier runs every binding under both compilers, and Julia
-    # starts a fresh process per tier and compiler; the recurrence,
-    # value-invention, expression-form, boolean-reduction and missing-data
-    # tiers took the job past 45 minutes.
+    # Julia batches the inline-test tiers in one process per compiler, but the
+    # conformance producers still need headroom for cold builds.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
@@ -842,25 +840,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev,test]
 
-      # Build exactly what the harness RUNS, which is not what this step used
-      # to build. Every rust invocation in `test-conformance.sh` is a `cargo
-      # run` on the DEV profile with `--features conformance-adapters`; the
-      # release artifacts this step produced were used by nothing, at a
-      # measured 4m21s per run (#224). Dev is not the slow profile here:
-      # Cargo.toml pins `opt-level = 2` for this crate and its dependencies in
-      # the dev profile precisely so the conformance producers run fast.
-      #
-      # This step is NOT cheaper than the one it replaces, and nothing here
-      # claims it is: it builds three more bin targets at the same
-      # optimisation level, so on its own it takes longer than the release
-      # build did. What is saved is downstream — the crate is compiled ONCE,
-      # here, instead of again inside the 45-minute harness step below, where
-      # it was previously built twice over (once at default features for
-      # `esm`, once with `conformance-adapters` for the first adapter).
-      - name: Build Rust package
+      # Build the CLI and adapters in one workspace feature resolution. The
+      # harness executes these binaries directly, so a package-specific
+      # Cargo invocation cannot rebuild their shared dependencies.
+      - name: Build Rust conformance binaries
         working-directory: pkg/earthsci-ast-rs
         run: |
-          cargo build --features conformance-adapters
+          cargo build --target-dir target --workspace --bins --features earthsci-ast/conformance-adapters
 
       # Make scripts executable
       - name: Make conformance scripts executable
@@ -872,13 +858,11 @@ jobs:
 
       # Run standard cross-language conformance testing.
       #
-      # `--skip-binding-suites`: the five suites are the `needs:` gate above,
-      # already run at more versions than this job could. What still runs here
-      # is everything only this job can do — the per-binding conformance
-      # PRODUCERS, the cross-language comparison, and the determinism /
-      # geometry / cadence / PDE gates. A producer that fails still fails this
-      # job. See the job comment and issue #224.
+      # The binding matrices run concurrently. This job runs the conformance
+      # producers and checks their results.
       - name: Run standard conformance tests
+        env:
+          ESM_RUST_CONFORMANCE_BIN_DIR: ${{ github.workspace }}/pkg/earthsci-ast-rs/target/debug
         run: |
           ./scripts/test-conformance.sh --skip-binding-suites
 

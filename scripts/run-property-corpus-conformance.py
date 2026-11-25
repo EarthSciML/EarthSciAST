@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -136,27 +137,37 @@ def detect_bindings() -> List[Binding]:
         )
     )
 
-    # Rust via its conformance-adapter bin, at the SAME feature set as the CI
-    # prebuild and every other Rust adapter: an `--example` (or any other
-    # feature set) recompiles the crate over that build.
-    cargo = shutil.which("cargo")
+    # CI uses the binary from the shared workspace build. Local runs can
+    # still let Cargo build and launch the adapter.
     rust_dir = PROJECT_ROOT / "pkg" / "earthsci-ast-rs"
+    rust_bin_dir = os.environ.get("ESM_RUST_CONFORMANCE_BIN_DIR")
+    adapter_name = "earthsci-property-corpus-adapter-rust"
+    if rust_bin_dir:
+        adapter = str(Path(rust_bin_dir) / adapter_name)
+        rust_cmd = [adapter]
+        rust_available = shutil.which(adapter) is not None
+        rust_skip_reason = f"prebuilt Rust adapter is missing or not executable: {adapter}"
+    else:
+        cargo = shutil.which("cargo")
+        rust_cmd = [
+            cargo or "cargo",
+            "run",
+            "--quiet",
+            "--features",
+            "conformance-adapters",
+            "--bin",
+            adapter_name,
+            "--",
+        ]
+        rust_available = cargo is not None
+        rust_skip_reason = "cargo not on PATH"
     bindings.append(
         Binding(
             name="rust",
-            cmd=[
-                cargo or "cargo",
-                "run",
-                "--quiet",
-                "--features",
-                "conformance-adapters",
-                "--bin",
-                "earthsci-property-corpus-adapter-rust",
-                "--",
-            ],
+            cmd=rust_cmd,
             cwd=rust_dir,
-            available=cargo is not None,
-            skip_reason="cargo not on PATH" if cargo is None else "",
+            available=rust_available,
+            skip_reason="" if rust_available else rust_skip_reason,
         )
     )
 
