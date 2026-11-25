@@ -1122,9 +1122,17 @@ end
 
 function rhs!(
         du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
-        aux::AbstractVector, p, t, li::LaneInputs, cells::AbstractMatrix, n::Integer
+        aux::AbstractVector, p, t::Real, li::LaneInputs, cells::AbstractMatrix, n::Integer
     )
     L = _lane_check(lp, ws, du, u, aux, p, cells, n)
+    return _lane_gathered_rhs!(du, lp, ws, u, aux, p, _ -> Float64(t), li, n, L)
+end
+
+# The pre-gathered form of `_lane_rhs!`: every lane input from `li`, lane `l`
+# at time `tof(l)` and a padding lane at `tof(1)`.
+function _lane_gathered_rhs!(
+        du, lp::LaneProgram, ws::RhsWorkspace, u, aux, p, tof::F, li::LaneInputs, n, L
+    ) where {F}
     li.owner === lp.shared || throw(
         ArgumentError(
             "rhs!: the lane inputs were made by lane_inputs of another program"
@@ -1142,6 +1150,7 @@ function rhs!(
     C = lp.C
     ni = length(lp.index_bufs)
     lb = ws.lbufs
+    tb = lp.tbuf === nothing ? nothing : lb[end]
     for s0 in 0:C:(n - 1)
         m = min(C, n - s0)
         for c in 1:C
@@ -1152,9 +1161,9 @@ function rhs!(
             for k in eachindex(lp.gathers)
                 lb[ni + k][c] = li.gathered[k][l]
             end
-            lp.tbuf === nothing || (lb[end][c] = Float64(t))
+            tb === nothing || (tb[c] = c <= m ? tof(l) : tof(1))
         end
-        _lane_chunk!(du, lp, ws, u, aux, p, t, L, s0, m)
+        _lane_chunk!(du, lp, ws, u, aux, p, tof(s0 + 1), L, s0, m)
     end
     return du
 end
@@ -1180,6 +1189,31 @@ function rhs!(
         cells::AbstractMatrix, n::Integer
     )
     L = _lane_check(lp, ws, du, u, aux, p, cells, n)
+    _lane_check_times(lp, ts, n, L)
+    return _lane_rhs!(du, lp, ws, u, aux, p, l -> Float64(ts[l]), fs, cells, n, L)
+end
+
+"""
+    rhs!(du, lanes::LaneProgram, ws, u, aux, p, ts::AbstractVector, li::LaneInputs, cells, n) -> du
+
+The pre-gathered call ([`gather_lane_inputs!`](@ref)) with each lane at its
+own time: as the call with a time per lane and a forcing set, every
+non-state input taken from `li`.
+"""
+function rhs!(
+        du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
+        aux::AbstractVector, p, ts::AbstractVector{<:Real}, li::LaneInputs,
+        cells::AbstractMatrix, n::Integer
+    )
+    L = _lane_check(lp, ws, du, u, aux, p, cells, n)
+    _lane_check_times(lp, ts, n, L)
+    return _lane_gathered_rhs!(du, lp, ws, u, aux, p, l -> Float64(ts[l]), li, n, L)
+end
+
+# `ts` for lanes `1..n` of an `L`-lane batch: at least `n` and at most `L`
+# times, a program built with a time per lane, and equal times when an
+# observed of `t` is evaluated once per call.
+function _lane_check_times(lp::LaneProgram, ts, n, L)
     n <= length(ts) <= L || throw(
         DimensionMismatch("rhs!: $(length(ts)) times for n = $n lanes of an L = $L batch")
     )
@@ -1196,7 +1230,7 @@ function rhs!(
             )
         )
     end
-    return _lane_rhs!(du, lp, ws, u, aux, p, l -> Float64(ts[l]), fs, cells, n, L)
+    return nothing
 end
 
 # ---------------------------------------------------------------------------

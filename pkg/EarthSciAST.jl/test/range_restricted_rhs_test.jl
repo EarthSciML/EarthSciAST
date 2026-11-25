@@ -1257,9 +1257,11 @@ end
 # `batch` lanes plus one padding lane. `shapes` names each state's index sets,
 # `ext` each set's extent. Returns the number of values compared and the
 # number that differ. With `tsf`, lane `l` of a batch runs at time `tsf(l)`
-# (a call with a time per lane) and is compared at that time.
+# (a call with a time per lane) and is compared at that time. With
+# `gathered`, the call reads its inputs from `gather_lane_inputs!`.
 function _rrt_lanes_vs_whole(
-        prob, kind, sets, shapes, ext; chunk = 4, batch = 3, t = 0.75, tsf = nothing
+        prob, kind, sets, shapes, ext; chunk = 4, batch = 3, t = 0.75, tsf = nothing,
+        gathered = false
     )
     prog = rhs_program(prob)
     lp = lanes(prog, kind, sets; chunk = chunk)
@@ -1294,7 +1296,13 @@ function _rrt_lanes_vs_whole(
         end
         du = fill(NaN, LL.n_u * L)
         tl = tsf === nothing ? t : [tsf(l) for l in eachindex(bc)]
-        rhs!(du, lp, ws, u, Float64[], prob.p, tl, fs, cells, length(bc))
+        if gathered
+            li = lane_inputs(lp, L)
+            gather_lane_inputs!(li, lp, prob.p, t, fs, cells, length(bc))
+            rhs!(du, lp, ws, u, Float64[], prob.p, tl, li, cells, length(bc))
+        else
+            rhs!(du, lp, ws, u, Float64[], prob.p, tl, fs, cells, length(bc))
+        end
         for b in LL.u, (l, c) in enumerate(bc), (e, nl) in enumerate(CartesianIndices(Tuple(b.extents)))
             compared += 1
             got = du[(b.offset + e - 1) * L + l]
@@ -1453,23 +1461,35 @@ end
     ]
     k_vars = Dict("k0" => obs(), "k" => obs())
 
-    # A: `faq(D(u[i])) = -k·u[i]`, a right-hand side that is no faq.
+    # A: `faq(D(u[i])) = -k·c[i]·u[i]`, a right-hand side that is no faq,
+    # with a pre-gathered read of `c`; also through the pre-gathered call.
     xr = Dict("i" => Dict("from" => "x"))
+    cpar = Dict("type" => "parameter", "units" => "1", "shape" => ["x"], "default" => [0.5, 1.5, 2.5, 3.5, 4.5])
     prob = _rrt_doc_of(
-        "lanetA", Dict("x" => 5), merge(k_vars, Dict("u" => st(["x"]))),
-        vcat(k_eqs, Any[faqd("u", ["i"], xr, op("*", -1.0, "k", ix("u", "i")))])
+        "lanetA", Dict("x" => 5), merge(k_vars, Dict("u" => st(["x"]), "c" => cpar)),
+        vcat(k_eqs, Any[faqd("u", ["i"], xr, op("*", -1.0, "k", ix("c", "i"), ix("u", "i")))])
     )
-    for f in (nothing, tsf)
-        compared, differ = _rrt_lanes_vs_whole(prob, :cells, ["x"], Dict("M.u" => ["x"]), Dict("x" => 5); tsf = f)
+    for f in (nothing, tsf), g in (false, true)
+        compared, differ = _rrt_lanes_vs_whole(
+            prob, :cells, ["x"], Dict("M.u" => ["x"]), Dict("x" => 5); tsf = f, gathered = g
+        )
         @test compared == 5 && differ == 0
     end
-    # Padding lanes take the first lane's time.
+    # Padding lanes take the first lane's time, in both calls.
     lp = lanes(rhs_program(prob), :cells, ["x"]; chunk = 4)
     ws = rhs_workspace(lp)
     du = fill(NaN, 4)
     rhs!(du, lp, ws, [0.7, 1.3, 2.1, 0.0], Float64[], prob.p, [0.3, 2.0, 7.25], default_forcing_set(lp), Int32[4 1 3 2], 3)
     @test ws.lbufs[end] == [0.3, 2.0, 7.25, 0.3]
     @test isnan(du[4])
+    li = lane_inputs(lp, 4)
+    gather_lane_inputs!(li, lp, prob.p, 0.0, default_forcing_set(lp), Int32[4 1 3 2], 3)
+    ws = rhs_workspace(lp)
+    rhs!(du, lp, ws, [0.7, 1.3, 2.1, 0.0], Float64[], prob.p, [7.25, 2.0, 0.3], li, Int32[4 1 3 2], 3)
+    @test ws.lbufs[end] == [7.25, 2.0, 0.3, 7.25]
+    @test_throws DimensionMismatch rhs!(
+        du, lp, ws, [0.7, 1.3, 2.1, 0.0], Float64[], prob.p, [0.3, 2.0], li, Int32[4 1 3 2], 3
+    )
     # At most L times.
     @test_throws DimensionMismatch rhs!(
         du, lp, ws, [0.7, 1.3, 2.1, 0.0], Float64[], prob.p, [0.3, 2.0, 7.25, 1.0, 2.0],
@@ -1507,8 +1527,8 @@ end
         )
     )
     shapes = Dict("M.a" => ["x", "z"], "M.b" => ["x", "y"])
-    for f in (nothing, tsf)
-        compared, differ = _rrt_lanes_vs_whole(prob, :columns, ["x"], shapes, sets; tsf = f)
+    for f in (nothing, tsf), g in (false, true)
+        compared, differ = _rrt_lanes_vs_whole(prob, :columns, ["x"], shapes, sets; tsf = f, gathered = g)
         @test compared == 18 && differ == 0
     end
 end
@@ -1569,6 +1589,19 @@ end
         @test reinterpret.(UInt64, same[1:3]) == reinterpret.(UInt64, one[1:3])
         err = try
             rhs!(same, lp, ws, u, Float64[], prob.p, [0.3, 2.0, 7.25], fs, cells, 3)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError && occursin("'M.f'", err.msg)
+        # The pre-gathered call: the same at equal times, the same refusal.
+        li = lane_inputs(lp, 4)
+        gather_lane_inputs!(li, lp, prob.p, 2.0, fs, cells, 3)
+        gsame = fill(NaN, 4)
+        rhs!(gsame, lp, ws, u, Float64[], prob.p, [2.0, 2.0, 2.0], li, cells, 3)
+        @test reinterpret.(UInt64, gsame[1:3]) == reinterpret.(UInt64, one[1:3])
+        err = try
+            rhs!(gsame, lp, ws, u, Float64[], prob.p, [0.3, 2.0, 7.25], li, cells, 3)
             nothing
         catch e
             e
