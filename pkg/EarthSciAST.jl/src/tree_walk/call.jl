@@ -833,7 +833,7 @@ function _call_inl_mode(tt::_TplTable, info::_TplCallInfo, def::_TplDef, p::Stri
     sn = _TPL_ARG * p
     (sn in info.arrays || sn in info.fixed || !(sn in info.scalars)) && return :none
     _inl_is_marked(v) && return :marked
-    B = _tpl_capture_names(tt, def.name)
+    B = _tpl_capture_names(tt, def.name, sn)
     rb = !isempty(B) && _tpl_reads_any(v, B)
     if !rb
         sn in info.uncond && return :none
@@ -941,10 +941,9 @@ end
 # The captured names the compiled-in bindings `inl` of a reference to `name`
 # read.
 function _call_captured_reads(tt::_TplTable, name::String, inl::Dict{String, ASTExpr})
-    B = _tpl_capture_names(tt, name)
     out = Set{String}()
-    isempty(B) && return out
-    for (_, v) in inl
+    for (sn, v) in inl
+        B = _tpl_capture_names(tt, name, sn)
         foreach_subexpr(v) do x
             x isa VarExpr && x.name in B && push!(out, x.name)
         end
@@ -1072,13 +1071,13 @@ function _call_mark_inlined(leaf, arr, tt::_TplTable, call::OpExpr)
     (info === nothing || call.bindings === nothing) && return call
     def = _tpl_def(tt, call.name)
     def.closed === nothing && return call
-    B = _tpl_capture_names(tt, call.name)
     nb = nothing
     for p in def.params
         v = get(call.bindings, p, nothing)
         (v === nothing || _inl_is_marked(v)) && continue
         _call_inl_mode(tt, info, def, p, v) === :marked || continue
         nb === nothing && (nb = Dict{String, ASTExpr}(call.bindings))
+        B = _tpl_capture_names(tt, call.name, _TPL_ARG * p)
         nb[p] = OpExpr("__inlb", ASTExpr[_inl_mark(leaf, arr, v, B, tt)])
     end
     # An array parameter bound to an array expression.

@@ -1588,7 +1588,7 @@ function _tpl_compiles(tt::_TplTable, call::OpExpr)
         # body runs, or one a body it references binds, which the expansion
         # would capture) is compiled into the instance, read where that body
         # binds the name. A template call in it stays a call there.
-        B = _tpl_capture_names(tt, call.name)
+        B = _tpl_capture_names(tt, call.name, s)
         if !isempty(B) && _tpl_reads_any(v, B)
             _tpl_inlinable(v, tt) || return false
             continue
@@ -1693,41 +1693,49 @@ function _tpl_body_binders(tt::_TplTable, name)
     end
 end
 
-# The names a binding of a reference to `name` is CAPTURED by: those the
-# template's prepared body binds (`_tpl_body_binders`), and through every
-# reference in that body, the names the referenced template captures in turn,
-# with the output indices of an array-valued one. The expansion substitutes a
-# binding into the body, and a body passes it on into the bodies it
-# references, so a name any of those binds is the binder's there, not the
-# caller's (EarthSciAST Rust `captured_symbols`: the binders of the instance
-# body and of every body it reaches). The library's narrow phase
-# (`A_ij(i = i)` around `pairs(area = area_ij(i = i))`, whose `faq` binds
-# `i`) reads its loop symbols this way.
-function _tpl_capture_names(tt::_TplTable, name)
-    memo = _tpl_memo(tt, nothing, :capture_names, () -> Dict{String, Set{String}}())
-    got = get(memo, String(name), nothing)
+# The names the binding of the parameter sentinel `s` (`"\0arg\0p"`) of a
+# reference to `name` is CAPTURED by: those the template's prepared body binds
+# (`_tpl_body_binders`) and, where the body passes the parameter on in a
+# binding of a reference in it, the names that reference's template captures
+# that binding by in turn, with the output indices of an array-valued one. The
+# expansion substitutes a binding into the body, and the body's references
+# substitute it into theirs, so a name any of those binds there is the
+# binder's, not the caller's (the EarthSciAST Rust tape's `captured_symbols`).
+# The library's narrow phase (`A_ij(…)` with body `pairs(area = area_ij(…))`,
+# where `area_ij` reads `i` and `j` and `pairs`' loop binds them) reads its
+# loop symbols this way.
+function _tpl_capture_names(tt::_TplTable, name, s::AbstractString)
+    memo = _tpl_memo(tt, nothing, :capture_names, () -> Dict{Tuple{String, String}, Set{String}}())
+    key = (String(name), String(s))
+    got = get(memo, key, nothing)
     got === nothing || return got
     # The template graph is acyclic (esm-spec §9.7.3); the placeholder only
     # keeps a malformed registry from recursing forever.
-    memo[String(name)] = Set{String}()
+    memo[key] = Set{String}()
     out = copy(_tpl_body_binders(tt, name))
     def = _tpl_def(tt, name)
     if def.closed !== nothing
+        S = Set{String}([String(s)])
         seen = IdDict{OpExpr, Nothing}()
         function walk(e)
             e isa OpExpr || return
             haskey(seen, e) && return
             seen[e] = nothing
-            if _tpl_is_call(e) && e.name isa AbstractString
-                union!(out, _tpl_capture_names(tt, e.name))
-                info = _tpl_call_info(tt, e.name)
-                info === nothing || union!(out, info.outs)
+            if _tpl_is_call(e) && e.name isa AbstractString && e.bindings !== nothing
+                for (k, v) in e.bindings
+                    # A subscript is evaluated where the element call is.
+                    (startswith(k, _TPL_OUT) || startswith(k, _TPL_LANE)) && continue
+                    _tpl_reads_any(v, S) || continue
+                    union!(out, _tpl_capture_names(tt, e.name, _tpl_binding_sentinel(k)))
+                    info = _tpl_call_info(tt, e.name)
+                    info === nothing || union!(out, info.outs)
+                end
             end
             return foreach_child(walk, e)
         end
         walk(def.closed.body)
     end
-    return memo[String(name)] = out
+    return memo[key] = out
 end
 
 # Does `e` read (as a variable leaf) any of the names `B`?
