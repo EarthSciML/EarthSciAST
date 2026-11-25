@@ -8,7 +8,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use earthsci_ast::{
-    AxisCut, Compiler, Decomposition, LaneKind, LaneProgram, ProblemOptions, RhsProgram,
+    AxisCut, Compiler, Decomposition, LaneKind, LaneProgram, ProblemOptions, RhsError, RhsProgram,
     RhsSelection, SimulateError, TermOrigin, TileBox, TileProgram, esm_problem, rhs_program,
 };
 use serde_json::json;
@@ -1197,11 +1197,138 @@ fn whole_array_faq_right_hand_sides_build_lanes() {
     }
 }
 
+/// U19: each lane at its own time. `D(u[i]) = -k·u[i] + g[i]·s` with `k`
+/// a scalar observed of `t`, `s` one of `k` and `t`, and an array observed
+/// `g[i] = c[i]·t`: every lane equals the
+/// whole-domain program at its own cell and its own time, bit for bit,
+/// whatever the other lanes' times; and `eval_into` with one time agrees
+/// with `eval_times_into` at that time in every lane.
+#[test]
+fn each_lane_evaluates_at_its_own_time() {
+    let n = 5;
+    let doc = model(
+        json!({"x": {"kind": "interval", "size": n}}),
+        json!({
+            "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+            "c": {"type": "parameter", "units": "1", "shape": ["x"],
+                  "default": [0.5, 1.5, 2.5, 3.5, 4.5]},
+            "k": {"type": "unknown", "units": "1"},
+            "s": {"type": "unknown", "units": "1"},
+            "g": {"type": "unknown", "units": "1", "shape": ["x"]}
+        }),
+        json!([
+            {"lhs": "k", "rhs": {"op": "+", "args": [1.0, {"op": "sin", "args": ["t"]}]}},
+            {"lhs": "s", "rhs": {"op": "*", "args": [3.0, "k", {"op": "cos", "args": ["t"]}]}},
+            faq_eq(ix("g", vec![json!("i")]),
+                   json!({"op": "*", "args": [ix("c", vec![json!("i")]), "t"]}),
+                   json!({"i": {"from": "x"}}), &["i"]),
+            faq_eq(
+                d_of(ix("u", vec![json!("i")])),
+                json!({"op": "+", "args": [
+                    {"op": "*", "args": [-1.0, "k", ix("u", vec![json!("i")])]},
+                    {"op": "*", "args": [ix("g", vec![json!("i")]), "s"]}]}),
+                json!({"i": {"from": "x"}}),
+                &["i"]
+            )
+        ]),
+    );
+    let prog = program(&doc, Compiler::Native);
+    let cap = 4;
+    let lanes = prog
+        .lanes(
+            LaneKind::Cells {
+                sets: vec!["x".to_string()],
+            },
+            cap,
+        )
+        .expect("lanes over a time-dependent program");
+    let gu = varied(n as usize);
+    let p = prog
+        .parameter_vector(&Default::default())
+        .expect("defaults");
+    let fs = prog.default_forcing();
+    let whole_at = |t: f64| {
+        let mut du = vec![f64::NAN; prog.layout().u_len];
+        let mut ws = prog.new_workspace();
+        prog.eval_into(&gu, &[], &p, t, &fs, &mut du, &mut ws)
+            .expect("whole-domain eval");
+        du
+    };
+    let lay = lanes.layout().clone();
+    let mut ws = lanes.new_workspace();
+    // Lanes hold cells 4, 1, 3 (and one padding lane), each at its own time.
+    let cells: Vec<i32> = vec![4, 1, 3, 2];
+    let ts = [0.3, 2.0, 7.25];
+    let mut u = vec![0.0; lay.u_len];
+    for (l, &c) in cells.iter().take(3).enumerate() {
+        u[l] = gu[(c - 1) as usize];
+    }
+    let mut du = vec![f64::NAN; lay.u_len];
+    let r = lanes.eval_times_into(&u, &[], &p, &ts, &fs, &cells, 3, &mut du, &mut ws);
+    match r {
+        Ok(()) => {
+            for (l, &c) in cells.iter().take(3).enumerate() {
+                let want = whole_at(ts[l]);
+                assert_eq!(
+                    du[l].to_bits(),
+                    want[(c - 1) as usize].to_bits(),
+                    "lane {l} at t = {}",
+                    ts[l]
+                );
+            }
+        }
+        Err(e) => panic!("{e}"),
+    }
+    // One time for every lane: eval_into and eval_times_into agree.
+    let mut d1 = vec![f64::NAN; lay.u_len];
+    let mut d2 = vec![f64::NAN; lay.u_len];
+    lanes
+        .eval_into(&u, &[], &p, 2.0, &fs, &cells, 3, &mut d1, &mut ws)
+        .expect("one time");
+    lanes
+        .eval_times_into(
+            &u,
+            &[],
+            &p,
+            &[2.0, 2.0, 2.0],
+            &fs,
+            &cells,
+            3,
+            &mut d2,
+            &mut ws,
+        )
+        .expect("per-lane times");
+    for l in 0..3 {
+        assert_eq!(d1[l].to_bits(), d2[l].to_bits(), "lane {l}");
+    }
+    // Too few times is refused.
+    assert!(
+        lanes
+            .eval_times_into(&u, &[], &p, &[1.0], &fs, &cells, 3, &mut d2, &mut ws)
+            .is_err()
+    );
+}
+
 /// Every lane of `lanes` equals the whole-domain program at its cell (or
 /// column) bit for bit, at time `t`, over every cell of the lane sets
 /// (extents `ext`, first set fastest) in batches of the capacity with the
 /// last one padded, on both the plain and the pre-gathered path.
 fn assert_lanes_match(prog: &RhsProgram, lanes: &LaneProgram, ext: &[i64], t: f64) {
+    assert_lanes_match_at(prog, lanes, ext, &|_| t, false);
+}
+
+/// [`assert_lanes_match`] with the cell numbered `c` (in the order the
+/// cells are visited) at time `time_of(c)`. With `per_lane_times`, the calls
+/// are `eval_times_into` and `eval_gathered_times_into`, and every padding
+/// lane, given lane 0's state, equals lane 0 (it takes `ts[0]` and lane 0's
+/// cell); otherwise `eval_into` and `eval_gathered_into` at `time_of(0)`.
+fn assert_lanes_match_at(
+    prog: &RhsProgram,
+    lanes: &LaneProgram,
+    ext: &[i64],
+    time_of: &dyn Fn(usize) -> f64,
+    per_lane_times: bool,
+) {
     let whole = prog.layout().clone();
     let lay = lanes.layout().clone();
     let cap = lay.capacity;
@@ -1211,10 +1338,18 @@ fn assert_lanes_match(prog: &RhsProgram, lanes: &LaneProgram, ext: &[i64], t: f6
         .parameter_vector(&Default::default())
         .expect("defaults");
     let fs = prog.default_forcing();
-    let mut want = vec![f64::NAN; whole.u_len];
-    let mut ws = prog.new_workspace();
-    prog.eval_into(&gu, &[], &p, t, &fs, &mut want, &mut ws)
-        .expect("whole-domain eval");
+    let mut wants: Vec<(f64, Vec<f64>)> = Vec::new();
+    let mut want_at = |t: f64| -> Vec<f64> {
+        if let Some((_, w)) = wants.iter().find(|(x, _)| x.to_bits() == t.to_bits()) {
+            return w.clone();
+        }
+        let mut want = vec![f64::NAN; whole.u_len];
+        let mut ws = prog.new_workspace();
+        prog.eval_into(&gu, &[], &p, t, &fs, &mut want, &mut ws)
+            .expect("whole-domain eval");
+        wants.push((t, want.clone()));
+        want
+    };
     // The global multi-index of element `e` of `name` in the lane at `cell`.
     let global = |name: &str, cell: &[i64], e: usize| -> Vec<i64> {
         let w = whole.block(name).expect("a whole block");
@@ -1246,7 +1381,9 @@ fn assert_lanes_match(prog: &RhsProgram, lanes: &LaneProgram, ext: &[i64], t: f6
         .collect();
     let mut lws = lanes.new_workspace();
     let mut inputs = lanes.lane_inputs();
-    for batch in cells.chunks(cap) {
+    for (k, batch) in cells.chunks(cap).enumerate() {
+        let ts: Vec<f64> = (0..batch.len()).map(|l| time_of(k * cap + l)).collect();
+        let wanted: Vec<Vec<f64>> = ts.iter().map(|&t| want_at(t)).collect();
         let mut u = vec![0.0; lay.u_len];
         let mut cs = vec![1i32; cap * d];
         for (l, cell) in batch.iter().enumerate() {
@@ -1260,6 +1397,14 @@ fn assert_lanes_match(prog: &RhsProgram, lanes: &LaneProgram, ext: &[i64], t: f6
                 }
             }
         }
+        // The padding lanes hold lane 0's state.
+        for b in &lay.u {
+            for e in 0..b.extents.iter().product::<usize>() {
+                for l in batch.len()..cap {
+                    u[(b.offset + e) * cap + l] = u[(b.offset + e) * cap];
+                }
+            }
+        }
         let check = |du: &[f64], path: &str| {
             for (l, cell) in batch.iter().enumerate() {
                 for b in &lay.u {
@@ -1268,27 +1413,67 @@ fn assert_lanes_match(prog: &RhsProgram, lanes: &LaneProgram, ext: &[i64], t: f6
                         let g = global(&b.name, cell, e);
                         assert_eq!(
                             du[(b.offset + e) * cap + l].to_bits(),
-                            want[w.slot(&g).unwrap()].to_bits(),
-                            "{path}: {} at {g:?}",
-                            b.name
+                            wanted[l][w.slot(&g).unwrap()].to_bits(),
+                            "{path}: {} at {g:?}, t = {}",
+                            b.name,
+                            ts[l]
                         );
                     }
                 }
             }
+            if per_lane_times {
+                for b in &lay.u {
+                    for e in 0..b.extents.iter().product::<usize>() {
+                        for l in batch.len()..cap {
+                            assert_eq!(
+                                du[(b.offset + e) * cap + l].to_bits(),
+                                du[(b.offset + e) * cap].to_bits(),
+                                "{path}: padding lane {l} of {}",
+                                b.name
+                            );
+                        }
+                    }
+                }
+            }
         };
+        let t = ts[0];
         let mut du = vec![f64::NAN; lay.u_len];
-        lanes
-            .eval_into(&u, &[], &p, t, &fs, &cs, batch.len(), &mut du, &mut lws)
-            .expect("lane eval");
-        check(&du, "eval_into");
+        if per_lane_times {
+            lanes
+                .eval_times_into(&u, &[], &p, &ts, &fs, &cs, batch.len(), &mut du, &mut lws)
+                .expect("lane eval at per-lane times");
+            check(&du, "eval_times_into");
+        } else {
+            lanes
+                .eval_into(&u, &[], &p, t, &fs, &cs, batch.len(), &mut du, &mut lws)
+                .expect("lane eval");
+            check(&du, "eval_into");
+        }
         lanes
             .gather_lane_inputs(&mut inputs, &p, t, &fs, &cs, batch.len())
             .expect("gather");
         let mut du = vec![f64::NAN; lay.u_len];
-        lanes
-            .eval_gathered_into(&u, &[], &inputs, &p, t, &cs, batch.len(), &mut du, &mut lws)
-            .expect("gathered lane eval");
-        check(&du, "eval_gathered_into");
+        if per_lane_times {
+            lanes
+                .eval_gathered_times_into(
+                    &u,
+                    &[],
+                    &inputs,
+                    &p,
+                    &ts,
+                    &cs,
+                    batch.len(),
+                    &mut du,
+                    &mut lws,
+                )
+                .expect("gathered lane eval at per-lane times");
+            check(&du, "eval_gathered_times_into");
+        } else {
+            lanes
+                .eval_gathered_into(&u, &[], &inputs, &p, t, &cs, batch.len(), &mut du, &mut lws)
+                .expect("gathered lane eval");
+            check(&du, "eval_gathered_into");
+        }
     }
 }
 
@@ -1432,4 +1617,131 @@ fn an_array_faq_carrying_args_is_refused_by_lanes() {
         .expect_err("an array faq with args has no lane form");
     assert!(err.to_string().contains("lane:"), "{err}");
     assert!(err.to_string().contains("`args`"), "{err}");
+}
+
+/// U19 at mixed times, on the plain and the pre-gathered path, with the
+/// padding lanes checked: a 0-d observed of `t`, an array observed of `t`
+/// over the lane set, a parameter read the pre-gather hoists, and one whose
+/// subscript is an array observed of `t` (`c[i, q[i]]`), which the
+/// pre-gather must not hoist, since its program does not compute `q`.
+#[test]
+fn lanes_at_mixed_times_match_the_whole_domain_program() {
+    let n = 7;
+    let doc = model(
+        json!({"x": {"kind": "interval", "size": n}, "y": {"kind": "interval", "size": 2}}),
+        json!({
+            "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+            "c": {"type": "parameter", "units": "1", "shape": ["x", "y"],
+                  "default": [[0.5, 5.0], [1.5, 6.0], [2.5, 7.0], [3.5, 8.0],
+                              [4.5, 9.0], [5.5, 10.0], [6.5, 11.0]]},
+            "k": {"type": "unknown", "units": "1"},
+            "g": {"type": "unknown", "units": "1", "shape": ["x"]},
+            "q": {"type": "unknown", "units": "1", "shape": ["x"]}
+        }),
+        json!([
+            {"lhs": "k", "rhs": {"op": "+", "args": [1.0, {"op": "sin", "args": ["t"]}]}},
+            faq_eq(ix("g", vec![json!("i")]),
+                   json!({"op": "*", "args": [ix("c", vec![json!("i"), json!(1)]), "t"]}),
+                   json!({"i": {"from": "x"}}), &["i"]),
+            faq_eq(ix("q", vec![json!("i")]),
+                   json!({"op": "ifelse", "args": [{"op": ">", "args": ["t", 1.0]}, 2, 1]}),
+                   json!({"i": {"from": "x"}}), &["i"]),
+            faq_eq(
+                d_of(ix("u", vec![json!("i")])),
+                json!({"op": "+", "args": [
+                    {"op": "*", "args": [-1.0, "k", ix("u", vec![json!("i")])]},
+                    ix("g", vec![json!("i")]),
+                    ix("c", vec![json!("i"), json!(2)]),
+                    ix("c", vec![json!("i"), ix("q", vec![json!("i")])])]}),
+                json!({"i": {"from": "x"}}),
+                &["i"]
+            )
+        ]),
+    );
+    let prog = program(&doc, Compiler::Native);
+    let lanes = prog
+        .lanes(
+            LaneKind::Cells {
+                sets: vec!["x".to_string()],
+            },
+            3,
+        )
+        .expect("lanes over a time-dependent program");
+    assert_eq!(lanes.n_lane_inputs(), 2, "c[i, 1] and c[i, 2] are hoisted");
+    let times = [0.25, 3.0, 0.75, 1.5, 0.25, 2.0, 0.5];
+    assert_lanes_match_at(&prog, &lanes, &[n], &|c| times[c], true);
+    // Equal times: the one-time program.
+    assert_lanes_match_at(&prog, &lanes, &[n], &|_| 1.25, true);
+    assert_lanes_match(&prog, &lanes, &[n], 1.25);
+}
+
+/// An observed of `t` with no lane form (`f[w] = w·t` along a set that is
+/// not a lane set, read in `D(u[i]) = Σ_w f[w]·u[i]`) still builds lanes:
+/// it stays one whole-domain value per call. The one-time call equals the
+/// whole-domain program; a batch at equal times equals the one-time call;
+/// a batch at mixed times is an error naming the observed.
+#[test]
+fn an_observed_of_t_with_no_lane_form_builds_one_time_lanes() {
+    let n = 5;
+    let doc = model(
+        json!({"x": {"kind": "interval", "size": n}, "w": {"kind": "interval", "size": 3}}),
+        json!({
+            "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+            "f": {"type": "unknown", "units": "1", "shape": ["w"]}
+        }),
+        json!([
+            faq_eq(ix("f", vec![json!("m")]),
+                   json!({"op": "*", "args": ["m", "t"]}),
+                   json!({"m": {"from": "w"}}), &["m"]),
+            {"lhs": d_of(json!("u")),
+             "rhs": faq_node(&["i"], json!({"i": {"from": "x"}, "m": {"from": "w"}}),
+                 json!({"op": "*", "args": [ix("f", vec![json!("m")]), ix("u", vec![json!("i")])]}))}
+        ]),
+    );
+    let prog = program(&doc, Compiler::Native);
+    let lanes = prog
+        .lanes(
+            LaneKind::Cells {
+                sets: vec!["x".to_string()],
+            },
+            2,
+        )
+        .expect("an observed of t with no lane form still builds lanes");
+    assert_lanes_match(&prog, &lanes, &[n], 0.75);
+    assert_lanes_match_at(&prog, &lanes, &[n], &|_| 0.75, true);
+    let p = prog
+        .parameter_vector(&Default::default())
+        .expect("defaults");
+    let fs = prog.default_forcing();
+    let lay = lanes.layout().clone();
+    let u = vec![1.0; lay.u_len];
+    let mut du = vec![f64::NAN; lay.u_len];
+    let mut ws = lanes.new_workspace();
+    let cells = [1, 2];
+    let mixed = |r: Result<(), RhsError>| match r {
+        Err(e @ RhsError::MixedTimes { .. }) => {
+            assert!(e.to_string().contains("M.f"), "{e}")
+        }
+        other => panic!("expected a mixed-times error, got {other:?}"),
+    };
+    mixed(lanes.eval_times_into(&u, &[], &p, &[0.5, 1.0], &fs, &cells, 2, &mut du, &mut ws));
+    let mut inputs = lanes.lane_inputs();
+    lanes
+        .gather_lane_inputs(&mut inputs, &p, 0.5, &fs, &cells, 2)
+        .expect("gather");
+    mixed(lanes.eval_gathered_times_into(
+        &u,
+        &[],
+        &inputs,
+        &p,
+        &[0.5, 1.0],
+        &cells,
+        2,
+        &mut du,
+        &mut ws,
+    ));
+    // One lane asked for: the padding lane's time is not compared.
+    lanes
+        .eval_times_into(&u, &[], &p, &[0.5, 1.0], &fs, &cells, 1, &mut du, &mut ws)
+        .expect("one lane is never at mixed times");
 }

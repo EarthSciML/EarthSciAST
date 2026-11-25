@@ -1359,6 +1359,8 @@ function _build_evaluator_impl_inner(
     # (so the interned DAG is the lowered one). Identity — hence byte-identical —
     # for a model with no `broadcast` node.
     model = _lower_broadcast_model(model)
+    # A lane build (src/range/lanes.jl) computes 0-d observeds of `t` per lane.
+    model = _range_promote_model(_range_spec_now(), model)
     # ---- Structural interning (hash-consing) of the expression AST (perf
     # plan A1; src/intern.jl). Every build pass below is identity-memoized;
     # interning makes textually identical subtrees (which template inlining

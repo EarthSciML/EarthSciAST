@@ -480,6 +480,9 @@ enum WsExec {
     Lanes {
         main: Box<TapeCtx>,
         pre: Box<TapeCtx>,
+        /// The per-lane-times programs' contexts, when the lane program
+        /// has its own (U19).
+        timed: Option<(Box<TapeCtx>, Box<TapeCtx>)>,
     },
 }
 
