@@ -1735,14 +1735,17 @@ keep their global 1-based values.
 - **A time per lane.** A call may give one time per lane, `ts` (at least `n`
   and at most `L` entries; a padding lane takes `ts[1]`): Rust
   `LaneProgram::eval_times_into` and `eval_gathered_times_into`, Julia `rhs!`
-  with `ts::AbstractVector`. Then `du_L[v, l] == G_k(…, t = ts[l])[v,
-  cells[:, l]]` bitwise, whatever the other lanes' times, and with every
-  `ts[l]` equal to `t` the call equals the one-time call. Every observed that
-  depends on `t` (or on the state) is computed per lane; a pre-gathered read
-  never involves `t`. Both bindings evaluate a batch at mixed times in one pass:
-  the program reads `t` from a lane buffer of times, and a 0-d observed that
-  depends on `t` is one value per lane (Julia: an array observed over the
-  written states' shape in the lane build).
+  with `ts::AbstractVector` in place of `t` (plain and pre-gathered). Then
+  `du_L[v, l] == G_k(…, t = ts[l])[v, cells[:, l]]` bitwise, whatever the other
+  lanes' times, and with every `ts[l]` equal the call is the one-time call. A
+  0-d observed that depends on `t` is one value per lane, an array observed of
+  `t` with a lane form is computed per lane, and a pre-gathered read never
+  involves `t`; a batch at mixed times is evaluated in one pass. An observed
+  of `t` the state equations reach that has no lane form (for example one
+  written over a set that is not a lane set) does not stop the build: the
+  one-time call is unchanged, and a call whose lanes `1..n` have different
+  times is an error naming that observed (Rust `RhsError::MixedTimes`, Julia
+  `ArgumentError`).
 - **Capacity.** Julia loops over lanes with a run-time count, so one build
   serves every `L` (`L = size(cells, 2)`). Rust slot boxes are static, so a lane
   program is built per capacity (re-lowering only, no document rebuild) and `L`
