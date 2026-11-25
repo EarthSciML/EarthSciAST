@@ -139,14 +139,12 @@ private theorem nan_scale (s : ℝ) (x : Num) :
 
 private theorem fmin_scale (s : ℝ) (hs : 0 < s) (x y : Num) :
     fmin (scaleValue s x) (scaleValue s y) = scaleValue s (fmin x y) := by
-  unfold fmin
-  simp only [nan_scale, lt_scale s hs]
+  simp [fmin, nan_scale, lt_scale s hs]
   split_ifs <;> rfl
 
 private theorem fmax_scale (s : ℝ) (hs : 0 < s) (x y : Num) :
     fmax (scaleValue s x) (scaleValue s y) = scaleValue s (fmax x y) := by
-  unfold fmax
-  simp only [nan_scale, lt_scale s hs]
+  simp [fmax, nan_scale, lt_scale s hs]
   split_ifs <;> rfl
 
 private theorem fold_scale (op : Num → Num → Num) (s : ℝ)
