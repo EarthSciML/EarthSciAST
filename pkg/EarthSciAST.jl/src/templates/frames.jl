@@ -79,10 +79,12 @@ end
 The template instances of one build or analysis against the registry `reg`:
 the prepared bodies, the frames by instance key, and the binding-key memo.
 
-The table reads a COPY of `reg` (a shallow one: the declarations are shared,
-never mutated). What it registers — a structural instance
-(`_tpl_register_instance!`), a view part (`_tpl_skel`) — is the table's own and
-never reaches the caller's registry. A validation or analysis table is built on
+The table registers into a COPY of `reg` (a shallow one, made on the first
+registration, `_tpl_reg_add!`: the declarations are shared, never mutated, and
+a table that registers nothing never copies). What it registers — a structural
+instance (`_tpl_register_instance!`), a view part (`_tpl_skel`), a seam part
+(range/tile.jl `_seam_register!`) — is the table's own and never reaches the
+caller's registry. A validation or analysis table is built on
 a document's own registry (`file.component_templates`), and an instance left
 there would be read later as one of the document's declarations: flatten closes
 every declaration (`_tpl_explicit_free`), which makes the names an instance's
@@ -91,6 +93,8 @@ structural template that no build can call.
 """
 mutable struct _TplTable
     reg::Any
+    # Whether `reg` is the table's own copy (`_tpl_reg_add!`).
+    reg_owned::Bool
     defs::Dict{String, _TplDef}
     inst::Dict{Tuple{String, String}, _TplClosed}
     frames::Dict{String, _TplFrame}
@@ -99,10 +103,21 @@ mutable struct _TplTable
     root_memos::Dict{Symbol, Any}
 end
 _TplTable(reg) = _TplTable(
-    reg isa AbstractDict ? copy(reg) : reg, Dict{String, _TplDef}(), Dict{Tuple{String, String}, _TplClosed}(),
+    reg, !(reg isa AbstractDict), Dict{String, _TplDef}(), Dict{Tuple{String, String}, _TplClosed}(),
     Dict{String, _TplFrame}(), IdDict{Any, IdDict{ASTExpr, String}}(), Set{String}(),
     Dict{Symbol, Any}()
 )
+
+# Registers the declaration `nd` as `name` in the table's own registry,
+# copying the caller's on the first registration.
+function _tpl_reg_add!(tt::_TplTable, name::AbstractString, nd)
+    if !tt.reg_owned
+        tt.reg = copy(tt.reg)
+        tt.reg_owned = true
+    end
+    tt.reg[name] = nd
+    return nd
+end
 
 # A per-walk memo for `fr` (the table's own for the top level), made by `mk`
 # on first use.
@@ -482,7 +497,7 @@ function _tpl_register_instance!(tt::_TplTable, name::AbstractString, S::Dict{St
         tb = expression_from_json(body)
         rb = _tpl_structural_refs(tt, tb)
         nd["body"] = rb === tb ? body : serialize_expression(rb)
-        tt.reg[iname] = nd
+        _tpl_reg_add!(tt, iname, nd)
     end
     return iname
 end
@@ -1709,9 +1724,17 @@ function _tpl_capture_names(tt::_TplTable, name, s::AbstractString)
     key = (String(name), String(s))
     got = get(memo, key, nothing)
     got === nothing || return got
-    # The template graph is acyclic (esm-spec §9.7.3); the placeholder only
-    # keeps a malformed registry from recursing forever.
-    memo[key] = Set{String}()
+    # The template graph is acyclic (esm-spec §9.7.3, checked at load); a
+    # registry that reaches here with a cycle is refused, never read with a
+    # partial capture set.
+    active = _tpl_memo(tt, nothing, :capture_names_active, () -> Set{Tuple{String, String}}())
+    key in active && throw(
+        ExpressionTemplateError(
+            ERROR_CODES.OPERATOR_RECURSIVE_BODY,
+            "template '$(key[1])' references itself through the bodies it applies"
+        )
+    )
+    push!(active, key)
     out = copy(_tpl_body_binders(tt, name))
     def = _tpl_def(tt, name)
     if def.closed !== nothing
@@ -1735,6 +1758,7 @@ function _tpl_capture_names(tt::_TplTable, name, s::AbstractString)
         end
         walk(def.closed.body)
     end
+    delete!(active, key)
     return memo[key] = out
 end
 

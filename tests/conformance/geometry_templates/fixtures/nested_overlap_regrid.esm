@@ -1,1489 +1,1489 @@
 {
- "esm": "2.4.0",
- "metadata": {
-  "name": "geometry_nested_overlap_regrid",
-  "description": "The conservative overlap regrid of the EarthSciDiscretizations library (regridding/conservative_overlap.esm) as reseact's NEI emissions apply it: the rings live in another component (`Rings`), so each application binds component-qualified names, and the gated skeleton takes its overlap envelopes as parameters, which sit in a structural position (each application reads an instance of it). The narrow phase is a definition whose BODY applies another definition, the pairwise skeleton, with the skeleton's `area` bound to a third application that reads the skeleton's loop symbols i and j (the expansion substitutes it inside the skeleton's loops, which bind them). Gated and dense narrow phases, the gated row sum and the gated apply. A binding compiles each definition as its own function, called from the one that applies it; none is expanded. 3 x 3 unit source cells onto 2 x 2 target cells of side 1.5; every area is dyadic. Run by the `geometry_templates` inline-test conformance tier.",
-  "authors": [
-   "EarthSciML"
-  ],
-  "tags": [
-   "geometry",
-   "operators",
-   "nested-references",
-   "faq",
-   "planar",
-   "join-gate",
-   "conformance"
-  ]
- },
- "index_sets": {
-  "src_cells": {
-   "kind": "interval",
-   "size": 9
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "geometry_nested_overlap_regrid",
+    "description": "The conservative overlap regrid of the EarthSciDiscretizations library (regridding/conservative_overlap.esm) as reseact's NEI emissions apply it: the rings live in another component (`Rings`), so each application binds component-qualified names, and the gated skeleton takes its overlap envelopes as parameters, which sit in a structural position (each application reads an instance of it). The narrow phase is a definition whose BODY applies another definition, the pairwise skeleton, with the skeleton's `area` bound to a third application that reads the skeleton's loop symbols i and j (the expansion substitutes it inside the skeleton's loops, which bind them). Gated and dense narrow phases, the gated row sum and the gated apply. A binding compiles each definition as its own function, called from the one that applies it; none is expanded. 3 x 3 unit source cells onto 2 x 2 target cells of side 1.5; every area is dyadic. Run by the `geometry_templates` inline-test conformance tier.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "geometry",
+      "operators",
+      "nested-references",
+      "faq",
+      "planar",
+      "join-gate",
+      "conformance"
+    ]
   },
-  "tgt_cells": {
-   "kind": "interval",
-   "size": 4
-  },
-  "verts": {
-   "kind": "interval",
-   "size": 4
-  },
-  "xy": {
-   "kind": "interval",
-   "size": 2
-  }
- },
- "models": {
-  "Rings": {
-   "variables": {
-    "src_poly": {
-     "type": "unknown",
-     "units": "1",
-     "shape": [
-      "src_cells",
-      "verts",
-      "xy"
-     ],
-     "description": "Nine unit squares tiling [0, 3]^2, counter-clockwise."
+  "index_sets": {
+    "src_cells": {
+      "kind": "interval",
+      "size": 9
     },
-    "tgt_poly": {
-     "type": "unknown",
-     "units": "1",
-     "shape": [
-      "tgt_cells",
-      "verts",
-      "xy"
-     ],
-     "description": "Four squares of side 1.5 tiling [0, 3]^2."
+    "tgt_cells": {
+      "kind": "interval",
+      "size": 4
     },
-    "F_src": {
-     "type": "unknown",
-     "units": "1",
-     "shape": [
-      "src_cells"
-     ],
-     "description": "The source field: source cell c holds c."
+    "verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "xy": {
+      "kind": "interval",
+      "size": 2
     }
-   },
-   "equations": [
-    {
-     "lhs": "src_poly",
-     "rhs": {
-      "op": "const",
-      "args": [],
-      "value": [
-       [
-        [
-         0.0,
-         0.0
-        ],
-        [
-         1.0,
-         0.0
-        ],
-        [
-         1.0,
-         1.0
-        ],
-        [
-         0.0,
-         1.0
-        ]
-       ],
-       [
-        [
-         1.0,
-         0.0
-        ],
-        [
-         2.0,
-         0.0
-        ],
-        [
-         2.0,
-         1.0
-        ],
-        [
-         1.0,
-         1.0
-        ]
-       ],
-       [
-        [
-         2.0,
-         0.0
-        ],
-        [
-         3.0,
-         0.0
-        ],
-        [
-         3.0,
-         1.0
-        ],
-        [
-         2.0,
-         1.0
-        ]
-       ],
-       [
-        [
-         0.0,
-         1.0
-        ],
-        [
-         1.0,
-         1.0
-        ],
-        [
-         1.0,
-         2.0
-        ],
-        [
-         0.0,
-         2.0
-        ]
-       ],
-       [
-        [
-         1.0,
-         1.0
-        ],
-        [
-         2.0,
-         1.0
-        ],
-        [
-         2.0,
-         2.0
-        ],
-        [
-         1.0,
-         2.0
-        ]
-       ],
-       [
-        [
-         2.0,
-         1.0
-        ],
-        [
-         3.0,
-         1.0
-        ],
-        [
-         3.0,
-         2.0
-        ],
-        [
-         2.0,
-         2.0
-        ]
-       ],
-       [
-        [
-         0.0,
-         2.0
-        ],
-        [
-         1.0,
-         2.0
-        ],
-        [
-         1.0,
-         3.0
-        ],
-        [
-         0.0,
-         3.0
-        ]
-       ],
-       [
-        [
-         1.0,
-         2.0
-        ],
-        [
-         2.0,
-         2.0
-        ],
-        [
-         2.0,
-         3.0
-        ],
-        [
-         1.0,
-         3.0
-        ]
-       ],
-       [
-        [
-         2.0,
-         2.0
-        ],
-        [
-         3.0,
-         2.0
-        ],
-        [
-         3.0,
-         3.0
-        ],
-        [
-         2.0,
-         3.0
-        ]
-       ]
-      ]
-     }
-    },
-    {
-     "lhs": "tgt_poly",
-     "rhs": {
-      "op": "const",
-      "args": [],
-      "value": [
-       [
-        [
-         0.0,
-         0.0
-        ],
-        [
-         1.5,
-         0.0
-        ],
-        [
-         1.5,
-         1.5
-        ],
-        [
-         0.0,
-         1.5
-        ]
-       ],
-       [
-        [
-         1.5,
-         0.0
-        ],
-        [
-         3.0,
-         0.0
-        ],
-        [
-         3.0,
-         1.5
-        ],
-        [
-         1.5,
-         1.5
-        ]
-       ],
-       [
-        [
-         0.0,
-         1.5
-        ],
-        [
-         1.5,
-         1.5
-        ],
-        [
-         1.5,
-         3.0
-        ],
-        [
-         0.0,
-         3.0
-        ]
-       ],
-       [
-        [
-         1.5,
-         1.5
-        ],
-        [
-         3.0,
-         1.5
-        ],
-        [
-         3.0,
-         3.0
-        ],
-        [
-         1.5,
-         3.0
-        ]
-       ]
-      ]
-     }
-    },
-    {
-     "lhs": "F_src",
-     "rhs": {
-      "op": "const",
-      "args": [],
-      "value": [
-       1.0,
-       2.0,
-       3.0,
-       4.0,
-       5.0,
-       6.0,
-       7.0,
-       8.0,
-       9.0
-      ]
-     }
-    }
-   ]
   },
-  "NestedOverlapRegrid": {
-   "operator_imports": [
-    {
-     "ref": "esm:std/geometry.esm",
-     "only": [
-      "overlap_area_planar"
-     ]
-    }
-   ],
-   "operators": {
-    "pairs_gated": {
-     "params": [
-      "src_ring",
-      "tgt_ring",
-      "area",
-      "src_poly",
-      "tgt_poly"
-     ],
-     "description": "The broad-phase-gated pairwise skeleton (EarthSciDiscretizations regridding/conservative_overlap.esm conservative_overlap_pairs_gated): the [src_cells, tgt_cells] matrix whose (i, j) entry is the expression bound to `area`, evaluated with the loop symbols i and j in scope, over the candidate pairs of the overlap join gate only. The gate's envelopes `src_poly` and `tgt_poly` are parameters, as a flatten closes the library's body (they sit in a structural position: a reference names its instance).",
-     "body": {
-      "op": "faq",
-      "semiring": "sum_product",
-      "output_idx": [
-       "i",
-       "j"
-      ],
-      "ranges": {
-       "i": {
-        "from": "src_cells"
-       },
-       "j": {
-        "from": "tgt_cells"
-       }
-      },
-      "join": [
-       {
-        "overlap": {
-         "src_env": [
-          "src_poly"
-         ],
-         "tgt_env": [
-          "tgt_poly"
-         ],
-         "eps": 1e-09
-        }
-       }
-      ],
-      "args": [
-       "src_ring",
-       "tgt_ring"
-      ],
-      "expr": "area"
-     }
-    },
-    "pairs_dense": {
-     "params": [
-      "src_ring",
-      "tgt_ring",
-      "area"
-     ],
-     "description": "The dense pairwise skeleton (conservative_overlap_pairs): every pair visited.",
-     "body": {
-      "op": "faq",
-      "output_idx": [
-       "i",
-       "j"
-      ],
-      "ranges": {
-       "i": {
-        "from": "src_cells"
-       },
-       "j": {
-        "from": "tgt_cells"
-       }
-      },
-      "args": [
-       "src_ring",
-       "tgt_ring"
-      ],
-      "expr": "area"
-     }
-    },
-    "area_planar_ij": {
-     "params": [
-      "src_poly",
-      "tgt_poly",
-      "src_nv",
-      "tgt_nv"
-     ],
-     "description": "The narrow-phase element (conservative_overlap_area_planar_ij): overlap_area_planar of source cell i and target cell j. It reads the loop symbols i and j of the skeleton it is bound into (the expansion substitutes it inside the skeleton's loops).",
-     "body": {
-      "op": "apply_operator",
-      "args": [],
-      "name": "overlap_area_planar",
-      "bindings": {
-       "ring_a": "src_poly",
-       "cell_a": "i",
-       "nv_a": "src_nv",
-       "ring_b": "tgt_poly",
-       "cell_b": "j",
-       "nv_b": "tgt_nv"
-      }
-     }
-    },
-    "A_ij_gated_planar": {
-     "params": [
-      "src_poly",
-      "tgt_poly",
-      "src_nv",
-      "tgt_nv"
-     ],
-     "description": "The gated narrow phase (conservative_overlap_A_ij_gated_planar): a definition whose body applies another definition, the skeleton, with its `area` bound to a third application that reads the skeleton's loop symbols.",
-     "body": {
-      "op": "apply_operator",
-      "args": [],
-      "name": "pairs_gated",
-      "bindings": {
-       "src_ring": "src_poly",
-       "tgt_ring": "tgt_poly",
-       "src_poly": "src_poly",
-       "tgt_poly": "tgt_poly",
-       "area": {
-        "op": "apply_operator",
-        "args": [],
-        "name": "area_planar_ij",
-        "bindings": {
-         "src_poly": "src_poly",
-         "tgt_poly": "tgt_poly",
-         "src_nv": "src_nv",
-         "tgt_nv": "tgt_nv"
-        }
-       }
-      }
-     }
-    },
-    "A_ij_dense_planar": {
-     "params": [
-      "src_poly",
-      "tgt_poly",
-      "src_nv",
-      "tgt_nv"
-     ],
-     "description": "The dense narrow phase (conservative_overlap_A_ij_planar): the same nesting around the dense skeleton.",
-     "body": {
-      "op": "apply_operator",
-      "args": [],
-      "name": "pairs_dense",
-      "bindings": {
-       "src_ring": "src_poly",
-       "tgt_ring": "tgt_poly",
-       "area": {
-        "op": "apply_operator",
-        "args": [],
-        "name": "area_planar_ij",
-        "bindings": {
-         "src_poly": "src_poly",
-         "tgt_poly": "tgt_poly",
-         "src_nv": "src_nv",
-         "tgt_nv": "tgt_nv"
-        }
-       }
-      }
-     }
-    },
-    "A_j_gated": {
-     "params": [
-      "A_ij",
-      "src_poly",
-      "tgt_poly",
-      "atol"
-     ],
-     "description": "The gated row normalization (conservative_overlap_A_j_gated).",
-     "body": {
-      "op": "faq",
-      "semiring": "sum_product",
-      "output_idx": [
-       "j"
-      ],
-      "ranges": {
-       "i": {
-        "from": "src_cells"
-       },
-       "j": {
-        "from": "tgt_cells"
-       }
-      },
-      "join": [
-       {
-        "overlap": {
-         "src_env": [
-          "src_poly"
-         ],
-         "tgt_env": [
-          "tgt_poly"
-         ],
-         "eps": 1e-09
-        }
-       }
-      ],
-      "filter": {
-       "op": ">",
-       "args": [
-        {
-         "op": "index",
-         "args": [
-          "A_ij",
-          "i",
-          "j"
-         ]
+  "models": {
+    "Rings": {
+      "variables": {
+        "src_poly": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "src_cells",
+            "verts",
+            "xy"
+          ],
+          "description": "Nine unit squares tiling [0, 3]^2, counter-clockwise."
         },
-        "atol"
-       ]
-      },
-      "args": [
-       "A_ij",
-       "src_poly",
-       "tgt_poly"
-      ],
-      "expr": {
-       "op": "index",
-       "args": [
-        "A_ij",
-        "i",
-        "j"
-       ]
-      }
-     }
-    },
-    "apply_gated": {
-     "params": [
-      "A_ij",
-      "A_j",
-      "F_src",
-      "src_poly",
-      "tgt_poly",
-      "atol"
-     ],
-     "description": "The gated apply and normalize (conservative_overlap_apply_gated).",
-     "body": {
-      "op": "faq",
-      "semiring": "sum_product",
-      "output_idx": [
-       "j"
-      ],
-      "ranges": {
-       "i": {
-        "from": "src_cells"
-       },
-       "j": {
-        "from": "tgt_cells"
-       }
-      },
-      "join": [
-       {
-        "overlap": {
-         "src_env": [
-          "src_poly"
-         ],
-         "tgt_env": [
-          "tgt_poly"
-         ],
-         "eps": 1e-09
-        }
-       }
-      ],
-      "filter": {
-       "op": ">",
-       "args": [
-        {
-         "op": "index",
-         "args": [
-          "A_ij",
-          "i",
-          "j"
-         ]
+        "tgt_poly": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "tgt_cells",
+            "verts",
+            "xy"
+          ],
+          "description": "Four squares of side 1.5 tiling [0, 3]^2."
         },
-        "atol"
-       ]
+        "F_src": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "src_cells"
+          ],
+          "description": "The source field: source cell c holds c."
+        }
       },
-      "args": [
-       "A_ij",
-       "A_j",
-       "F_src",
-       "src_poly",
-       "tgt_poly"
-      ],
-      "expr": {
-       "op": "/",
-       "args": [
+      "equations": [
         {
-         "op": "*",
-         "args": [
-          {
-           "op": "index",
-           "args": [
-            "A_ij",
-            "i",
-            "j"
-           ]
-          },
-          {
-           "op": "index",
-           "args": [
-            "F_src",
-            "i"
-           ]
+          "lhs": "src_poly",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  1.0,
+                  0.0
+                ],
+                [
+                  1.0,
+                  1.0
+                ],
+                [
+                  0.0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  1.0,
+                  0.0
+                ],
+                [
+                  2.0,
+                  0.0
+                ],
+                [
+                  2.0,
+                  1.0
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  2.0,
+                  0.0
+                ],
+                [
+                  3.0,
+                  0.0
+                ],
+                [
+                  3.0,
+                  1.0
+                ],
+                [
+                  2.0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  0.0,
+                  1.0
+                ],
+                [
+                  1.0,
+                  1.0
+                ],
+                [
+                  1.0,
+                  2.0
+                ],
+                [
+                  0.0,
+                  2.0
+                ]
+              ],
+              [
+                [
+                  1.0,
+                  1.0
+                ],
+                [
+                  2.0,
+                  1.0
+                ],
+                [
+                  2.0,
+                  2.0
+                ],
+                [
+                  1.0,
+                  2.0
+                ]
+              ],
+              [
+                [
+                  2.0,
+                  1.0
+                ],
+                [
+                  3.0,
+                  1.0
+                ],
+                [
+                  3.0,
+                  2.0
+                ],
+                [
+                  2.0,
+                  2.0
+                ]
+              ],
+              [
+                [
+                  0.0,
+                  2.0
+                ],
+                [
+                  1.0,
+                  2.0
+                ],
+                [
+                  1.0,
+                  3.0
+                ],
+                [
+                  0.0,
+                  3.0
+                ]
+              ],
+              [
+                [
+                  1.0,
+                  2.0
+                ],
+                [
+                  2.0,
+                  2.0
+                ],
+                [
+                  2.0,
+                  3.0
+                ],
+                [
+                  1.0,
+                  3.0
+                ]
+              ],
+              [
+                [
+                  2.0,
+                  2.0
+                ],
+                [
+                  3.0,
+                  2.0
+                ],
+                [
+                  3.0,
+                  3.0
+                ],
+                [
+                  2.0,
+                  3.0
+                ]
+              ]
+            ]
           }
-         ]
         },
         {
-         "op": "index",
-         "args": [
-          "A_j",
-          "j"
-         ]
+          "lhs": "tgt_poly",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  1.5,
+                  0.0
+                ],
+                [
+                  1.5,
+                  1.5
+                ],
+                [
+                  0.0,
+                  1.5
+                ]
+              ],
+              [
+                [
+                  1.5,
+                  0.0
+                ],
+                [
+                  3.0,
+                  0.0
+                ],
+                [
+                  3.0,
+                  1.5
+                ],
+                [
+                  1.5,
+                  1.5
+                ]
+              ],
+              [
+                [
+                  0.0,
+                  1.5
+                ],
+                [
+                  1.5,
+                  1.5
+                ],
+                [
+                  1.5,
+                  3.0
+                ],
+                [
+                  0.0,
+                  3.0
+                ]
+              ],
+              [
+                [
+                  1.5,
+                  1.5
+                ],
+                [
+                  3.0,
+                  1.5
+                ],
+                [
+                  3.0,
+                  3.0
+                ],
+                [
+                  1.5,
+                  3.0
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "lhs": "F_src",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              1.0,
+              2.0,
+              3.0,
+              4.0,
+              5.0,
+              6.0,
+              7.0,
+              8.0,
+              9.0
+            ]
+          }
         }
-       ]
-      }
-     }
-    }
-   },
-   "tolerance": {
-    "abs": 1e-12,
-    "rel": 1e-12
-   },
-   "variables": {
-    "atol": {
-     "type": "parameter",
-     "units": "1",
-     "default": 1e-12
+      ]
     },
-    "A_ij": {
-     "type": "unknown",
-     "units": "1",
-     "shape": [
-      "src_cells",
-      "tgt_cells"
-     ],
-     "description": "Overlap areas by the gated narrow phase: a definition whose body applies the skeleton definition."
-    },
-    "A_dense": {
-     "type": "unknown",
-     "units": "1",
-     "shape": [
-      "src_cells",
-      "tgt_cells"
-     ],
-     "description": "The same areas by the dense narrow phase."
-    },
-    "A_j": {
-     "type": "unknown",
-     "units": "1",
-     "shape": [
-      "tgt_cells"
-     ],
-     "description": "Covered area of each target cell (the gated row sum)."
-    },
-    "E": {
-     "type": "unknown",
-     "units": "1",
-     "shape": [
-      "tgt_cells"
-     ],
-     "default": 0.0,
-     "description": "Integrates the regridded field for one unit of time."
-    }
-   },
-   "equations": [
-    {
-     "lhs": "A_ij",
-     "rhs": {
-      "op": "apply_operator",
-      "args": [],
-      "name": "A_ij_gated_planar",
-      "bindings": {
-       "src_poly": "Rings.src_poly",
-       "tgt_poly": "Rings.tgt_poly",
-       "src_nv": 4,
-       "tgt_nv": 4
-      }
-     }
-    },
-    {
-     "lhs": "A_dense",
-     "rhs": {
-      "op": "apply_operator",
-      "args": [],
-      "name": "A_ij_dense_planar",
-      "bindings": {
-       "src_poly": "Rings.src_poly",
-       "tgt_poly": "Rings.tgt_poly",
-       "src_nv": 4,
-       "tgt_nv": 4
-      }
-     }
-    },
-    {
-     "lhs": "A_j",
-     "rhs": {
-      "op": "apply_operator",
-      "args": [],
-      "name": "A_j_gated",
-      "bindings": {
-       "A_ij": "A_ij",
-       "src_poly": "Rings.src_poly",
-       "tgt_poly": "Rings.tgt_poly",
-       "atol": "atol"
-      }
-     }
-    },
-    {
-     "lhs": {
-      "op": "D",
-      "args": [
-       "E"
+    "NestedOverlapRegrid": {
+      "operator_imports": [
+        {
+          "ref": "esm:std/geometry.esm",
+          "only": [
+            "overlap_area_planar"
+          ]
+        }
       ],
-      "wrt": "t"
-     },
-     "rhs": {
-      "op": "apply_operator",
-      "args": [],
-      "name": "apply_gated",
-      "bindings": {
-       "A_ij": "A_ij",
-       "A_j": "A_j",
-       "F_src": "Rings.F_src",
-       "src_poly": "Rings.src_poly",
-       "tgt_poly": "Rings.tgt_poly",
-       "atol": "atol"
-      }
-     }
+      "operators": {
+        "pairs_gated": {
+          "params": [
+            "src_ring",
+            "tgt_ring",
+            "area",
+            "src_poly",
+            "tgt_poly"
+          ],
+          "description": "The broad-phase-gated pairwise skeleton (EarthSciDiscretizations regridding/conservative_overlap.esm conservative_overlap_pairs_gated): the [src_cells, tgt_cells] matrix whose (i, j) entry is the expression bound to `area`, evaluated with the loop symbols i and j in scope, over the candidate pairs of the overlap join gate only. The gate's envelopes `src_poly` and `tgt_poly` are parameters, as a flatten closes the library's body (they sit in a structural position: a reference names its instance).",
+          "body": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "join": [
+              {
+                "overlap": {
+                  "src_env": [
+                    "src_poly"
+                  ],
+                  "tgt_env": [
+                    "tgt_poly"
+                  ],
+                  "eps": 1e-09
+                }
+              }
+            ],
+            "args": [
+              "src_ring",
+              "tgt_ring"
+            ],
+            "expr": "area"
+          }
+        },
+        "pairs_dense": {
+          "params": [
+            "src_ring",
+            "tgt_ring",
+            "area"
+          ],
+          "description": "The dense pairwise skeleton (conservative_overlap_pairs): every pair visited.",
+          "body": {
+            "op": "faq",
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "args": [
+              "src_ring",
+              "tgt_ring"
+            ],
+            "expr": "area"
+          }
+        },
+        "area_planar_ij": {
+          "params": [
+            "src_poly",
+            "tgt_poly",
+            "src_nv",
+            "tgt_nv"
+          ],
+          "description": "The narrow-phase element (conservative_overlap_area_planar_ij): overlap_area_planar of source cell i and target cell j. It reads the loop symbols i and j of the skeleton it is bound into (the expansion substitutes it inside the skeleton's loops).",
+          "body": {
+            "op": "apply_operator",
+            "args": [],
+            "name": "overlap_area_planar",
+            "bindings": {
+              "ring_a": "src_poly",
+              "cell_a": "i",
+              "nv_a": "src_nv",
+              "ring_b": "tgt_poly",
+              "cell_b": "j",
+              "nv_b": "tgt_nv"
+            }
+          }
+        },
+        "A_ij_gated_planar": {
+          "params": [
+            "src_poly",
+            "tgt_poly",
+            "src_nv",
+            "tgt_nv"
+          ],
+          "description": "The gated narrow phase (conservative_overlap_A_ij_gated_planar): a definition whose body applies another definition, the skeleton, with its `area` bound to a third application that reads the skeleton's loop symbols.",
+          "body": {
+            "op": "apply_operator",
+            "args": [],
+            "name": "pairs_gated",
+            "bindings": {
+              "src_ring": "src_poly",
+              "tgt_ring": "tgt_poly",
+              "src_poly": "src_poly",
+              "tgt_poly": "tgt_poly",
+              "area": {
+                "op": "apply_operator",
+                "args": [],
+                "name": "area_planar_ij",
+                "bindings": {
+                  "src_poly": "src_poly",
+                  "tgt_poly": "tgt_poly",
+                  "src_nv": "src_nv",
+                  "tgt_nv": "tgt_nv"
+                }
+              }
+            }
+          }
+        },
+        "A_ij_dense_planar": {
+          "params": [
+            "src_poly",
+            "tgt_poly",
+            "src_nv",
+            "tgt_nv"
+          ],
+          "description": "The dense narrow phase (conservative_overlap_A_ij_planar): the same nesting around the dense skeleton.",
+          "body": {
+            "op": "apply_operator",
+            "args": [],
+            "name": "pairs_dense",
+            "bindings": {
+              "src_ring": "src_poly",
+              "tgt_ring": "tgt_poly",
+              "area": {
+                "op": "apply_operator",
+                "args": [],
+                "name": "area_planar_ij",
+                "bindings": {
+                  "src_poly": "src_poly",
+                  "tgt_poly": "tgt_poly",
+                  "src_nv": "src_nv",
+                  "tgt_nv": "tgt_nv"
+                }
+              }
+            }
+          }
+        },
+        "A_j_gated": {
+          "params": [
+            "A_ij",
+            "src_poly",
+            "tgt_poly",
+            "atol"
+          ],
+          "description": "The gated row normalization (conservative_overlap_A_j_gated).",
+          "body": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "join": [
+              {
+                "overlap": {
+                  "src_env": [
+                    "src_poly"
+                  ],
+                  "tgt_env": [
+                    "tgt_poly"
+                  ],
+                  "eps": 1e-09
+                }
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_ij",
+                    "i",
+                    "j"
+                  ]
+                },
+                "atol"
+              ]
+            },
+            "args": [
+              "A_ij",
+              "src_poly",
+              "tgt_poly"
+            ],
+            "expr": {
+              "op": "index",
+              "args": [
+                "A_ij",
+                "i",
+                "j"
+              ]
+            }
+          }
+        },
+        "apply_gated": {
+          "params": [
+            "A_ij",
+            "A_j",
+            "F_src",
+            "src_poly",
+            "tgt_poly",
+            "atol"
+          ],
+          "description": "The gated apply and normalize (conservative_overlap_apply_gated).",
+          "body": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "join": [
+              {
+                "overlap": {
+                  "src_env": [
+                    "src_poly"
+                  ],
+                  "tgt_env": [
+                    "tgt_poly"
+                  ],
+                  "eps": 1e-09
+                }
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_ij",
+                    "i",
+                    "j"
+                  ]
+                },
+                "atol"
+              ]
+            },
+            "args": [
+              "A_ij",
+              "A_j",
+              "F_src",
+              "src_poly",
+              "tgt_poly"
+            ],
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "A_ij",
+                        "i",
+                        "j"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "F_src",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "A_j",
+                    "j"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "tolerance": {
+        "abs": 1e-12,
+        "rel": 1e-12
+      },
+      "variables": {
+        "atol": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1e-12
+        },
+        "A_ij": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "src_cells",
+            "tgt_cells"
+          ],
+          "description": "Overlap areas by the gated narrow phase: a definition whose body applies the skeleton definition."
+        },
+        "A_dense": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "src_cells",
+            "tgt_cells"
+          ],
+          "description": "The same areas by the dense narrow phase."
+        },
+        "A_j": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "tgt_cells"
+          ],
+          "description": "Covered area of each target cell (the gated row sum)."
+        },
+        "E": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "tgt_cells"
+          ],
+          "default": 0.0,
+          "description": "Integrates the regridded field for one unit of time."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "A_ij",
+          "rhs": {
+            "op": "apply_operator",
+            "args": [],
+            "name": "A_ij_gated_planar",
+            "bindings": {
+              "src_poly": "Rings.src_poly",
+              "tgt_poly": "Rings.tgt_poly",
+              "src_nv": 4,
+              "tgt_nv": 4
+            }
+          }
+        },
+        {
+          "lhs": "A_dense",
+          "rhs": {
+            "op": "apply_operator",
+            "args": [],
+            "name": "A_ij_dense_planar",
+            "bindings": {
+              "src_poly": "Rings.src_poly",
+              "tgt_poly": "Rings.tgt_poly",
+              "src_nv": 4,
+              "tgt_nv": 4
+            }
+          }
+        },
+        {
+          "lhs": "A_j",
+          "rhs": {
+            "op": "apply_operator",
+            "args": [],
+            "name": "A_j_gated",
+            "bindings": {
+              "A_ij": "A_ij",
+              "src_poly": "Rings.src_poly",
+              "tgt_poly": "Rings.tgt_poly",
+              "atol": "atol"
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "E"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "apply_operator",
+            "args": [],
+            "name": "apply_gated",
+            "bindings": {
+              "A_ij": "A_ij",
+              "A_j": "A_j",
+              "F_src": "Rings.F_src",
+              "src_poly": "Rings.src_poly",
+              "tgt_poly": "Rings.tgt_poly",
+              "atol": "atol"
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "nested_overlap_regrid",
+          "description": "Every overlap area by the gated and the dense nested narrow phase (exact: dyadic coordinates and areas), each target's covered area, and the regridded field integrated for one unit of time from zero.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 1.0,
+              "coords": {
+                "src_cells": 1,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 1.0,
+              "coords": {
+                "src_cells": 1,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 1,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 1,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 1,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 1,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 1,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 1,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 2,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 2,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 2,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 2,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 2,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 2,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 2,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 2,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 3,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 3,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 1.0,
+              "coords": {
+                "src_cells": 3,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 1.0,
+              "coords": {
+                "src_cells": 3,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 3,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 3,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 3,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 3,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 4,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 4,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 4,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 4,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 4,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 4,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 4,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 4,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.25,
+              "coords": {
+                "src_cells": 5,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.25,
+              "coords": {
+                "src_cells": 5,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.25,
+              "coords": {
+                "src_cells": 5,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.25,
+              "coords": {
+                "src_cells": 5,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.25,
+              "coords": {
+                "src_cells": 5,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.25,
+              "coords": {
+                "src_cells": 5,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.25,
+              "coords": {
+                "src_cells": 5,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.25,
+              "coords": {
+                "src_cells": 5,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 6,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 6,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 6,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 6,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 6,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 6,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 6,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 6,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 7,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 7,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 7,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 7,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 1.0,
+              "coords": {
+                "src_cells": 7,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 1.0,
+              "coords": {
+                "src_cells": 7,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 7,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 7,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 8,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 8,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 8,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 8,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 8,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 8,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 8,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.5,
+              "coords": {
+                "src_cells": 8,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 9,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 9,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 9,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 9,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 9,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 9,
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_ij",
+              "time": 1.0,
+              "expected": 1.0,
+              "coords": {
+                "src_cells": 9,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_dense",
+              "time": 1.0,
+              "expected": 1.0,
+              "coords": {
+                "src_cells": 9,
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "A_j",
+              "time": 1.0,
+              "expected": 2.25,
+              "coords": {
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_j",
+              "time": 1.0,
+              "expected": 2.25,
+              "coords": {
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_j",
+              "time": 1.0,
+              "expected": 2.25,
+              "coords": {
+                "tgt_cells": 3
+              }
+            },
+            {
+              "variable": "A_j",
+              "time": 1.0,
+              "expected": 2.25,
+              "coords": {
+                "tgt_cells": 4
+              }
+            },
+            {
+              "variable": "E[1]",
+              "time": 1.0,
+              "expected": 2.3333333333333335
+            },
+            {
+              "variable": "E[2]",
+              "time": 1.0,
+              "expected": 3.6666666666666665
+            },
+            {
+              "variable": "E[3]",
+              "time": 1.0,
+              "expected": 6.333333333333333
+            },
+            {
+              "variable": "E[4]",
+              "time": 1.0,
+              "expected": 7.666666666666667
+            }
+          ]
+        }
+      ]
     }
-   ],
-   "tests": [
-    {
-     "id": "nested_overlap_regrid",
-     "description": "Every overlap area by the gated and the dense nested narrow phase (exact: dyadic coordinates and areas), each target's covered area, and the regridded field integrated for one unit of time from zero.",
-     "time_span": {
-      "start": 0.0,
-      "end": 1.0
-     },
-     "assertions": [
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 1.0,
-       "coords": {
-        "src_cells": 1,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 1.0,
-       "coords": {
-        "src_cells": 1,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 1,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 1,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 1,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 1,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 1,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 1,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 2,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 2,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 2,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 2,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 2,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 2,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 2,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 2,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 3,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 3,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 1.0,
-       "coords": {
-        "src_cells": 3,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 1.0,
-       "coords": {
-        "src_cells": 3,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 3,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 3,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 3,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 3,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 4,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 4,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 4,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 4,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 4,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 4,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 4,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 4,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.25,
-       "coords": {
-        "src_cells": 5,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.25,
-       "coords": {
-        "src_cells": 5,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.25,
-       "coords": {
-        "src_cells": 5,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.25,
-       "coords": {
-        "src_cells": 5,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.25,
-       "coords": {
-        "src_cells": 5,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.25,
-       "coords": {
-        "src_cells": 5,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.25,
-       "coords": {
-        "src_cells": 5,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.25,
-       "coords": {
-        "src_cells": 5,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 6,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 6,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 6,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 6,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 6,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 6,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 6,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 6,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 7,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 7,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 7,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 7,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 1.0,
-       "coords": {
-        "src_cells": 7,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 1.0,
-       "coords": {
-        "src_cells": 7,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 7,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 7,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 8,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 8,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 8,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 8,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 8,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 8,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 8,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.5,
-       "coords": {
-        "src_cells": 8,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 9,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 9,
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 9,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 9,
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 9,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 0.0,
-       "coords": {
-        "src_cells": 9,
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_ij",
-       "time": 1.0,
-       "expected": 1.0,
-       "coords": {
-        "src_cells": 9,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_dense",
-       "time": 1.0,
-       "expected": 1.0,
-       "coords": {
-        "src_cells": 9,
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "A_j",
-       "time": 1.0,
-       "expected": 2.25,
-       "coords": {
-        "tgt_cells": 1
-       }
-      },
-      {
-       "variable": "A_j",
-       "time": 1.0,
-       "expected": 2.25,
-       "coords": {
-        "tgt_cells": 2
-       }
-      },
-      {
-       "variable": "A_j",
-       "time": 1.0,
-       "expected": 2.25,
-       "coords": {
-        "tgt_cells": 3
-       }
-      },
-      {
-       "variable": "A_j",
-       "time": 1.0,
-       "expected": 2.25,
-       "coords": {
-        "tgt_cells": 4
-       }
-      },
-      {
-       "variable": "E[1]",
-       "time": 1.0,
-       "expected": 2.3333333333333335
-      },
-      {
-       "variable": "E[2]",
-       "time": 1.0,
-       "expected": 3.6666666666666665
-      },
-      {
-       "variable": "E[3]",
-       "time": 1.0,
-       "expected": 6.333333333333333
-      },
-      {
-       "variable": "E[4]",
-       "time": 1.0,
-       "expected": 7.666666666666667
-      }
-     ]
-    }
-   ]
   }
- }
 }

@@ -947,7 +947,6 @@ function _call_captured_reads(tt::_TplTable, name::String, inl::Dict{String, AST
         foreach_subexpr(v) do x
             x isa VarExpr && x.name in B && push!(out, x.name)
         end
-        v isa VarExpr && v.name in B && push!(out, v.name)
     end
     return out
 end
@@ -969,7 +968,10 @@ function _call_capture_subscripts(tt::_TplTable, e::ASTExpr, cap::Set{String}, m
         m = Dict{String, ASTExpr}()
         if info !== nothing
             for o in info.outs
-                o in inner && (m[o] = b[_TPL_OUT * o])
+                o in inner || continue
+                # A call that carries no subscript for `o` leaves the name as it is.
+                x = get(b, _TPL_OUT * o, nothing)
+                x === nothing || (m[o] = x)
             end
         end
         rest = isempty(m) ? inner : setdiff(inner, keys(m))
@@ -1550,7 +1552,7 @@ function _tpl_skel(tt::_TplTable, name::AbstractString)
             nd[string(kk)] = v
         end
         nd["body"] = pb
-        tt.reg[pn] = nd
+        _tpl_reg_add!(tt, pn, nd)
     end
     return memo[String(name)] = (h, length(parts))
 end

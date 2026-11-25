@@ -23,8 +23,8 @@ const _NRC_PATH = joinpath(
     TESTUTILS_REPO_ROOT, "tests", "conformance", "geometry_templates", "fixtures", "nested_overlap_regrid.esm"
 )
 
-function _nrc_rhs(compiler::Symbol)
-    prob = EarthSciAST.esm_problem(_NRC_PATH, (0.0, 1.0); compiler = compiler)
+function _nrc_rhs(compiler::Symbol, path::AbstractString = _NRC_PATH)
+    prob = EarthSciAST.esm_problem(path, (0.0, 1.0); compiler = compiler)
     prog = EarthSciAST.rhs_program(prob)
     du = zeros(length(prob.u0))
     EarthSciAST.rhs!(
@@ -51,6 +51,38 @@ end
     expected = [21, 33, 57, 69] ./ 9
     for compiler in (:interpreter, :native)
         du = _nrc_rhs(compiler)
+        got = [du[only(k for k in keys(du) if endswith(k, "E[$j]"))] for j in 1:4]
+        @test isapprox(got, expected; rtol = 1.0e-14)
+    end
+
+    # The narrow-phase element reads the skeleton's loop symbols as IMPLICIT
+    # parameters (no declared `i`, `j`), and the build sees the registry
+    # unflattened, so the narrow phase passes them on as implicit bindings.
+    # Their values must be the skeleton's loop symbols, not caller names that
+    # happen to share the spelling: rename the loops to p, q, and feed the
+    # dense narrow phase (whose loops are output indices read through element
+    # calls) into the tendency in place of the gated one.
+    doc = JSON3.read(read(_NRC_PATH, String), Dict{String, Any})
+    m = doc["models"]["NestedOverlapRegrid"]
+    delete!(m, "tests")
+    ops = m["operators"]
+    for k in ("pairs_dense", "pairs_gated")
+        body = ops[k]["body"]
+        body["output_idx"] = ["p", "q"]
+        r = body["ranges"]
+        body["ranges"] = Dict("p" => r["i"], "q" => r["j"])
+    end
+    cell = ops["area_planar_ij"]["body"]["bindings"]
+    cell["cell_a"] = "p"
+    cell["cell_b"] = "q"
+    for eq in m["equations"]
+        b = get(eq["rhs"], "bindings", nothing)
+        b !== nothing && get(b, "A_ij", nothing) == "A_ij" && (b["A_ij"] = "A_dense")
+    end
+    path = joinpath(mktempdir(), "nested_overlap_regrid_renamed.esm")
+    open(io -> JSON3.write(io, doc), path, "w")
+    for compiler in (:interpreter, :native)
+        du = _nrc_rhs(compiler, path)
         got = [du[only(k for k in keys(du) if endswith(k, "E[$j]"))] for j in 1:4]
         @test isapprox(got, expected; rtol = 1.0e-14)
     end
