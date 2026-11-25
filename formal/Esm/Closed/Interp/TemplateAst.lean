@@ -49,6 +49,8 @@ class ExprLaws (α : Type) [Scalar α] [RealNaN α] [Lits α] : Prop where
     sub (fin (m : ℝ) : α) (fin (k : ℝ)) = fin ((m - k : ℤ) : ℝ)
   toInt_int : ∀ m : ℤ, Lits.toInt? (fin (m : ℝ) : α) = some m
   isNaN_fin : ∀ r : ℝ, isNaN (fin r : α) = false
+  /-- These proof scalars have a single zero, so extrema use real order. -/
+  ltExtrema_fin : ∀ a b : ℝ, ltExtrema (fin a : α) (fin b) = decide (a < b)
 
 theorem toInt_intCast (m : ℤ) :
     (if ((⌊(m : ℝ)⌋ : ℤ) : ℝ) = (m : ℝ) then some ⌊(m : ℝ)⌋ else none) = some m := by
@@ -66,6 +68,7 @@ instance : ExprLaws Num where
     push_cast; rfl
   toInt_int m := toInt_intCast m
   isNaN_fin _ := rfl
+  ltExtrema_fin _ _ := rfl
 
 theorem rn_int {m : ℤ} (h : |m| ≤ 2 ^ 53) : Esm.F64.rn ((m : ℝ)) = m :=
   Esm.F64.rn_of_repr (Esm.F64.repr_intCast h)
@@ -82,6 +85,7 @@ instance : ExprLaws Bin64 where
     rw [← Int.cast_sub, rn_int h]
   toInt_int m := toInt_intCast m
   isNaN_fin _ := rfl
+  ltExtrema_fin _ _ := rfl
 
 /-! ## The shapes the expansions are built from -/
 
@@ -198,14 +202,14 @@ theorem truthy_ofBool (b : Bool) : truthy (ofBool b : α) = b := by
 
 theorem fmax_fin (a b : ℝ) : fmax (fin a : α) (fin b) = fin (max a b) := by
   unfold fmax
-  rw [ExprLaws.isNaN_fin, ExprLaws.isNaN_fin, lt_fin]
+  rw [ExprLaws.isNaN_fin, ExprLaws.isNaN_fin, ExprLaws.ltExtrema_fin]
   by_cases h : a < b
   · simp [h, max_eq_right h.le]
   · simp [h, max_eq_left (not_lt.mp h)]
 
 theorem fmin_fin (a b : ℝ) : fmin (fin a : α) (fin b) = fin (min a b) := by
   unfold fmin
-  rw [ExprLaws.isNaN_fin, ExprLaws.isNaN_fin, lt_fin]
+  rw [ExprLaws.isNaN_fin, ExprLaws.isNaN_fin, ExprLaws.ltExtrema_fin]
   by_cases h : b < a
   · simp [h, min_eq_right h.le]
   · simp [h, min_eq_left (not_lt.mp h)]

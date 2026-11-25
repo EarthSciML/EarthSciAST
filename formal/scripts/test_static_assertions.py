@@ -14,8 +14,8 @@ class StaticAssertions(unittest.TestCase):
     def test_rounding_and_lazy_scalar_evaluation(self):
         midpoint = "1.00000000000000011102230246251565404236316680908203125"
         above_midpoint = midpoint + "1"
-        names = ["tie", "above", "subnormal", "fold", "lazy", "min_nan", "max_nan"]
         nan = {"op": "sqrt", "args": [-1]}
+        negative_zero = {"op": "-", "args": ["zero"]}
         expressions = {
             "tie": "MIDPOINT",
             "above": "p",
@@ -31,7 +31,15 @@ class StaticAssertions(unittest.TestCase):
             },
             "min_nan": {"op": "min", "args": [3, nan, 4]},
             "max_nan": {"op": "max", "args": [nan, 3, 4]},
+            "min_positive_first": {"op": "min", "args": ["zero", negative_zero]},
+            "min_negative_first": {"op": "min", "args": [negative_zero, "zero"]},
+            "max_positive_first": {"op": "max", "args": ["zero", negative_zero]},
+            "max_negative_first": {"op": "max", "args": [negative_zero, "zero"]},
+            "zeros_equal": {"op": "==", "args": [negative_zero, "zero"]},
+            "zeros_less": {"op": "<", "args": [negative_zero, "zero"]},
         }
+        names = list(expressions)
+        expected_values = [1, 1.0000000000000002, 5e-324, 1, 42, 0, 0, -0.0, -0.0, 0.0, 0.0, 1, 0]
         doc = {
             "esm": "2.4.0",
             "metadata": {"name": "Static edges"},
@@ -39,6 +47,7 @@ class StaticAssertions(unittest.TestCase):
                 "M": {
                     "variables": {
                         "p": {"type": "parameter", "default": 1},
+                        "zero": {"type": "parameter", "default": 0},
                         **{name: {"type": "unknown"} for name in names},
                     },
                     "equations": [{"lhs": name, "rhs": expressions[name]} for name in names],
@@ -49,10 +58,7 @@ class StaticAssertions(unittest.TestCase):
                             "time_span": {"start": 0, "end": 1},
                             "assertions": [
                                 {"variable": name, "time": 0, "expected": expected}
-                                for name, expected in zip(
-                                    names,
-                                    [1, 1.0000000000000002, 5e-324, 1, 42, 0, 0],
-                                )
+                                for name, expected in zip(names, expected_values)
                             ],
                         }
                     ],
@@ -82,8 +88,9 @@ class StaticAssertions(unittest.TestCase):
             [0x3FF0000000000000, 0x3FF0000000000001, 1, 0x3FF0000000000000, 0x4045000000000000],
         )
         self.assertEqual(len(bits), len(names))
-        for value in bits[5:]:
+        for value in bits[5:7]:
             self.assertGreater(value & 0x7FFFFFFFFFFFFFFF, 0x7FF0000000000000)
+        self.assertEqual(bits[7:], [1 << 63, 1 << 63, 0, 0, 0x3FF0000000000000, 0])
 
 
 if __name__ == "__main__":
