@@ -222,6 +222,20 @@ def deprecatedTo : String → Option (String × Nat)
   | "pow" => some ("^", 2)
   | _ => none
 
+/-- A `faq` node without its default fields (esm-spec §4.8.2): `reduce: "+"` and
+`semiring: "sum_product"` are the defaults, so they are dropped. A `sum_product` semiring
+goes only with a `reduce` that is absent or `"+"`; otherwise the node is left alone, since
+the semiring is what decides the reduction there. -/
+def faqDefaults (kvs : List (String × Json)) : List (String × Json) :=
+  let plainReduce := match Math.look "reduce" kvs with
+    | none | some (.str "+") => true
+    | _ => false
+  let plainSemiring := match Math.look "semiring" kvs with
+    | none | some (.str "sum_product") => true
+    | _ => false
+  if plainReduce && plainSemiring then kvs.filter (fun kv => kv.1 != "reduce" && kv.1 != "semiring")
+  else kvs
+
 /-- How `spellRules` reads an object: an ordinary object, a name-keyed map, a block of
 operator definitions (a map whose entries are definitions), or one definition (whose
 `units` is a unit expression, not a units string, esm-spec §9.6.1). -/
@@ -229,7 +243,8 @@ inductive Walk where
   | plain | map | defs | defn
 
 /-- The spelling rules of the canonical form: units strings respelled, a dimensionless
-`const` dropping its units, `neg` and `pow` rewritten (and a `broadcast` of `neg`), and the
+`const` dropping its units, `neg` and `pow` rewritten (and a `broadcast` of `neg`), a `faq`
+dropping its default `reduce` and `semiring` (`faqDefaults`), and the
 old names of esm-spec §9.6.12 and §4.2 read as the new ones (`renameKey`, `renameOp`,
 `ivAsTime`). `iv`: the document's renamed independent variable; `ps`: the parameters of the
 enclosing definition. Unproved adapter code, pinned by the
@@ -276,6 +291,7 @@ partial def spellWalk (iv : Option String) (w : Walk) (ps : List String) : Json 
         | some (.str "1"), some (.num n) => .num n
         | some (.str "1"), _ => .obj (kvs'.filter (fun kv => kv.1 != "units"))
         | _, _ => .obj kvs'
+      | some (.str "faq"), _ => .obj (faqDefaults kvs')
       | some (.str o), some (.arr as) =>
         match deprecatedTo o with
         | some (o', n) =>

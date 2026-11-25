@@ -451,9 +451,13 @@ def ops_numbers_document() -> dict:
         "esm": "2.1.0",
         "metadata": {
             "name": "CanonicalOpsAndNumbers",
-            "description": "Deprecated ops rewritten, every number in canonical form.",
+            "description": "Deprecated ops rewritten, faq defaults dropped, every number in canonical form.",
             # Free-form: its numbers are canonical too, its ops are not rewritten.
-            "x_esd": {"scale": Raw("2.0"), "node": {"op": "neg", "args": ["x"]}},
+            "x_esd": {
+                "scale": Raw("2.0"),
+                "node": {"op": "neg", "args": ["x"]},
+                "sum": {"op": "faq", "args": [], "expr": 1, "output_idx": [], "reduce": "+"},
+            },
         },
         "models": {
             "M": {
@@ -495,10 +499,42 @@ def ops_numbers_document() -> dict:
                             ],
                         },
                     },
+                    {
+                        "lhs": "b",
+                        "rhs": {
+                            "op": "+",
+                            "args": [
+                                # The default reduce and semiring are dropped,
+                                # with or without `args`.
+                                faq(reduce="+"),
+                                faq(reduce="+", semiring="sum_product"),
+                                faq(semiring="sum_product"),
+                                faq(args=None, reduce="+"),
+                                # Any other reduce, or any other semiring, keeps
+                                # both fields: the semiring decides there.
+                                faq(reduce="max"),
+                                faq(reduce="+", semiring="max_product"),
+                                faq(reduce="max", semiring="sum_product"),
+                            ],
+                        },
+                    },
                 ],
             }
         },
     }
+
+
+def faq(args=("values",), **fields) -> dict:
+    """A sum of `values` over `i`, with the given `reduce` / `semiring` fields."""
+    node = {"op": "faq"}
+    if args is not None:
+        node["args"] = list(args)
+    node |= {
+        "expr": {"op": "index", "args": ["values", "i"]},
+        "output_idx": [],
+        "ranges": {"i": [1, 2]},
+    }
+    return node | fields
 
 
 def esm_lean_canon(formal: Path, text: str):
@@ -536,7 +572,9 @@ def write_ops_numbers_fixture(formal: Path, out_dir: Path) -> None:
                 "canonicalize_document rewrites the deprecated ops (esm-spec §4.2): neg with one "
                 "operand is unary -, pow with two is ^, a broadcast of neg with one operand maps "
                 "-, and a use with the wrong operand count, or inside a free-form object, is "
-                "left as written. Every number, free-form objects included, takes its canonical "
+                "left as written. A faq drops its default reduce \"+\" and semiring "
+                "\"sum_product\" (esm-spec §4.8.2), and keeps both when either is anything "
+                "else. Every number, free-form objects included, takes its canonical "
                 "form (CONFORMANCE §5.5.3.1): a decimal token is rounded to binary64, an integral "
                 "double in Int64 is an integer (2.0 is 2, 1.0000000000000001 is 1, "
                 "-1.999999999999999e16 is -19999999999999992, -0.0 is 0), an integer token in "
@@ -550,7 +588,7 @@ def write_ops_numbers_fixture(formal: Path, out_dir: Path) -> None:
             ),
             "input": json.loads(text, parse_float=Raw, parse_int=Raw),
             "expected": expected,
-            "tags": ["deprecated_op", "canonical_number", "document"],
+            "tags": ["deprecated_op", "faq_defaults", "canonical_number", "document"],
         },
     )
 

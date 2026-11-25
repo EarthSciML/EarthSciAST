@@ -167,12 +167,31 @@ func canonicalDocumentNumbers(value any) any {
 	}
 }
 
+// dropFaqDefaults removes a `faq` node's default fields in place (esm-spec
+// §4.8.2; Lean `Adapter.Doc.faqDefaults`): `reduce: "+"` and
+// `semiring: "sum_product"`. A `sum_product` semiring goes only with a `reduce`
+// that is absent or `"+"`; otherwise the node is left alone.
+func dropFaqDefaults(out map[string]any) {
+	if r, ok := out["reduce"]; ok && r != "+" {
+		return
+	}
+	if s, ok := out["semiring"]; ok && s != "sum_product" {
+		return
+	}
+	delete(out, "reduce")
+	delete(out, "semiring")
+}
+
 // rewriteDeprecatedDocumentOp rewrites a deprecated op node in place (out is a
 // fresh map): `neg` with one argument is unary `-`, `pow` with two is `^`, a
 // `broadcast` of `neg` with one argument maps `-` (Lean
 // `Adapter.Doc.deprecatedTo`).
 func rewriteDeprecatedDocumentOp(out map[string]any) {
 	op, isString := out["op"].(string)
+	if isString && op == "faq" {
+		dropFaqDefaults(out)
+		return
+	}
 	args, isArray := out["args"].([]any)
 	if !isString || !isArray {
 		return

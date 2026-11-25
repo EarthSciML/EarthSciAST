@@ -606,7 +606,8 @@ function isPlainObject(x: unknown): x is Record<string, unknown> {
  * them: a scalar one becomes the bare literal, an array one a `const` without
  * `units`. The deprecated ops are rewritten (esm-spec §4.2): a `neg` node with
  * one argument becomes unary `-`, a `pow` node with two becomes `^`, and a
- * `broadcast` of `neg` with one argument maps `-`. Every number, free-form
+ * `broadcast` of `neg` with one argument maps `-`. A `faq` node drops its
+ * default `reduce: "+"` and `semiring: "sum_product"`. Every number, free-form
  * objects included, takes its canonical form (CONFORMANCE §5.5.3.1): a
  * `NumericLiteral` or `bigint` whose value is integral and in Int64 is an
  * integer (`2.0` is `2`): an int literal, or past 2^53 a `bigint` of the exact
@@ -667,12 +668,26 @@ const DEPRECATED_DOCUMENT_OPS: ReadonlyMap<string, readonly [string, number]> = 
 ])
 
 /**
+ * A `faq` node without its default fields (esm-spec §4.8.2; Lean
+ * `Adapter.Doc.faqDefaults`): `reduce: "+"` and `semiring: "sum_product"` are
+ * dropped. A `sum_product` semiring goes only with a `reduce` that is absent or
+ * `"+"`; otherwise the node is left alone. `out` is rewritten in place.
+ */
+function dropFaqDefaults(out: Record<string, unknown>): void {
+  if ('reduce' in out && out.reduce !== '+') return
+  if ('semiring' in out && out.semiring !== 'sum_product') return
+  delete out.reduce
+  delete out.semiring
+}
+
+/**
  * `neg` with one argument is unary `-`, `pow` with two is `^`, a `broadcast`
  * of `neg` with one argument maps `-` (Lean `Adapter.Doc.deprecatedTo`).
  * `out` is a fresh object, rewritten in place.
  */
 function rewriteDeprecatedDocumentOp(out: Record<string, unknown>): void {
   const op = out.op
+  if (op === 'faq') return dropFaqDefaults(out)
   const args = out.args
   if (typeof op !== 'string' || !Array.isArray(args)) return
   const rule = DEPRECATED_DOCUMENT_OPS.get(op)

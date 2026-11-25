@@ -689,7 +689,8 @@ def variants : List Variant := [
 /-! ## Canonical-form spelling rules
 
 Redundant spellings the canonical form merges (landing with the canonical unit spelling).
-`esm-lean canon` (`spellRules` in `Adapter/Doc.lean`) applies the `neg` and `pow` rules and
+`esm-lean canon` (`spellRules` in `Adapter/Doc.lean`) applies the `neg`, `pow` and `faq`
+default-field rules (the last as `faqDefaults`) and
 respells every `units` and `default_units` string (`Esm.Units.canon`, under which `""`,
 `"1"` and `"dimensionless"` are all `"1"`); a `const` node whose units spell `"1"` drops
 them, so one whose value is a number is that bare number, whatever other fields it has
