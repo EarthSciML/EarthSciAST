@@ -1256,16 +1256,23 @@ end
 # program at the lane's cell, bit for bit, over every cell in batches of
 # `batch` lanes plus one padding lane. `shapes` names each state's index sets,
 # `ext` each set's extent. Returns the number of values compared and the
-# number that differ.
-function _rrt_lanes_vs_whole(prob, kind, sets, shapes, ext; chunk = 4, batch = 3, t = 0.75)
+# number that differ. With `tsf`, lane `l` of a batch runs at time `tsf(l)`
+# (a call with a time per lane) and is compared at that time.
+function _rrt_lanes_vs_whole(
+        prob, kind, sets, shapes, ext; chunk = 4, batch = 3, t = 0.75, tsf = nothing
+    )
     prog = rhs_program(prob)
     lp = lanes(prog, kind, sets; chunk = chunk)
     LL = lane_layout(lp)
     blocks = Dict(b.name => b for b in state_layout(prog))
     N = n_states(prog)
     gu = [0.5 + ((k * 7919) % 101) / 37 for k in 1:N]
-    want = fill(NaN, N)
-    rhs!(want, prog, rhs_workspace(prog), gu, Float64[], prob.p, t, default_forcing_set(prog))
+    wants = Dict{Float64, Vector{Float64}}()
+    want(tt) = get!(wants, tt) do
+        w = fill(NaN, N)
+        rhs!(w, prog, rhs_workspace(prog), gu, Float64[], prob.p, tt, default_forcing_set(prog))
+        w
+    end
     gslot(name, g) = blocks[name].offset + LinearIndices(Tuple(blocks[name].shape))[g...] - 1
     ws = rhs_workspace(lp)
     fs = default_forcing_set(lp)
@@ -1286,11 +1293,13 @@ function _rrt_lanes_vs_whole(prob, kind, sets, shapes, ext; chunk = 4, batch = 3
             u[(b.offset + e - 1) * L + l] = gu[gslot(b.name, gidx(b.name, c, nl))]
         end
         du = fill(NaN, LL.n_u * L)
-        rhs!(du, lp, ws, u, Float64[], prob.p, t, fs, cells, length(bc))
+        tl = tsf === nothing ? t : [tsf(l) for l in eachindex(bc)]
+        rhs!(du, lp, ws, u, Float64[], prob.p, tl, fs, cells, length(bc))
         for b in LL.u, (l, c) in enumerate(bc), (e, nl) in enumerate(CartesianIndices(Tuple(b.extents)))
             compared += 1
             got = du[(b.offset + e - 1) * L + l]
-            reinterpret(UInt64, got) == reinterpret(UInt64, want[gslot(b.name, gidx(b.name, c, nl))]) ||
+            w = want(tsf === nothing ? t : tsf(l))
+            reinterpret(UInt64, got) == reinterpret(UInt64, w[gslot(b.name, gidx(b.name, c, nl))]) ||
                 (differ += 1)
         end
     end
@@ -1415,4 +1424,155 @@ end
     # The same value placed one off its region is refused.
     prob = _rrt_doc_of("laneband2", zsets, zvars, Any[deq_u, band(1, 4)])
     @test _rrt_lane_refusal(() -> lanes(rhs_program(prob), :columns, ["x"]; chunk = 4)) === :refused
+end
+
+# A time per lane in every position a 0-d observed of `t` can be read (#781
+# review): a right-hand side that is no faq, states of different shapes in
+# :columns lanes, a band field and a contraction. Each lane equals the
+# whole-domain program at its own time, bit for bit.
+@testset "lanes at their own times read 0-d observeds of t anywhere" begin
+    ix(v, i...) = Dict("op" => "index", "args" => Any[v, i...])
+    op(o, a...) = Dict("op" => o, "args" => Any[a...])
+    faq(outs, ranges, e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any[outs...], "ranges" => ranges, "expr" => e
+    )
+    st(shape) = Dict("type" => "unknown", "units" => "1", "shape" => shape, "default" => 1.0)
+    obs(shape = nothing) = shape === nothing ? Dict("type" => "unknown", "units" => "1") :
+        Dict("type" => "unknown", "units" => "1", "shape" => shape)
+    faqd(name, idx, ranges, body) = Dict(
+        "lhs" => Dict(
+            "op" => "faq", "args" => Any[], "output_idx" => Any[idx...], "ranges" => ranges,
+            "expr" => Dict("op" => "D", "args" => Any[ix(name, idx...)], "wrt" => "t")
+        ),
+        "rhs" => body
+    )
+    tsf(l) = (0.3, 2.0, 7.25)[l]
+    k_eqs = Any[
+        Dict("lhs" => "k0", "rhs" => op("+", 1.0, op("sin", "t"))),
+        Dict("lhs" => "k", "rhs" => op("*", 0.5, "k0")),
+    ]
+    k_vars = Dict("k0" => obs(), "k" => obs())
+
+    # A: `faq(D(u[i])) = -k·u[i]`, a right-hand side that is no faq.
+    xr = Dict("i" => Dict("from" => "x"))
+    prob = _rrt_doc_of(
+        "lanetA", Dict("x" => 5), merge(k_vars, Dict("u" => st(["x"]))),
+        vcat(k_eqs, Any[faqd("u", ["i"], xr, op("*", -1.0, "k", ix("u", "i")))])
+    )
+    for f in (nothing, tsf)
+        compared, differ = _rrt_lanes_vs_whole(prob, :cells, ["x"], Dict("M.u" => ["x"]), Dict("x" => 5); tsf = f)
+        @test compared == 5 && differ == 0
+    end
+    # Padding lanes take the first lane's time.
+    lp = lanes(rhs_program(prob), :cells, ["x"]; chunk = 4)
+    ws = rhs_workspace(lp)
+    du = fill(NaN, 4)
+    rhs!(du, lp, ws, [0.7, 1.3, 2.1, 0.0], Float64[], prob.p, [0.3, 2.0, 7.25], default_forcing_set(lp), Int32[4 1 3 2], 3)
+    @test ws.lbufs[end] == [0.3, 2.0, 7.25, 0.3]
+    @test isnan(du[4])
+    # At most L times.
+    @test_throws DimensionMismatch rhs!(
+        du, lp, ws, [0.7, 1.3, 2.1, 0.0], Float64[], prob.p, [0.3, 2.0, 7.25, 1.0, 2.0],
+        default_forcing_set(lp), Int32[4 1 3 2], 3
+    )
+
+    # B: states of different shapes in :columns lanes over x, a band field
+    # (makearray of an array faq) and a contraction, all reading `k`.
+    xz = Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "z"))
+    xy = Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "y"))
+    sets = Dict("x" => 3, "y" => 4, "z" => 2)
+    prob = _rrt_doc_of(
+        "lanetB", sets, merge(k_vars, Dict("a" => st(["x", "z"]), "b" => st(["x", "y"]))),
+        vcat(
+            k_eqs, Any[
+                faqd("a", ["i", "j"], xz, faq(["i", "j"], xz, op("*", -1.0, "k", ix("a", "i", "j")))),
+                Dict(
+                    "lhs" => Dict("op" => "D", "args" => Any["b"], "wrt" => "t"),
+                    "rhs" => Dict(
+                        "op" => "makearray", "args" => Any[],
+                        "regions" => Any[Any[Any[1, 3], Any[1, 4]], Any[Any[1, 3], Any[2, 4]]],
+                        "values" => Any[
+                            faq(["i", "j"], xy, op("*", -2.0, "k", ix("b", "i", "j"))),
+                            faq(
+                                ["i", "j"], Dict("i" => Dict("from" => "x"), "j" => Any[2, 4]),
+                                op(
+                                    "+", op("*", "k", ix("b", "i", "j")),
+                                    faq(String[], Dict("m" => Dict("from" => "z")), op("*", "k", ix("a", "i", "m")))
+                                )
+                            ),
+                        ]
+                    )
+                ),
+            ]
+        )
+    )
+    shapes = Dict("M.a" => ["x", "z"], "M.b" => ["x", "y"])
+    for f in (nothing, tsf)
+        compared, differ = _rrt_lanes_vs_whole(prob, :columns, ["x"], shapes, sets; tsf = f)
+        @test compared == 18 && differ == 0
+    end
+end
+
+# `t` reaching the right-hand side through an observed with no lane set (#781
+# review): it is evaluated once per call, so the build and the one-time call
+# are unchanged, a call at equal times equals the one-time call, and a call at
+# mixed times is refused naming the observed.
+@testset "lane observeds of t with no lane set" begin
+    ix(v, i...) = Dict("op" => "index", "args" => Any[v, i...])
+    op(o, a...) = Dict("op" => o, "args" => Any[a...])
+    faq(outs, ranges, e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any[outs...], "ranges" => ranges, "expr" => e
+    )
+    xr = Dict("i" => Dict("from" => "x"))
+    wr = Dict("w" => Dict("from" => "w"))
+    faqd(body) = Dict(
+        "lhs" => Dict(
+            "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => xr,
+            "expr" => Dict("op" => "D", "args" => Any[ix("u", "i")], "wrt" => "t")
+        ),
+        "rhs" => faq(["i"], xr, body)
+    )
+    f_eq = Dict("lhs" => "f", "rhs" => faq(["w"], wr, op("*", "w", "t")))
+    vars = Dict(
+        "u" => Dict("type" => "unknown", "units" => "1", "shape" => ["x"], "default" => 1.0),
+        "f" => Dict("type" => "unknown", "units" => "1", "shape" => ["w"]),
+        "k" => Dict("type" => "unknown", "units" => "1")
+    )
+    sets = Dict("x" => 5, "w" => 3)
+    docs = [
+        # Read directly, contracted over w.
+        _rrt_doc_of(
+            "lanesh1", sets, vars, Any[
+                f_eq, Dict("lhs" => "k", "rhs" => op("sin", "t")),
+                faqd(faq(String[], wr, op("*", ix("f", "w"), ix("u", "i")))),
+            ]
+        ),
+        # Read through a 0-d observed.
+        _rrt_doc_of(
+            "lanesh2", sets, vars, Any[
+                f_eq, Dict("lhs" => "k", "rhs" => faq(String[], wr, ix("f", "w"))),
+                faqd(op("*", "k", ix("u", "i"))),
+            ]
+        ),
+    ]
+    cells = Int32[4 1 3 2]
+    u = [0.7, 1.3, 2.1, 0.0]
+    for prob in docs
+        @test _rrt_lanes_vs_whole(prob, :cells, ["x"], Dict("M.u" => ["x"]), sets)[2] == 0
+        lp = lanes(rhs_program(prob), :cells, ["x"]; chunk = 4)
+        ws = rhs_workspace(lp)
+        fs = default_forcing_set(lp)
+        one = fill(NaN, 4)
+        rhs!(one, lp, ws, u, Float64[], prob.p, 2.0, fs, cells, 3)
+        same = fill(NaN, 4)
+        rhs!(same, lp, ws, u, Float64[], prob.p, [2.0, 2.0, 2.0], fs, cells, 3)
+        @test reinterpret.(UInt64, same[1:3]) == reinterpret.(UInt64, one[1:3])
+        err = try
+            rhs!(same, lp, ws, u, Float64[], prob.p, [0.3, 2.0, 7.25], fs, cells, 3)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError && occursin("'M.f'", err.msg)
+    end
 end
