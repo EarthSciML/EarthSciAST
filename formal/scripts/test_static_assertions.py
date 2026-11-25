@@ -51,6 +51,8 @@ class StaticAssertions(unittest.TestCase):
         self.assertIn("float32_unsupported: variable theta", evaluate()["error"])
         del parameter["element_type"]
         equation["rhs"] = {"op": "sin", "args": ["theta"]}
+        parameter["units"] = "rad"
+        self.assertIn("values", evaluate())
         parameter["units"] = "degree"
         self.assertIn("unsupported_construct: angle units degree", evaluate()["error"])
         del parameter["units"]

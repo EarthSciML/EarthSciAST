@@ -70,8 +70,8 @@ EARTHSCI_INLINE_TESTS_ADAPTER_LEAN="python3 scripts/run-lean-inline-tests.py" \
 The report lists integrated state assertions and out-of-scope fixtures as
 exclusions. The `static-assertions` executable mode also accepts a JSON array
 of `{test_id, assertion_idx}` requests on stdin and returns binary64 bit
-patterns in the same order. It reports unsupported precision and angle units
-explicitly when a model declares Float32 or requires angle-unit handling.
+patterns in the same order. It reports unsupported precision or scaled angle
+units explicitly when a model declares Float32 or requires angle conversion.
 
 ## Rules
 

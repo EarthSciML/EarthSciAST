@@ -26,7 +26,8 @@ private def checkPrecision (location : String) (decl : Json) : Except String Uni
 private def checkAngleUnit (location : String) (decl : Json) : Except String Unit := do
   if let .ok units := decl.getObjValAs? String "units" then
     if let .ok unit := Esm.Units.resolve units then
-      if unit.dim .rad ≠ 0 then unsupported s!"angle units {units} in {location}"
+      if unit.dim .rad ≠ 0 ∧ unit.scale.exp ≠ Esm.Units.U.one.scale.exp then
+        unsupported s!"angle units {units} in {location}"
 
 private partial def checkConstantUnits (location : String) : Json → Except String Unit
   | .obj fields => do
