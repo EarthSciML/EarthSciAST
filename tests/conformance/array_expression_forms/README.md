@@ -50,6 +50,15 @@ against a reshaped row, and a `concat` whose joined-axis subscript is literal.
 Every source value is distinct, so a wrong axis order, element order or operand
 reads a different number.
 
+`fixtures/computed_array_argument.esm` is also authored here: a definition's
+array parameter bound to a COMPUTED array — a `makearray` whose interior region is
+an array-valued application (face fluxes, zero at both walls), and an
+array-valued application read at other subscripts. A binding evaluates such an
+argument once, in the caller, and passes it whole, as it passes a named array;
+the reference is not expanded. Julia refused it until it learned to (an
+internal array observed the call reads as its argument); Rust and Python
+already passed it.
+
 A symbolic subscript through a `reshape` that reorders elements, or on the
 joined axis of a `concat`, needs integer division or a per-cell choice of
 operand, which has no gather form; Julia refuses both by name

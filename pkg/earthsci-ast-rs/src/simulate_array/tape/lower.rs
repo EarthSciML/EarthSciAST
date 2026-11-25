@@ -1144,6 +1144,11 @@ pub(crate) struct TapeBuilder<'m> {
     ops: Option<&'m crate::operator_refs::Instances>,
     /// The functions this build compiles, shared with every function builder.
     funcs: calls::SharedFuncs,
+    /// Each call computed unconditionally so far, by its function and the
+    /// identity of its arguments (the same source slots and views, the same
+    /// scalar operands): a call with the same function and arguments reads
+    /// its result instead of running again ([`calls::CallKey`]).
+    call_memo: FxHashMap<calls::CallKey, (SlotId, bool)>,
     /// This builder lowers an operator definition's body: its state
     /// variables and parameters are the call's arguments.
     is_function: bool,
@@ -1459,6 +1464,7 @@ impl<'m> TapeBuilder<'m> {
             tile_violation: None,
             ops: None,
             funcs: Default::default(),
+            call_memo: FxHashMap::default(),
             is_function: false,
             sorted_states: HashSet::new(),
             vn_scope_hits: 0,
