@@ -1338,7 +1338,8 @@ end
 # A lane spec for calling the lane rewrite directly: :cells lanes over `x` (3).
 _rrt_lane_spec() = RRT._LaneSpec(
     :cells, ["x"], 4, Dict("u" => ["x"]), Dict("x" => zeros(4)), RRT._LaneGather[],
-    Set{String}(["u"]), Dict{String, Vector{String}}(), Dict{String, Int}(), Dict("x" => 3), false
+    Set{String}(["u"]), Dict{String, Vector{String}}(), Dict{String, Int}(), Dict("x" => 3), false,
+    nothing, Set{String}(), String[], Set{String}()
 )
 
 # The renaming of an array faq's output indices to the subscripts it is read
