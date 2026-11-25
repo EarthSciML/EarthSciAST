@@ -161,6 +161,13 @@ with a pending question among its own clauses.
 - Problem: 'parse_expression is the inverse of to_ascii' cannot hold for all trees: §4.1.1 itself says a parser flattens `a + (b + c)` into one n-ary `+` (so a nested `+` tree does not round-trip), and a `-` before a numeric literal is read as part of the literal (so a unary-minus node on a literal does not round-trip); the class of trees on which it is an inverse is not stated.
 - Ruling: moot. The §4.1.1 text surface (`to_ascii` / `parse_expression`) was retired; an expression is written as text only as document math, whose round trip the Lean model proves (`Esm.Document.Math.*`).
 
+## Q-115 Discretization RFC §5.4.4: products with different zero literals
+- Clauses: `docs/content/rfcs/discretization.md` §5.4.4
+- Phase: 2
+- Found by: Lean expression canonicalizer
+- Problem: Zero annihilation preserves the type and sign of the zero. A product such as `{"op":"*","args":[0,-0.0]}` has two zero operands with different type and sign. The rule does not choose which representation to emit. The Lean adapter reports `E_CANONICAL_UNSUPPORTED_EXPRESSION` for this case.
+- Ruling: (pending)
+
 ## Q-24 esm-spec.md §4.2: structural d unary
 - Clauses: `spec.4.2.structural-d-unary`
 - Phase: 2
