@@ -41,6 +41,15 @@ python scripts/difftest/scalar.py --timeout 300 \
   --adapter 'julia=julia --project=formal/.lake/difftest-julia scripts/difftest/scalar_julia.jl'
 ```
 
+For Rust, use the `--jsonl` mode of the inline-test conformance adapter.
+
+```sh
+cargo build --locked --manifest-path pkg/earthsci-ast-rs/Cargo.toml \
+  --features conformance-adapters --bin earthsci-inline-tests-adapter-rust
+python scripts/difftest/scalar.py \
+  --adapter 'rust=pkg/earthsci-ast-rs/target/debug/earthsci-inline-tests-adapter-rust --jsonl'
+```
+
 A disagreement exits with status 1 and Hypothesis shrinks it to an ordinary ESM
 document at `conformance-results/scalar-difftest.esm` (or `--reproducer PATH`).
 Replay a document with `--fixture PATH`. CI uses `--observer` to finish the
@@ -49,4 +58,5 @@ and protocol failures still fail the workflow.
 
 The 1,200-case sweep with seed 20261026 shrank one disagreement to
 `min(+0, -0)`. The model returned positive zero and Python returned negative
-zero. Replay `tests/differential/scalar/negative_zero_min.esm` to check those bits.
+zero. The Lean model now returns negative zero for both operand orders.
+Replay `tests/differential/scalar/negative_zero_min.esm` to check those bits.
