@@ -42,6 +42,23 @@ lake build
 python3 ../scripts/formal-audit.py all
 ```
 
+## Expression property corpus
+
+From the repository root after `lake build`, run the Lean expression
+parse/emit adapter against the shared source fixtures:
+
+```bash
+EARTHSCI_PROPERTY_CORPUS_ADAPTER_LEAN='formal/.lake/build/bin/esm-lean expressions' \
+  python3 scripts/run-property-corpus-conformance.py --bindings lean --fail-on-source-mismatch
+```
+
+The runner checks every `tests/property_corpus/expressions/expr_*.json` against
+`SOURCE`. A fixture with an authored normalization uses its matching
+`tests/property_corpus/expected/` file. This covers bare expression syntax and
+canonical numbers. Document loading and operator resolution require a document
+scope. Include `lean` alongside the other bindings in `--bindings` to score it
+in the full cross-binding run.
+
 ## Rules
 
 - **Properties quantify.** A statement about fixed inputs is a test, not a
