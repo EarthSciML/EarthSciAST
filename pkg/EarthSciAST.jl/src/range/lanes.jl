@@ -173,11 +173,15 @@ function _range_fill_equations(spec::_LaneSpec, name, def, dims, box)
 end
 
 # The lane rewrite of one scope. `lanevars` maps each loop variable bound to a
-# lane set to that set; `first` is the variable carrying the lane index.
+# lane set to that set; `first` is the variable carrying the lane index;
+# `ranges` holds the document range of every loop variable in scope (the
+# innermost binder's), which an array `faq` read at that variable is checked
+# against.
 struct _LaneScope
     lanevars::Dict{String, String}
     first::String
     columns::Dict{String, UnitRange{Int}}
+    ranges::Dict{String, Any}
 end
 
 function _lane_value(spec::_LaneSpec, sc::_LaneScope, set::String)
@@ -205,20 +209,26 @@ function _lane_rewrite(spec::_LaneSpec, ctx, e::ASTExpr, sc::_LaneScope, rule::S
                 "an aggregate rebinds the lane index '$k'"
             )
         end
+        # The node's bound indices are in scope in the fields that see them.
+        # `args` and the range bounds keep the outer scope; every other
+        # expression field (`expr`, `filter`, `key`, …) is rewritten in the
+        # node's scope, so no field is skipped that the in-place program
+        # rewrites through `map_children`. In a fragment they also become
+        # columns of a lane gather.
+        columns = sc.columns
         if spec.fragment
-            # The node's bound indices become columns of a lane gather in the
-            # fields that see them. `args` and the range bounds keep the
-            # outer scope; every other expression field (`expr`, `filter`,
-            # `key`, …) is rewritten in the node's scope, so no field is
-            # skipped that the in-place program rewrites through `map_children`.
             columns = copy(sc.columns)
             _lane_column_ranges!(columns, spec, o.ranges)
-            body = _LaneScope(sc.lanevars, sc.first, columns)
-            return _map_children_scoped(
-                x -> _lane_rewrite(spec, ctx, x, sc, rule),
-                x -> _lane_rewrite(spec, ctx, x, body, rule), o, (:args, :ranges)
-            )
         end
+        ranges = copy(sc.ranges)
+        for (k, r) in o.ranges
+            ranges[String(k)] = r
+        end
+        body = _LaneScope(sc.lanevars, sc.first, columns, ranges)
+        return _map_children_scoped(
+            x -> _lane_rewrite(spec, ctx, x, sc, rule),
+            x -> _lane_rewrite(spec, ctx, x, body, rule), o, (:args, :ranges)
+        )
     end
     return map_children(x -> _lane_rewrite(spec, ctx, x, sc, rule), o)
 end
@@ -299,7 +309,14 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
     if _index_target_kind(target) === _IT_MAKEARRAY
         ma = target::OpExpr
         regions = Vector{Vector{Any}}[]
+        bounds = Vector{Union{Nothing, Tuple{Int, Int}}}[]
         for region in ma.regions
+            push!(
+                bounds, Union{Nothing, Tuple{Int, Int}}[
+                    _lane_bounds(_region_int(ctx.need, r[1]), _region_int(ctx.need, r[2]))
+                        for r in region
+                ]
+            )
             nr = Vector{Any}[]
             for d in eachindex(region)
                 s = subs[d]
@@ -319,13 +336,16 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
             end
             push!(regions, nr)
         end
-        # A value that is an array `faq` over the whole region (the planner's
-        # Jacobian documents write one per band field) is read at the
-        # subscripts, so it is the `faq`'s body there.
+        # A value that is an array `faq` exactly over its region (the
+        # planner's Jacobian documents write one per band field) is read at
+        # the subscripts, so it is the `faq`'s body there: the whole-domain
+        # build reads a region value at the absolute subscripts
+        # (`_resolve_index_of_makearray`), so the value's axes must be the
+        # region's own.
         vals = ASTExpr[
             (v isa OpExpr && _is_faq_op((v::OpExpr).op) && _lane_array_faq(v::OpExpr)) ?
-                _lane_faq_read(spec, ctx, v::OpExpr, subs, sc, rule) :
-                _lane_rewrite(spec, ctx, v, sc, rule) for v in ma.values
+                _lane_faq_read(spec, ctx, v::OpExpr, subs, sc, rule, bounds[r]) :
+                _lane_rewrite(spec, ctx, v, sc, rule) for (r, v) in enumerate(ma.values)
         ]
         newsubs = ASTExpr[
             (s isa VarExpr && haskey(sc.lanevars, (s::VarExpr).name)) ? s :
@@ -350,48 +370,127 @@ end
 _lane_array_faq(o::OpExpr) = o.output_idx !== nothing && !isempty(o.output_idx) &&
     o.expr_body !== nothing && o.ranges !== nothing
 
+_lane_bounds(lo::Int, hi::Int) = (lo, hi)
+_lane_bounds(lo, hi) = nothing
+
+_lane_int(x::Integer) = Int(x)
+_lane_int(x::IntExpr) = Int(x.value)
+_lane_int(x) = nothing
+
+# A range as its integer bounds `(lo, hi)`: a whole index set (`from` with no
+# `of`) or a constant interval; `nothing` for any other range.
+function _lane_range_bounds(spec::_LaneSpec, r)
+    set = _lane_range_set(r)
+    set === nothing || return haskey(spec.ext, set) ? (1, spec.ext[set]) : nothing
+    if r isa AbstractVector && length(r) == 2
+        return _lane_bounds(_lane_int(r[1]), _lane_int(r[2]))
+    end
+    return nothing
+end
+
+# The index set a `from` range runs over whole (no `of`), or `nothing`.
+function _lane_range_set(r)
+    if r isa IndexSetRef
+        return isempty(r.of) ? r.from : nothing
+    elseif r isa AbstractDict && haskey(r, "from")
+        of = get(r, "of", nothing)
+        (of === nothing || isempty(of)) || return nothing
+        return String(r["from"])
+    end
+    return nothing
+end
+
 # `index(faq{output_idx o, ranges, body}, s…)`: the array `faq` read at the
-# subscripts `s`, each a loop variable, along an output axis that starts at 1
-# (a lane set's whole extent, or an interval from 1). That is the body with
-# each `o_d` renamed `s_d`; any other range of the `faq` (a contraction) stays
-# a scalar `faq` over it. The planner's whole-array right-hand sides
-# `D(x) = faq{…}`, lowered to an indexed `faq`, and its Jacobian documents'
-# `makearray` values arrive here.
-function _lane_faq_read(spec::_LaneSpec, ctx, F::OpExpr, subs, sc::_LaneScope, rule::String)
+# subscripts `s`, each a loop variable. That is the body with each `o_d`
+# renamed `s_d` (capture-avoiding); any other range of the `faq` (a
+# contraction) stays a scalar `faq` over it. The planner's whole-array
+# right-hand sides `D(x) = faq{…}`, lowered to an indexed `faq`, and its
+# Jacobian documents' `makearray` values arrive here.
+#
+# Each output axis must run over exactly what reads it, as the whole-domain
+# build reads the `faq` at the absolute subscript: along a lane set, the whole
+# set (`from` it with no `of`, or `[1, extent]`); as a `makearray` region value
+# (`region` holds that region's integer bounds), the region's bounds; otherwise
+# the range the subscript runs over in the enclosing scope.
+function _lane_faq_read(
+        spec::_LaneSpec, ctx, F::OpExpr, subs, sc::_LaneScope, rule::String,
+        region = nothing
+    )
     outs = _output_idx_strings(F)
     length(outs) == length(subs) || _lane_refuse(rule, "an array faq is read at the wrong rank")
-    bindings = Dict{String, ASTExpr}()
+    # `args` and `key` are scoped to the node itself; the body alone moves.
+    (isempty(F.args) && F.key === nothing) ||
+        _lane_refuse(rule, "an array faq read inside the lane scope carries `args` or `key`")
+    renames = Dict{String, ASTExpr}()
     names = Set{String}()
-    for (o, s) in zip(outs, subs)
+    for (d, (o, s)) in enumerate(zip(outs, subs))
         s isa VarExpr || _lane_refuse(rule, "an array faq is read at a computed subscript")
         sn = (s::VarExpr).name
-        r = F.ranges[o]
+        r = get(F.ranges, o, nothing)
+        r === nothing && _lane_refuse(rule, "an array faq's output index '$o' has no range")
         set = get(sc.lanevars, sn, nothing)
-        starts_at_one = if r isa AbstractDict && haskey(r, "from")
-            set === nothing || r["from"] == set
-        elseif r isa AbstractVector && length(r) == 2
-            lo = r[1] isa Integer ? Int(r[1]) : r[1] isa IntExpr ? r[1].value : nothing
-            hi = r[2] isa Integer ? Int(r[2]) : r[2] isa IntExpr ? r[2].value : nothing
-            lo == 1 && (set === nothing || hi == get(spec.ext, set, -1))
+        rb = _lane_range_bounds(spec, r)
+        # Along a lane set: that set by name, or the interval over it.
+        lane_ok = set !== nothing && (
+            _lane_range_set(r) === nothing ? rb == (1, get(spec.ext, set, -1)) :
+                _lane_range_set(r) == set
+        )
+        fits = if region !== nothing
+            rb !== nothing && region[d] == rb && (set === nothing || lane_ok)
+        elseif set !== nothing
+            lane_ok
         else
-            false
+            sr = get(sc.ranges, sn, nothing)
+            rb !== nothing && sr !== nothing && _lane_range_bounds(spec, sr) == rb
         end
-        starts_at_one || _lane_refuse(
+        fits || _lane_refuse(
             rule, "an array faq's axis '$o' does not run over the whole of what reads it"
         )
-        bindings[o] = s
+        sn == o || (renames[o] = s)
         push!(names, sn)
     end
     contracted = Dict{String, Any}(String(k) => v for (k, v) in F.ranges if !(String(k) in outs))
     any(k -> k in names, keys(contracted)) &&
         _lane_refuse(rule, "an array faq's contraction rebinds a subscript")
-    body = substitute(F.expr_body, bindings)
+    body = _lane_rename(F.expr_body, renames, rule)
     if isempty(contracted) && F.filter === nothing
         return _lane_rewrite(spec, ctx, body, sc, rule)
     end
-    filt = F.filter === nothing ? nothing : substitute(F.filter, bindings)
+    filt = F.filter === nothing ? nothing : _lane_rename(F.filter, renames, rule)
     G = reconstruct(F; output_idx = Any[], ranges = contracted, expr_body = body, filter = filt)
     return _lane_rewrite(spec, ctx, G, sc, rule)
+end
+
+# `e` with each output index renamed to its subscript, capture-avoiding: a
+# nested binder of an output index's name shadows it (`_sub_preserving`), and
+# one that binds a subscript's name where the renamed index is free would
+# capture it, which is refused.
+function _lane_rename(e::ASTExpr, renames::Dict{String, ASTExpr}, rule::String)
+    isempty(renames) && return e
+    _lane_check_capture(e, renames, rule)
+    return _sub_preserving(e, renames)
+end
+
+function _lane_check_capture(e::ASTExpr, renames::Dict{String, ASTExpr}, rule::String)
+    e isa OpExpr || return nothing
+    o = e::OpExpr
+    bound = _bound_symbols(o)
+    active = renames
+    if !isempty(bound)
+        active = Dict{String, ASTExpr}(k => v for (k, v) in renames if !(k in bound))
+        isempty(active) && return nothing
+        free = nothing
+        for (k, v) in active
+            ((v::VarExpr).name in bound) || continue
+            free === nothing && (free = free_variables(o))
+            k in free && _lane_refuse(
+                rule, "a nested aggregate binds '$((v::VarExpr).name)', which an array " *
+                    "faq's output index '$k' is renamed to"
+            )
+        end
+    end
+    map_children(x -> (_lane_check_capture(x, active, rule); x), o)
+    return nothing
 end
 
 # The lane rewrite of `faq(D(index(v, …)))` / an observed's `faq` definition:
@@ -421,7 +520,8 @@ function _lane_scope_ranges(
             delete!(columns, n)
         end
     end
-    return _LaneScope(lanevars, first, columns), newr
+    scope_ranges = Dict{String, Any}(String(k) => r for (k, r) in ranges)
+    return _LaneScope(lanevars, first, columns, scope_ranges), newr
 end
 
 function _lane_column_ranges!(columns, spec, ranges)
