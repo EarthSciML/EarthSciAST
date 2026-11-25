@@ -1,3 +1,4 @@
+import Adapter.Determinism
 import Adapter.Templates
 import Adapter.Static
 import Adapter.Units
@@ -18,10 +19,12 @@ def usage : String :=
   "  print-md <doc.esm>           print a document as Markdown\n" ++
   "  parse-md <doc.md>            read a Markdown document, print its canonical JSON\n" ++
   "  print-typ <doc.esm>          print a document as Typst\n" ++
-  "  parse-typ <doc.typ>          read a Typst document, print its canonical JSON\n"
+  "  parse-typ <doc.typ>          read a Typst document, print its canonical JSON\n" ++
+  "  determinism --manifest <manifest.json> --output <result.json> run the exact relational producers\n"
 
 def main (args : List String) : IO UInt32 := do
   match args with
+  | "determinism" :: rest => Adapter.Determinism.main rest
   | "templates" :: rest => Adapter.Templates.main rest
   | "static-assertions" :: rest => Adapter.Static.main rest
   | "units" :: rest => Adapter.Units.main rest

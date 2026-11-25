@@ -35,6 +35,8 @@ on:
       - 'tests/conformance/interp_templates/**'
       - 'tests/conformance/datetime_templates/**'
       - 'tests/conformance/relational_templates/**'
+      - 'tests/conformance/determinism/**'
+      - 'scripts/run-determinism-conformance.py'
       - 'tests/conformance/geometry_templates/**'
       - 'tests/conformance/document_format/**'
       - 'tests/property_corpus/**'
@@ -64,6 +66,8 @@ on:
       - 'tests/conformance/interp_templates/**'
       - 'tests/conformance/datetime_templates/**'
       - 'tests/conformance/relational_templates/**'
+      - 'tests/conformance/determinism/**'
+      - 'scripts/run-determinism-conformance.py'
       - 'tests/conformance/geometry_templates/**'
       - 'tests/conformance/document_format/**'
       - 'tests/property_corpus/**'
@@ -143,6 +147,11 @@ jobs:
 
     - name: Audit registry against the build
       run: python3 scripts/formal-audit.py registry --lean
+
+    - name: Score the model on the determinism tier
+      env:
+        EARTHSCI_DETERMINISM_ADAPTER_LEAN: formal/.lake/build/bin/esm-lean determinism
+      run: python3 scripts/run-determinism-conformance.py --bindings lean
 
     # The model as a conformance participant: `esm-lean` on the
     # standard-library template tiers, bit for bit where the tolerance is zero.
