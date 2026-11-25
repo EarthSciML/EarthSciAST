@@ -40,6 +40,11 @@ pub enum RhsError {
     /// Lane inputs that hold no successful gather: never gathered, or the
     /// last gather failed.
     NotGathered,
+    /// A lane-program call whose lanes are at different times, where an
+    /// observed that depends on `t` has no lane form; `detail` says which
+    /// and why. The lane program evaluates a batch whose lanes' times are
+    /// all equal.
+    MixedTimes { detail: String },
 }
 
 impl std::fmt::Display for RhsError {
@@ -73,6 +78,12 @@ impl std::fmt::Display for RhsError {
             RhsError::NotGathered => write!(
                 f,
                 "the lane inputs hold no successful gather; call `gather_lane_inputs` first"
+            ),
+            RhsError::MixedTimes { detail } => write!(
+                f,
+                "lanes at different times: this lane program evaluates a batch only when its \
+                 lanes' times are all equal, because an observed that depends on `t` has no \
+                 per-lane form ({detail})"
             ),
         }
     }

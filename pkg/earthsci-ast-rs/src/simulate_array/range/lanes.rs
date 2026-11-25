@@ -78,6 +78,8 @@ struct LaneInner {
     /// The forcing slot each forcing load of `main`, `pre` and `gather`
     /// reads.
     slot_of: [Vec<u32>; 3],
+    /// The programs for a batch whose lanes are at different times.
+    timed: Timed,
     blocks: Blocks,
     layout: LaneLayout,
     default_set: ForcingSet,
@@ -132,6 +134,24 @@ impl LaneInputs {
     }
 }
 
+/// A lane program's programs for a batch at mixed times (U19). `main` and
+/// `pre` evaluate every lane at the call's one time; a batch whose lanes'
+/// times all equal runs them too.
+enum Timed {
+    /// No rule reads `t`: `main` and `pre` serve every batch.
+    Same,
+    /// The rules rewritten with `t` and every observed that depends on it
+    /// read per lane, and the forcing slots of their loads.
+    Own {
+        main: Arc<TapeProgram>,
+        pre: Arc<TapeProgram>,
+        slot_of: [Vec<u32>; 2],
+    },
+    /// Some observed that depends on `t` has no lane form: why, for the
+    /// error a batch at mixed times returns.
+    Unavailable(String),
+}
+
 const MAIN: usize = 0;
 const PRE: usize = 1;
 const GATHER: usize = 2;
@@ -178,6 +198,10 @@ impl LaneProgram {
             exec: WsExec::Lanes {
                 main: serial(&inner.main),
                 pre: serial(&inner.pre),
+                timed: match &inner.timed {
+                    Timed::Own { main, pre, .. } => Some((serial(main), serial(pre))),
+                    Timed::Same | Timed::Unavailable(_) => None,
+                },
             },
             _not_sync: std::marker::PhantomData,
         }
@@ -251,9 +275,12 @@ impl LaneProgram {
 
     /// [`Self::eval_into`] with each lane at its own time (U19): lane `l`
     /// evaluates at `ts[l]`, `ts` holding at least `n` and at most
-    /// `capacity` times. Lane `l`'s value is the whole-domain program's at
-    /// `cells[:, l]` and time `ts[l]`, bit for bit, whatever the other
-    /// lanes' times.
+    /// `capacity` times (a padding lane takes `ts[0]`). Lane `l`'s value is
+    /// the whole-domain program's at `cells[:, l]` and time `ts[l]`, bit for
+    /// bit, whatever the other lanes' times. When every `ts[l]` equals
+    /// `ts[0]` this is [`Self::eval_into`] at `ts[0]`. Where an observed that
+    /// depends on `t` has no per-lane form (it stays one whole-domain value
+    /// per call), lanes at different times are [`RhsError::MixedTimes`].
     #[allow(clippy::too_many_arguments)]
     pub fn eval_times_into(
         &self,
@@ -437,43 +464,62 @@ impl LaneProgram {
         ws.state[nu..nu + na].copy_from_slice(aux);
         let mut state = std::mem::take(&mut ws.state);
         let res = self.write_cells(&mut state, nu + na, cells, n);
-        // U19: each lane's time; a padding lane takes lane 1's (or `t`).
+        // U19: each lane's time; a padding lane takes lane 1's. A batch
+        // whose lanes' times all equal (bit for bit) is the one-time call
+        // at that time.
         let tat = nu + na + inner.capacity * inner.sets.len();
-        let times = &mut state[tat..tat + inner.capacity];
-        let res = res.and_then(|()| match ts {
-            None => {
-                times.iter_mut().for_each(|x| *x = t);
-                Ok(())
-            }
+        let (t, mixed) = match ts {
+            None => (t, false),
             Some(ts) if ts.len() >= n && ts.len() <= inner.capacity => {
-                for (l, x) in times.iter_mut().enumerate() {
-                    *x = if l < n {
-                        ts[l]
-                    } else {
-                        ts.first().copied().unwrap_or(t)
-                    };
-                }
-                Ok(())
+                let t0 = ts.first().copied().unwrap_or(t);
+                (t0, ts[..n].iter().any(|x| x.to_bits() != t0.to_bits()))
             }
-            Some(ts) => Err(shape(
-                "ts (one time per lane, between n and the capacity)",
-                n,
-                ts.len(),
-            )),
-        });
+            Some(ts) => {
+                ws.state = state;
+                ws.ingress = ingress;
+                return Err(shape(
+                    "ts (one time per lane, between n and the capacity)",
+                    n,
+                    ts.len(),
+                ));
+            }
+        };
+        let own = match (&inner.timed, mixed) {
+            (Timed::Own { slot_of, .. }, true) => Some(slot_of),
+            (Timed::Unavailable(why), true) => {
+                ws.state = state;
+                ws.ingress = ingress;
+                return Err(RhsError::MixedTimes {
+                    detail: why.clone(),
+                });
+            }
+            _ => None,
+        };
+        if let (Some(ts), Some(_)) = (ts, own) {
+            let times = &mut state[tat..tat + inner.capacity];
+            for (l, x) in times.iter_mut().enumerate() {
+                *x = if l < n { ts[l] } else { t };
+            }
+        }
         let at = tat + inner.capacity;
         if let Some(g) = gathered {
             state[at..at + g.len()].copy_from_slice(g);
         }
         ws.state = state;
         res?;
-        let WsExec::Lanes { main, pre } = &mut ws.exec else {
+        let WsExec::Lanes { main, pre, timed } = &mut ws.exec else {
             unreachable!("a lane workspace runs lane tapes");
         };
-        let (ctx, which) = if gathered.is_some() {
-            (pre, PRE)
-        } else {
-            (main, MAIN)
+        let (ctx, slot_of) = match (own, timed) {
+            (Some(slot_of), Some((tmain, tpre))) => {
+                if gathered.is_some() {
+                    (tpre, &slot_of[1])
+                } else {
+                    (tmain, &slot_of[0])
+                }
+            }
+            _ if gathered.is_some() => (pre, &inner.slot_of[PRE]),
+            _ => (main, &inner.slot_of[MAIN]),
         };
         let _precision = crate::precision::enter(inner.precision);
         let scope = crate::simulate_array::FaultScope::enter();
@@ -482,7 +528,7 @@ impl LaneProgram {
             params: p,
             forcing: ForcingView::Slots {
                 bufs: forcing.bufs(),
-                slot_of: &inner.slot_of[which],
+                slot_of,
             },
             forcing_epoch: Some(forcing.epoch()),
             t,
@@ -501,8 +547,14 @@ struct Rewriter<'a> {
     /// The states and state-dependent observeds that become lane blocks.
     lane_vars: &'a HashSet<String>,
     /// The scalar observeds that depend on a state or on `t`: one value per
-    /// lane, read at the lane (U19).
+    /// lane, read at the lane (U19). Empty in a one-time rewrite.
     lane_scalars: &'a HashSet<String>,
+    /// A rewrite for lanes each at its own time: `t` reads the lane's time.
+    timed: bool,
+    /// The observeds that depend on a state or on `t`, which no hoisted
+    /// read mentions: the gather program, shared by the one-time and the
+    /// per-lane-times programs, computes neither.
+    no_hoist: &'a HashSet<String>,
     sets: &'a [String],
     sizes: &'a HashMap<String, i64>,
     cells: bool,
@@ -630,7 +682,7 @@ impl Rewriter<'_> {
                     return Ok(e.clone());
                 }
                 // U19: each lane is at its own time.
-                if v == "t" {
+                if self.timed && v == "t" {
                     return Ok(lane_index(LANE_T));
                 }
                 if self.lane_scalars.contains(v) {
@@ -729,11 +781,13 @@ impl Rewriter<'_> {
                 let read = Expr::operator(n);
                 // A read whose subscripts depend on the lane's cell alone
                 // (and on no other symbol) is one value per lane: hoisted.
-                // A read that involves the lane's time is not one value per
-                // cell, so it is not hoisted (U19).
+                // A read that involves the time, or an observed that depends
+                // on a state or on the time, is not one value per cell, so it
+                // is not hoisted (U19); the one-time and per-lane-times
+                // rewrites then hoist the same reads.
                 let by_cell = read_mentions_lane(&read)
                     && !mentions(&read, &mut |x| {
-                        sc.is_loop(x) || x == LANE_T || self.lane_scalars.contains(x)
+                        sc.is_loop(x) || x == "t" || x == LANE_T || self.no_hoist.contains(x)
                     });
                 if !by_cell {
                     return Ok(read);
@@ -1134,29 +1188,85 @@ struct Rewritten {
     gathers: Vec<Expr>,
 }
 
+/// Which observeds a rewrite computes per lane, and how it reads `t`.
+struct Timing {
+    /// A rewrite for lanes each at its own time (U19).
+    timed: bool,
+    /// The states and the observeds that become lane blocks.
+    lane_vars: HashSet<String>,
+    /// The 0-d observeds computed once per lane.
+    lane_scalars: HashSet<String>,
+    /// The observeds a lane computes for itself.
+    dependent: HashSet<String>,
+}
+
+impl Timing {
+    /// The one-time rewrite (`timed` false: every lane at the call's `t`)
+    /// computes per lane the observeds that depend on a state; the
+    /// per-lane-times rewrite also those that depend on `t`, 0-d ones
+    /// included.
+    fn new(
+        compiled: &ProgramModel,
+        axes: &HashMap<String, Vec<Option<String>>>,
+        timed: bool,
+    ) -> Self {
+        let dependent = if timed {
+            lane_dependent(compiled)
+        } else {
+            super::tile::state_dependent(compiled)
+        };
+        let mut lane_vars: HashSet<String> = compiled.var_shapes.keys().cloned().collect();
+        let mut lane_scalars = HashSet::new();
+        for rule in &compiled.observed_rules {
+            match rule {
+                AlgebraicRule::ArrayLoop { var, .. } if dependent.contains(var) => {
+                    lane_vars.insert(var.clone());
+                }
+                AlgebraicRule::Scalar { var, .. }
+                    if timed
+                        && dependent.contains(var)
+                        && axes.get(var).is_none_or(Vec::is_empty) =>
+                {
+                    lane_scalars.insert(var.clone());
+                }
+                _ => {}
+            }
+        }
+        Timing {
+            timed,
+            lane_vars,
+            lane_scalars,
+            dependent,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn rewrite(
     compiled: &ProgramModel,
     axes: &HashMap<String, Vec<Option<String>>>,
-    lane_vars: &HashSet<String>,
-    lane_scalars: &HashSet<String>,
-    dependent: &HashSet<String>,
+    timing: &Timing,
+    no_hoist: &HashSet<String>,
     sets: &[String],
     sizes: &HashMap<String, i64>,
     cells: bool,
     capacity: i64,
     pre: bool,
+    seed: Vec<Expr>,
 ) -> RResult<Rewritten> {
+    let (lane_vars, dependent) = (&timing.lane_vars, &timing.dependent);
     let mut rw = Rewriter {
         axes,
         lane_vars,
-        lane_scalars,
+        lane_scalars: &timing.lane_scalars,
+        timed: timing.timed,
+        no_hoist,
         sets,
         sizes,
         cells,
         capacity,
         rule: String::new(),
-        gathers: Vec::new(),
+        gathers: seed,
         pre,
     };
     // The lane box of a rule writing `var` over `syms`/`ranges`.
@@ -1279,6 +1389,15 @@ fn rewrite(
                     body: std::sync::Arc::new(body),
                 });
             }
+            AlgebraicRule::Scalar { body, .. }
+                if !timing.timed && axes.get(var).is_none_or(Vec::is_empty) =>
+            {
+                let body = rw.expr(body, &LScope::default())?;
+                if mentions(&body, &mut |x| x.starts_with("__cell_") || x == LANE) {
+                    return rw.refuse("is a scalar observed that reads the lane state");
+                }
+                observed.push(rule.clone());
+            }
             AlgebraicRule::Scalar { body, .. } if axes.get(var).is_none_or(Vec::is_empty) => {
                 // A scalar observed that depends on a state or on `t` holds
                 // one value per lane (U19).
@@ -1297,6 +1416,20 @@ fn rewrite(
         rhs,
         observed,
         gathers: rw.gathers,
+    })
+}
+
+/// Whether any rule of the program reads `t` (by name; a loop symbol
+/// spelled `t` counts too, which only costs a second program).
+fn reads_t(compiled: &ProgramModel) -> bool {
+    let t = |e: &Expr| mentions(e, &mut |x| x == "t");
+    compiled.rhs_rules.iter().any(|r| match r {
+        RhsRule::ArrayLoop { body, filter, .. } => t(body) || filter.as_deref().is_some_and(t),
+        RhsRule::Scalar { body, .. } | RhsRule::IndexedScalar { body, .. } => t(body),
+    }) || compiled.observed_rules.iter().any(|r| match r {
+        AlgebraicRule::Scalar { body, .. }
+        | AlgebraicRule::ArrayLoop { body, .. }
+        | AlgebraicRule::Recurrence { body, .. } => t(body),
     })
 }
 
@@ -1379,49 +1512,44 @@ pub(super) fn build(
             )));
         }
     }
-    // The observeds a lane computes for itself: those that depend on a
-    // state or, since each lane is at its own time (U19), on `t`.
-    let dependent = lane_dependent(compiled);
-    let mut lane_vars: HashSet<String> = compiled.var_shapes.keys().cloned().collect();
-    let mut lane_scalars: HashSet<String> = HashSet::new();
-    for rule in &compiled.observed_rules {
-        match rule {
-            AlgebraicRule::ArrayLoop { var, .. } if dependent.contains(var) => {
-                lane_vars.insert(var.clone());
-            }
-            AlgebraicRule::Scalar { var, .. }
-                if dependent.contains(var) && axes.get(var).is_none_or(Vec::is_empty) =>
-            {
-                lane_scalars.insert(var.clone());
-            }
-            _ => {}
-        }
-    }
+    // Two rewrites (U19): the one-time program, every lane at the call's
+    // `t`, computes per lane only the observeds that depend on a state, as
+    // a lane program did before lanes had times of their own; the
+    // per-lane-times program also those that depend on `t`. When no rule
+    // reads `t` the two are the same program. A document whose
+    // `t`-dependent observeds have no lane form still builds: a batch at
+    // mixed times is then an error naming why.
+    let no_hoist = lane_dependent(compiled);
+    let once = Timing::new(compiled, &axes, false);
     let cap = capacity as i64;
-    let main = rewrite(
-        compiled,
-        &axes,
-        &lane_vars,
-        &lane_scalars,
-        &dependent,
-        &sets,
-        &sizes,
-        cells_mode,
-        cap,
-        false,
-    )?;
-    let pre = rewrite(
-        compiled,
-        &axes,
-        &lane_vars,
-        &lane_scalars,
-        &dependent,
-        &sets,
-        &sizes,
-        cells_mode,
-        cap,
-        true,
-    )?;
+    // The per-lane-times rewrite hoists every read the one-time rewrite
+    // does (the same rules, rewritten alike) and also those of the
+    // observeds it computes per lane, so it goes first and the one-time
+    // rewrite numbers its hoisted reads after it: one gather program
+    // serves both.
+    let rewrite_with = |timing: &Timing, pre: bool, seed: Vec<Expr>| {
+        rewrite(
+            compiled, &axes, timing, &no_hoist, &sets, &sizes, cells_mode, cap, pre, seed,
+        )
+    };
+    let timed = if reads_t(compiled) {
+        let timing = Timing::new(compiled, &axes, true);
+        match (
+            rewrite_with(&timing, false, Vec::new()),
+            rewrite_with(&timing, true, Vec::new()),
+        ) {
+            (Ok(m), Ok(p)) => Some(Ok((m, p))),
+            (Err(e), _) | (_, Err(e)) => Some(Err(e.to_string())),
+        }
+    } else {
+        None
+    };
+    let (seed_main, seed_pre) = match &timed {
+        Some(Ok((m, p))) => (m.gathers.clone(), p.gathers.clone()),
+        _ => (Vec::new(), Vec::new()),
+    };
+    let main = rewrite_with(&once, false, seed_main)?;
+    let pre = rewrite_with(&once, true, seed_pre)?;
 
     // The lane layout: u, then aux, each block `[capacity, inner…]`.
     let mut entries = Vec::new();
@@ -1521,27 +1649,45 @@ pub(super) fn build(
         c.build_tile_tape(&empty)
             .map_err(|d| declined_error(&d, "lane"))
     };
-    let main_tape = build_tape(&shell(
-        compiled,
-        var_shapes.clone(),
-        main.rhs,
-        main.observed,
-        held.clone(),
-    ))?;
     let mut pre_held = held.clone();
     pre_held.extend((0..pre.gathers.len()).map(input_var));
-    let pre_tape = build_tape(&shell(
-        compiled,
-        pre_shapes,
-        pre.rhs,
-        pre.observed,
-        pre_held,
-    ))?;
+    let n_inputs = main.gathers.len();
+    let build_pair = |main: Rewritten, pre: Rewritten| -> Result<_, SimulateError> {
+        let main_tape = build_tape(&shell(
+            compiled,
+            var_shapes.clone(),
+            main.rhs,
+            main.observed,
+            held.clone(),
+        ))?;
+        let pre_tape = build_tape(&shell(
+            compiled,
+            pre_shapes.clone(),
+            pre.rhs,
+            pre.observed,
+            pre_held.clone(),
+        ))?;
+        let slot_of = [
+            slot_map(&main_tape, &prog.inner.slots)?,
+            slot_map(&pre_tape, &prog.inner.slots)?,
+        ];
+        Ok((Arc::new(main_tape), Arc::new(pre_tape), slot_of))
+    };
+    let gathers = main.gathers.clone();
+    let (main_tape, pre_tape, [main_slots, pre_slots]) = build_pair(main, pre)?;
+    let timed = match timed {
+        None => Timed::Same,
+        Some(Ok((m, p))) => {
+            let (main, pre, slot_of) = build_pair(m, p)?;
+            Timed::Own { main, pre, slot_of }
+        }
+        Some(Err(why)) => Timed::Unavailable(why),
+    };
 
     // The gather program: one rule per hoisted read, writing its lanes.
     let mut gshapes: IndexMap<String, VarShape> = IndexMap::new();
     let mut gat = 0usize;
-    for k in 0..main.gathers.len() {
+    for k in 0..n_inputs {
         add(&mut gshapes, input_var(k), &mut gat);
     }
     for s in &sets {
@@ -1549,9 +1695,7 @@ pub(super) fn build(
     }
     // The gather program's `du` is the inputs alone, so the cells follow
     // them in its state; the call passes the cells there.
-    let n_inputs = main.gathers.len();
-    let grules: Vec<RhsRule> = main
-        .gathers
+    let grules: Vec<RhsRule> = gathers
         .iter()
         .enumerate()
         .map(|(k, g)| RhsRule::ArrayLoop {
@@ -1575,7 +1719,7 @@ pub(super) fn build(
                 | AlgebraicRule::ArrayLoop { var, .. }
                 | AlgebraicRule::Recurrence { var, .. } => var,
             };
-            !dependent.contains(var)
+            !no_hoist.contains(var)
         })
         .cloned()
         .collect();
@@ -1587,17 +1731,18 @@ pub(super) fn build(
     };
     let inputs = InputPrecisions::new(&layout, &compiled.param_names, &compiled.precision);
     let slot_of = [
-        slot_map(&main_tape, &prog.inner.slots)?,
-        slot_map(&pre_tape, &prog.inner.slots)?,
+        main_slots,
+        pre_slots,
         slot_map(&gather_tape, &prog.inner.slots)?,
     ];
     Ok(LaneProgram {
         inner: Arc::new(LaneInner {
             id: next_program_id(),
-            main: Arc::new(main_tape),
-            pre: Arc::new(pre_tape),
+            main: main_tape,
+            pre: pre_tape,
             gather: Arc::new(gather_tape),
             slot_of,
+            timed,
             layout: layout.lane_public(&sets, capacity),
             blocks: layout,
             default_set: prog.default_forcing(),
