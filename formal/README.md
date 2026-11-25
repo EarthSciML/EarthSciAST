@@ -202,3 +202,23 @@ names that defining file as `defined_by` instead of citing inventory clauses
 `QUESTIONS.md` anchor) or `question` (with `question`: a `QUESTIONS.md` anchor
 `Q-n`). For `proven`, the audit elaborates `example : <lean_statement> :=
 @<theorem>`; for `refuted`, `example : ¬ (<lean_statement>) := @<theorem>`.
+
+## Canonical expression bytes
+
+`esm-lean canonical-json <expression.json>` emits the structural expression
+format of discretization RFC §5.4. This format retains the integer/float token
+kind and signed zero. The `canon` mode applies CONFORMANCE §5.5.3.1's document
+number rules. The expression canonicalizer is an explicit serialization API.
+
+From the repository root after `lake build`, run `python3 scripts/run-canonical-lean.py`
+to check byte equality and fixture-level fixed points against the shared
+`tests/conformance/canonical/` manifest. The scorer also checks the diagnostic
+code of each rejected fixture and exercises signed zero, overflow and literal
+division by zero.
+
+The RFC specifies a product's zero-annihilation result by the zero operand's
+kind and sign. This adapter reports `E_CANONICAL_UNSUPPORTED_EXPRESSION` if a
+product has several zero operands with incompatible kinds or signs. It leaves
+the ordering of same-valued, same-kind literals stable, including opposite
+signs of floating zero. Value fields are literal payloads and non-expression
+fields follow the canonical fixture suite's whitelist.

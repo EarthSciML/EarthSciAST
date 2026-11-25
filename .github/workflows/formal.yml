@@ -45,6 +45,9 @@ on:
       - 'scripts/gen-document-format-fixtures.py'
       - 'tests/**/*.esm'
       - 'typst/packages/**'
+      - 'docs/content/rfcs/discretization.md'
+      - 'scripts/run-canonical-lean.py'
+      - 'tests/conformance/canonical/**'
       - '.github/workflows/formal.yml'
   pull_request:
     branches: [ main ]
@@ -77,6 +80,9 @@ on:
       - 'scripts/gen-document-format-fixtures.py'
       - 'tests/**/*.esm'
       - 'typst/packages/**'
+      - 'docs/content/rfcs/discretization.md'
+      - 'scripts/run-canonical-lean.py'
+      - 'tests/conformance/canonical/**'
       - '.github/workflows/formal.yml'
   workflow_dispatch:
 
@@ -214,3 +220,6 @@ jobs:
 
     - name: Document formats on the corpus
       run: python3 formal/scripts/doc-corpus.py --typst typst --katex
+
+    - name: Score the model on the canonical expression byte fixtures
+      run: python3 scripts/run-canonical-lean.py
