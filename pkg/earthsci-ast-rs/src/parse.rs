@@ -862,9 +862,8 @@ fn schema_keyword_for_kind(kind: &ValidationErrorKind) -> &'static str {
         K::AdditionalItems { .. } => "additionalItems",
         K::AdditionalProperties { .. } => "additionalProperties",
         K::AnyOf { .. } => "anyOf",
-        // A regex that blew its backtrack budget, or whose engine failed
-        // outright, failed the `pattern` keyword.
-        K::BacktrackLimitExceeded { .. } | K::RegexEngineFailure { .. } => "pattern",
+        // A regex that blew its backtrack budget failed the `pattern` keyword.
+        K::BacktrackLimitExceeded { .. } => "pattern",
         K::Constant { .. } => "const",
         K::Contains => "contains",
         K::ContentEncoding { .. } => "contentEncoding",
@@ -876,10 +875,12 @@ fn schema_keyword_for_kind(kind: &ValidationErrorKind) -> &'static str {
         K::FalseSchema => "false",
         K::Format { .. } => "format",
         K::FromUtf8 { .. } => "contentEncoding",
+        K::MaxContains { .. } => "maxContains",
         K::MaxItems { .. } => "maxItems",
         K::Maximum { .. } => "maximum",
         K::MaxLength { .. } => "maxLength",
         K::MaxProperties { .. } => "maxProperties",
+        K::MinContains { .. } => "minContains",
         K::MinItems { .. } => "minItems",
         K::Minimum { .. } => "minimum",
         K::MinLength { .. } => "minLength",
