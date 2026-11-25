@@ -1125,9 +1125,7 @@ mod precision_source {
 #[test]
 fn whole_array_faq_right_hand_sides_build_lanes() {
     let (nx, ny) = (3, 4);
-    let whole = |expr: serde_json::Value, ranges: serde_json::Value| {
-        json!({"op": "faq", "args": [], "output_idx": ["i", "j"], "ranges": ranges, "expr": expr})
-    };
+    let whole = |expr: serde_json::Value, ranges: serde_json::Value| json!({"op": "faq", "args": [], "output_idx": ["i", "j"], "ranges": ranges, "expr": expr});
     let xy = json!({"i": {"from": "x"}, "j": {"from": "y"}});
     let xyk = json!({"i": {"from": "x"}, "j": {"from": "y"}, "k": {"from": "z"}});
     let doc = model(
@@ -1190,7 +1188,239 @@ fn whole_array_faq_right_hand_sides_build_lanes() {
             .expect("lane eval");
         for (l, &c) in batch.iter().enumerate() {
             assert_eq!(du[ou * 4 + l].to_bits(), want[c].to_bits(), "u at cell {c}");
-            assert_eq!(du[ov * 4 + l].to_bits(), want[n + c].to_bits(), "v at cell {c}");
+            assert_eq!(
+                du[ov * 4 + l].to_bits(),
+                want[n + c].to_bits(),
+                "v at cell {c}"
+            );
         }
     }
+}
+
+/// Every lane of `lanes` equals the whole-domain program at its cell (or
+/// column) bit for bit, at time `t`, over every cell of the lane sets
+/// (extents `ext`, first set fastest) in batches of the capacity with the
+/// last one padded, on both the plain and the pre-gathered path.
+fn assert_lanes_match(prog: &RhsProgram, lanes: &LaneProgram, ext: &[i64], t: f64) {
+    let whole = prog.layout().clone();
+    let lay = lanes.layout().clone();
+    let cap = lay.capacity;
+    let d = lay.sets.len();
+    let gu = varied(whole.u_len);
+    let p = prog
+        .parameter_vector(&Default::default())
+        .expect("defaults");
+    let fs = prog.default_forcing();
+    let mut want = vec![f64::NAN; whole.u_len];
+    let mut ws = prog.new_workspace();
+    prog.eval_into(&gu, &[], &p, t, &fs, &mut want, &mut ws)
+        .expect("whole-domain eval");
+    // The global multi-index of element `e` of `name` in the lane at `cell`.
+    let global = |name: &str, cell: &[i64], e: usize| -> Vec<i64> {
+        let w = whole.block(name).expect("a whole block");
+        let mut rem = e;
+        let mut g = Vec::new();
+        for (a, &(lo, hi)) in w.storage.iter().enumerate() {
+            match lay.sets.iter().position(|s| *s == w.sets[a]) {
+                Some(pos) => g.push(cell[pos]),
+                None => {
+                    let n = (hi - lo + 1) as usize;
+                    g.push(lo + (rem % n) as i64);
+                    rem /= n;
+                }
+            }
+        }
+        g
+    };
+    let n_cells: i64 = ext.iter().product();
+    let cells: Vec<Vec<i64>> = (0..n_cells)
+        .map(|mut c| {
+            ext.iter()
+                .map(|&n| {
+                    let x = c % n + 1;
+                    c /= n;
+                    x
+                })
+                .collect()
+        })
+        .collect();
+    let mut lws = lanes.new_workspace();
+    let mut inputs = lanes.lane_inputs();
+    for batch in cells.chunks(cap) {
+        let mut u = vec![0.0; lay.u_len];
+        let mut cs = vec![1i32; cap * d];
+        for (l, cell) in batch.iter().enumerate() {
+            for (a, &x) in cell.iter().enumerate() {
+                cs[l * d + a] = x as i32;
+            }
+            for b in &lay.u {
+                let w = whole.block(&b.name).expect("a whole block");
+                for e in 0..b.extents.iter().product::<usize>() {
+                    u[(b.offset + e) * cap + l] = gu[w.slot(&global(&b.name, cell, e)).unwrap()];
+                }
+            }
+        }
+        let check = |du: &[f64], path: &str| {
+            for (l, cell) in batch.iter().enumerate() {
+                for b in &lay.u {
+                    let w = whole.block(&b.name).expect("a whole block");
+                    for e in 0..b.extents.iter().product::<usize>() {
+                        let g = global(&b.name, cell, e);
+                        assert_eq!(
+                            du[(b.offset + e) * cap + l].to_bits(),
+                            want[w.slot(&g).unwrap()].to_bits(),
+                            "{path}: {} at {g:?}",
+                            b.name
+                        );
+                    }
+                }
+            }
+        };
+        let mut du = vec![f64::NAN; lay.u_len];
+        lanes
+            .eval_into(&u, &[], &p, t, &fs, &cs, batch.len(), &mut du, &mut lws)
+            .expect("lane eval");
+        check(&du, "eval_into");
+        lanes
+            .gather_lane_inputs(&mut inputs, &p, t, &fs, &cs, batch.len())
+            .expect("gather");
+        let mut du = vec![f64::NAN; lay.u_len];
+        lanes
+            .eval_gathered_into(&u, &[], &inputs, &p, t, &cs, batch.len(), &mut du, &mut lws)
+            .expect("gathered lane eval");
+        check(&du, "eval_gathered_into");
+    }
+}
+
+fn columns(sets: &[&str]) -> LaneKind {
+    LaneKind::Columns {
+        sets: sets.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+fn faq_node(out: &[&str], ranges: serde_json::Value, expr: serde_json::Value) -> serde_json::Value {
+    json!({"op": "faq", "args": [], "output_idx": out, "ranges": ranges, "expr": expr})
+}
+
+/// Column lanes read a whole-array `faq` at a vertical (non-lane)
+/// subscript: the `faq`'s output index along `z` is bound to the column's
+/// own vertical loop symbol. The body also holds nested `faq`s that rebind
+/// output-index names (`k`, and the lane index `i`), which shadow them
+/// there; and a filtered `faq` with no contraction.
+#[test]
+fn column_lanes_read_a_whole_array_faq_at_a_vertical_subscript() {
+    let (nx, ny, nz) = (3, 2, 4);
+    let xyz = json!({"i": {"from": "x"}, "j": {"from": "y"}, "k": {"from": "z"}});
+    let u3 = |k: &str| ix("u", vec![json!("i"), json!("j"), json!(k)]);
+    let doc = model(
+        json!({"x": {"kind": "interval", "size": nx},
+               "y": {"kind": "interval", "size": ny},
+               "z": {"kind": "interval", "size": nz}}),
+        json!({
+            "u": {"type": "unknown", "units": "1", "shape": ["x", "y", "z"], "default": 1.0},
+            "v": {"type": "unknown", "units": "1", "shape": ["x", "y", "z"], "default": 1.0},
+            "c": {"type": "parameter", "units": "1", "shape": ["z"], "default": [0.5, 1.5, 2.5, 3.5]},
+            "w": {"type": "parameter", "units": "1", "shape": ["y"], "default": [0.25, 0.75]}
+        }),
+        json!([
+            {"lhs": d_of(json!("u")),
+             "rhs": faq_node(&["i", "j", "k"], xyz.clone(), json!({"op": "+", "args": [
+                 {"op": "*", "args": [ix("c", vec![json!("k")]), u3("k"), "t"]},
+                 // A column sum: the nested `k` shadows the output `k`.
+                 faq_node(&[], json!({"k": {"from": "z"}}), u3("k")),
+                 // The nested `i` shadows the lane index `i`.
+                 faq_node(&[], json!({"i": [1, 2]}), ix("w", vec![json!("i")]))]}))},
+            {"lhs": d_of(json!("v")),
+             "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j", "k"], "ranges": xyz,
+                     "filter": {"op": "!=", "args": ["k", "i"]},
+                     "expr": {"op": "*", "args": ["k", u3("k")]}}}
+        ]),
+    );
+    let prog = program(&doc, Compiler::Native);
+    let lanes = prog
+        .lanes(columns(&["x", "y"]), 4)
+        .expect("a whole-array faq read at a vertical subscript builds column lanes");
+    assert_lanes_match(&prog, &lanes, &[nx, ny], 0.75);
+}
+
+/// A `makearray` whose region values are array `faq`s that are filtered or
+/// contract, on a band of the vertical (non-lane) axis that starts above 1
+/// and on a single level whose value's range starts elsewhere: each value
+/// is read at the region's element, as the whole-domain program places it.
+#[test]
+fn makearray_faq_region_values_build_lanes() {
+    let (nx, ny, nz) = (3, 2, 4);
+    let u3 = |k: serde_json::Value| ix("u", vec![json!("i"), json!("j"), k]);
+    let all = |n: i64| json!([1, n]);
+    let doc = model(
+        json!({"x": {"kind": "interval", "size": nx},
+               "y": {"kind": "interval", "size": ny},
+               "z": {"kind": "interval", "size": nz}}),
+        json!({
+            "u": {"type": "unknown", "units": "1", "shape": ["x", "y", "z"], "default": 1.0},
+            "v": {"type": "unknown", "units": "1", "shape": ["x", "y"], "default": 1.0},
+            "c": {"type": "parameter", "units": "1", "shape": ["z"], "default": [0.5, 1.5, 2.5, 3.5]}
+        }),
+        json!([
+            {"lhs": d_of(json!("u")),
+             "rhs": {"op": "makearray", "args": [],
+                     "regions": [
+                         [all(nx), all(ny), all(nz)],
+                         [all(nx), all(ny), [2, 3]],
+                         [all(nx), all(ny), [4, 4]]],
+                     "values": [
+                         -1.0,
+                         // A filtered band on levels 2..3.
+                         {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
+                          "ranges": {"i": {"from": "x"}, "j": {"from": "y"}, "k": [2, 3]},
+                          "filter": {"op": "!=", "args": ["i", "k"]},
+                          "expr": {"op": "*", "args": [ix("c", vec![json!("k")]), u3(json!("k"))]}},
+                         // Level 4 holds a column sum over `m`, its own range
+                         // `k` running 1..1.
+                         {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
+                          "ranges": {"i": {"from": "x"}, "j": {"from": "y"}, "k": [1, 1], "m": {"from": "z"}},
+                          "expr": {"op": "*", "args": ["k", ix("c", vec![json!("m")]), u3(json!("m"))]}}
+                     ]}},
+            {"lhs": d_of(json!("v")),
+             "rhs": {"op": "makearray", "args": [],
+                     "regions": [[all(nx), all(ny)]],
+                     "values": [
+                         {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                          "ranges": {"i": {"from": "x"}, "j": {"from": "y"}, "m": {"from": "z"}},
+                          "filter": {"op": "!=", "args": ["m", "i"]},
+                          "expr": {"op": "*", "args": ["j", u3(json!("m"))]}}
+                     ]}}
+        ]),
+    );
+    let prog = program(&doc, Compiler::Native);
+    let lanes = prog
+        .lanes(columns(&["x", "y"]), 4)
+        .expect("a makearray of filtered and contracted faq values builds column lanes");
+    assert_lanes_match(&prog, &lanes, &[nx, ny], 0.5);
+}
+
+/// An array `faq` carrying `args` (or a `key`) names its output indices
+/// outside the body, where a lane does not rewrite them: a structured lane
+/// refusal, not a wrong value or a panic.
+#[test]
+fn an_array_faq_carrying_args_is_refused_by_lanes() {
+    let doc = model(
+        json!({"x": {"kind": "interval", "size": 3}}),
+        json!({"u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0}}),
+        json!([{"lhs": d_of(json!("u")),
+                "rhs": {"op": "faq", "args": ["u"], "output_idx": ["i"],
+                        "ranges": {"i": {"from": "x"}},
+                        "expr": {"op": "*", "args": [-1.0, ix("u", vec![json!("i")])]}}}]),
+    );
+    let prog = program(&doc, Compiler::Native);
+    let err = prog
+        .lanes(
+            LaneKind::Cells {
+                sets: vec!["x".to_string()],
+            },
+            4,
+        )
+        .expect_err("an array faq with args has no lane form");
+    assert!(err.to_string().contains("lane:"), "{err}");
+    assert!(err.to_string().contains("`args`"), "{err}");
 }
