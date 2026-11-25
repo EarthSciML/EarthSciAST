@@ -29,7 +29,6 @@ Design notes
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
@@ -760,8 +759,23 @@ def _apply_minmax(vals: list[Any], uf: Callable) -> Any:
     operand list into one array first, which fails on mixed array/scalar operands
     (e.g. ``min(field[l], scalar)``); pairwise reduction broadcasts each step,
     keeping array operands array-valued. A single operand is returned unchanged.
+    For scalar zero ties, IEEE 754-2019 orders negative zero below positive zero
+    (esm-spec §4.2), independently of the ufunc's tie behavior.
     """
-    return functools.reduce(uf, vals) if len(vals) > 1 else vals[0]
+    acc = vals[0]
+    for val in vals[1:]:
+        result = uf(acc, val)
+        if isinstance(result, np.floating) and result == 0.0 and acc == val == 0.0:
+            left_negative = np.signbit(acc)
+            right_negative = np.signbit(val)
+            negative = (
+                left_negative | right_negative
+                if uf is np.minimum
+                else left_negative & right_negative
+            )
+            result = type(result)(-0.0 if negative else 0.0)
+        acc = result
+    return acc
 
 
 def _apply_ifelse(cond: Any, a: Any, b: Any) -> np.ndarray:
