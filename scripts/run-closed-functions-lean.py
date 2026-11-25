@@ -58,7 +58,14 @@ TEMPLATE_TIERS = [
             "sets; esm-lean does not simulate",
         },
     ),
-    (CONFORMANCE / "geometry_templates" / "manifest.json", {}),
+    (
+        CONFORMANCE / "geometry_templates" / "manifest.json",
+        {
+            "nested_overlap_regrid": "applies locally declared definitions whose results are "
+            "whole arrays (a definition body applying another, with rings read from a second "
+            "component); esm-lean evaluates imported templates to scalars only",
+        },
+    ),
 ]
 
 

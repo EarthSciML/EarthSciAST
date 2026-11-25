@@ -301,6 +301,7 @@ const GROUPS = [
         "template_array_calls_test.jl",
         "template_views_test.jl",
         "template_refs_compile_cases_test.jl",
+        "nested_reference_calls_test.jl",
         "expanded_model_seam_test.jl",
     ],
     :fixtures => [

@@ -855,7 +855,7 @@ function _seam_register!(tt, name::String, body::ASTExpr)
             nd[string(k)] = v
         end
         nd["body"] = raw
-        tt.reg[sname] = nd
+        _tpl_reg_add!(tt, sname, nd)
     end
     return sname
 end

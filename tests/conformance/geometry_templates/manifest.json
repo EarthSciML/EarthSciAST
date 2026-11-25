@@ -95,6 +95,36 @@
     ]
    },
    "named_exclusions": []
+  },
+  {
+   "id": "nested_overlap_regrid",
+   "path": "fixtures/nested_overlap_regrid.esm",
+   "model": "NestedOverlapRegrid",
+   "golden": "golden/nested_overlap_regrid.json",
+   "tags": [
+    "operators",
+    "nested-references",
+    "faq",
+    "geometry",
+    "planar",
+    "join-gate"
+   ],
+   "note": "Authored here: the EarthSciDiscretizations conservative_overlap narrow phase, a definition whose body applies the pairwise skeleton definition with `area` bound to an application that reads the skeleton's loop symbols; gated and dense, then the gated row sum and apply.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
   }
  ]
 }
