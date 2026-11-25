@@ -90,6 +90,9 @@ struct LaneProgram{F}
     # The live buffer of each lane's time (U19), the last lane buffer of a
     # workspace; `nothing` when the program reads no per-lane time.
     tbuf::Union{Nothing, Vector{Float64}}
+    # The observeds of `t` evaluated once per call at one time (no lane set),
+    # which a call at mixed times refuses.
+    tshared::Vector{String}
 end
 
 """
@@ -126,6 +129,15 @@ mutable struct _LaneSpec <: _RangeSpec
     # The live lane buffer of each lane's time (U19): `t` in the lane scope
     # reads it at the lane. `nothing` for an out-of-place fragment.
     tbuf::Union{Nothing, Vector{Float64}}
+    # The 0-d observeds of `t` computed per lane, read at the lane index
+    # (`_range_promote_model`).
+    promoted::Set{String}
+    # The observeds of `t` the state equations read that are evaluated once
+    # per call, at one time (no lane set): a call at mixed times refuses them.
+    tshared::Vector{String}
+    # `t` and every observed that depends on it, which the hoist pass keeps
+    # off a lane-free lift.
+    tnames::Set{String}
 end
 
 _lane_refuse(rule, why) = _refuse_rule(_rule_display(rule), "lane: $why")
@@ -179,11 +191,15 @@ function _range_fill_equations(spec::_LaneSpec, name, def, dims, box)
 end
 
 # The lane rewrite of one scope. `lanevars` maps each loop variable bound to a
-# lane set to that set; `first` is the variable carrying the lane index.
+# lane set to that set; `first` is the variable carrying the lane index;
+# `ranges` holds the document range of every loop variable in scope (the
+# innermost binder's), which an array `faq` read at that variable is checked
+# against.
 struct _LaneScope
     lanevars::Dict{String, String}
     first::String
     columns::Dict{String, UnitRange{Int}}
+    ranges::Dict{String, Any}
 end
 
 function _lane_value(spec::_LaneSpec, sc::_LaneScope, set::String)
@@ -194,9 +210,10 @@ function _lane_rewrite(spec::_LaneSpec, ctx, e::ASTExpr, sc::_LaneScope, rule::S
     if e isa VarExpr
         n = (e::VarExpr).name
         haskey(sc.lanevars, n) && return _lane_value(spec, sc, sc.lanevars[n])
-        # U19: the time is the lane's own.
+        # U19: the time is the lane's own, and so is a 0-d observed of it.
         n == "t" && spec.tbuf !== nothing &&
             return OpExpr("index", ASTExpr[VarExpr("__lane_t"), VarExpr(sc.first)])
+        n in spec.promoted && return OpExpr("index", ASTExpr[e, VarExpr(sc.first)])
         if n in spec.laned
             _lane_refuse(rule, "it reads the whole array '$n'")
         end
@@ -214,20 +231,26 @@ function _lane_rewrite(spec::_LaneSpec, ctx, e::ASTExpr, sc::_LaneScope, rule::S
                 "an aggregate rebinds the lane index '$k'"
             )
         end
+        # The node's bound indices are in scope in the fields that see them.
+        # `args` and the range bounds keep the outer scope; every other
+        # expression field (`expr`, `filter`, `key`, …) is rewritten in the
+        # node's scope, so no field is skipped that the in-place program
+        # rewrites through `map_children`. In a fragment they also become
+        # columns of a lane gather.
+        columns = sc.columns
         if spec.fragment
-            # The node's bound indices become columns of a lane gather in the
-            # fields that see them. `args` and the range bounds keep the
-            # outer scope; every other expression field (`expr`, `filter`,
-            # `key`, …) is rewritten in the node's scope, so no field is
-            # skipped that the in-place program rewrites through `map_children`.
             columns = copy(sc.columns)
             _lane_column_ranges!(columns, spec, o.ranges)
-            body = _LaneScope(sc.lanevars, sc.first, columns)
-            return _map_children_scoped(
-                x -> _lane_rewrite(spec, ctx, x, sc, rule),
-                x -> _lane_rewrite(spec, ctx, x, body, rule), o, (:args, :ranges)
-            )
         end
+        ranges = copy(sc.ranges)
+        for (k, r) in o.ranges
+            ranges[String(k)] = r
+        end
+        body = _LaneScope(sc.lanevars, sc.first, columns, ranges)
+        return _map_children_scoped(
+            x -> _lane_rewrite(spec, ctx, x, sc, rule),
+            x -> _lane_rewrite(spec, ctx, x, body, rule), o, (:args, :ranges)
+        )
     end
     return map_children(x -> _lane_rewrite(spec, ctx, x, sc, rule), o)
 end
@@ -308,7 +331,14 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
     if _index_target_kind(target) === _IT_MAKEARRAY
         ma = target::OpExpr
         regions = Vector{Vector{Any}}[]
+        bounds = Vector{Union{Nothing, Tuple{Int, Int}}}[]
         for region in ma.regions
+            push!(
+                bounds, Union{Nothing, Tuple{Int, Int}}[
+                    _lane_bounds(_region_int(ctx.need, r[1]), _region_int(ctx.need, r[2]))
+                        for r in region
+                ]
+            )
             nr = Vector{Any}[]
             for d in eachindex(region)
                 s = subs[d]
@@ -328,13 +358,16 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
             end
             push!(regions, nr)
         end
-        # A value that is an array `faq` over the whole region (the planner's
-        # Jacobian documents write one per band field) is read at the
-        # subscripts, so it is the `faq`'s body there.
+        # A value that is an array `faq` exactly over its region (the
+        # planner's Jacobian documents write one per band field) is read at
+        # the subscripts, so it is the `faq`'s body there: the whole-domain
+        # build reads a region value at the absolute subscripts
+        # (`_resolve_index_of_makearray`), so the value's axes must be the
+        # region's own.
         vals = ASTExpr[
             (v isa OpExpr && _is_faq_op((v::OpExpr).op) && _lane_array_faq(v::OpExpr)) ?
-                _lane_faq_read(spec, ctx, v::OpExpr, subs, sc, rule) :
-                _lane_rewrite(spec, ctx, v, sc, rule) for v in ma.values
+                _lane_faq_read(spec, ctx, v::OpExpr, subs, sc, rule, bounds[r]) :
+                _lane_rewrite(spec, ctx, v, sc, rule) for (r, v) in enumerate(ma.values)
         ]
         newsubs = ASTExpr[
             (s isa VarExpr && haskey(sc.lanevars, (s::VarExpr).name)) ? s :
@@ -359,48 +392,133 @@ end
 _lane_array_faq(o::OpExpr) = o.output_idx !== nothing && !isempty(o.output_idx) &&
     o.expr_body !== nothing && o.ranges !== nothing
 
+_lane_bounds(lo::Int, hi::Int) = (lo, hi)
+_lane_bounds(lo, hi) = nothing
+
+_lane_int(x::Integer) = Int(x)
+_lane_int(x::IntExpr) = Int(x.value)
+_lane_int(x) = nothing
+
+# A range as its integer bounds `(lo, hi)`: a whole index set (`from` with no
+# `of`) or a constant interval; `nothing` for any other range.
+function _lane_range_bounds(spec::_LaneSpec, r)
+    set = _lane_range_set(r)
+    set === nothing || return haskey(spec.ext, set) ? (1, spec.ext[set]) : nothing
+    if r isa AbstractVector && length(r) == 2
+        return _lane_bounds(_lane_int(r[1]), _lane_int(r[2]))
+    end
+    return nothing
+end
+
+# The index set a `from` range runs over whole (no `of`), or `nothing`.
+function _lane_range_set(r)
+    if r isa IndexSetRef
+        return isempty(r.of) ? r.from : nothing
+    elseif r isa AbstractDict && haskey(r, "from")
+        of = get(r, "of", nothing)
+        (of === nothing || isempty(of)) || return nothing
+        return String(r["from"])
+    end
+    return nothing
+end
+
 # `index(faq{output_idx o, ranges, body}, s…)`: the array `faq` read at the
-# subscripts `s`, each a loop variable, along an output axis that starts at 1
-# (a lane set's whole extent, or an interval from 1). That is the body with
-# each `o_d` renamed `s_d`; any other range of the `faq` (a contraction) stays
-# a scalar `faq` over it. The planner's whole-array right-hand sides
-# `D(x) = faq{…}`, lowered to an indexed `faq`, and its Jacobian documents'
-# `makearray` values arrive here.
-function _lane_faq_read(spec::_LaneSpec, ctx, F::OpExpr, subs, sc::_LaneScope, rule::String)
+# subscripts `s`, each a loop variable. That is the body with each `o_d`
+# renamed `s_d` (capture-avoiding); any other range of the `faq` (a
+# contraction) stays a scalar `faq` over it. The planner's whole-array
+# right-hand sides `D(x) = faq{…}`, lowered to an indexed `faq`, and its
+# Jacobian documents' `makearray` values arrive here.
+#
+# Each output axis must run over exactly what reads it, as the whole-domain
+# build reads the `faq` at the absolute subscript: along a lane set, the whole
+# set (`from` it with no `of`, or `[1, extent]`); as a `makearray` region value
+# (`region` holds that region's integer bounds), the region's bounds; otherwise
+# the range the subscript runs over in the enclosing scope.
+function _lane_faq_read(
+        spec::_LaneSpec, ctx, F::OpExpr, subs, sc::_LaneScope, rule::String,
+        region = nothing
+    )
     outs = _output_idx_strings(F)
     length(outs) == length(subs) || _lane_refuse(rule, "an array faq is read at the wrong rank")
-    bindings = Dict{String, ASTExpr}()
+    # `args`, `key`, `join` and `distinct` are scoped to the node itself (they
+    # name its output indices); the body alone moves.
+    (
+        isempty(F.args) && F.key === nothing &&
+            (F.join === nothing || isempty(F.join)) && F.distinct !== true
+    ) || _lane_refuse(
+        rule, "an array faq read inside the lane scope carries `args`, `key`, `join` or `distinct`"
+    )
+    renames = Dict{String, ASTExpr}()
     names = Set{String}()
-    for (o, s) in zip(outs, subs)
+    for (d, (o, s)) in enumerate(zip(outs, subs))
         s isa VarExpr || _lane_refuse(rule, "an array faq is read at a computed subscript")
         sn = (s::VarExpr).name
-        r = F.ranges[o]
+        r = get(F.ranges, o, nothing)
+        r === nothing && _lane_refuse(rule, "an array faq's output index '$o' has no range")
         set = get(sc.lanevars, sn, nothing)
-        starts_at_one = if r isa AbstractDict && haskey(r, "from")
-            set === nothing || r["from"] == set
-        elseif r isa AbstractVector && length(r) == 2
-            lo = r[1] isa Integer ? Int(r[1]) : r[1] isa IntExpr ? r[1].value : nothing
-            hi = r[2] isa Integer ? Int(r[2]) : r[2] isa IntExpr ? r[2].value : nothing
-            lo == 1 && (set === nothing || hi == get(spec.ext, set, -1))
+        rb = _lane_range_bounds(spec, r)
+        # Along a lane set: that set by name, or the interval over it.
+        lane_ok = set !== nothing && (
+            _lane_range_set(r) === nothing ? rb == (1, get(spec.ext, set, -1)) :
+                _lane_range_set(r) == set
+        )
+        fits = if region !== nothing
+            rb !== nothing && region[d] == rb && (set === nothing || lane_ok)
+        elseif set !== nothing
+            lane_ok
         else
-            false
+            sr = get(sc.ranges, sn, nothing)
+            # Read by position, as Rust does: the subscript's range starts at 1.
+            rb !== nothing && sr !== nothing && _lane_range_bounds(spec, sr) == rb && rb[1] == 1
         end
-        starts_at_one || _lane_refuse(
+        fits || _lane_refuse(
             rule, "an array faq's axis '$o' does not run over the whole of what reads it"
         )
-        bindings[o] = s
+        sn == o || (renames[o] = s)
         push!(names, sn)
     end
     contracted = Dict{String, Any}(String(k) => v for (k, v) in F.ranges if !(String(k) in outs))
     any(k -> k in names, keys(contracted)) &&
         _lane_refuse(rule, "an array faq's contraction rebinds a subscript")
-    body = substitute(F.expr_body, bindings)
+    body = _lane_rename(F.expr_body, renames, rule)
     if isempty(contracted) && F.filter === nothing
         return _lane_rewrite(spec, ctx, body, sc, rule)
     end
-    filt = F.filter === nothing ? nothing : substitute(F.filter, bindings)
+    filt = F.filter === nothing ? nothing : _lane_rename(F.filter, renames, rule)
     G = reconstruct(F; output_idx = Any[], ranges = contracted, expr_body = body, filter = filt)
     return _lane_rewrite(spec, ctx, G, sc, rule)
+end
+
+# `e` with each output index renamed to its subscript, capture-avoiding: a
+# nested binder of an output index's name shadows it (`_sub_preserving`), and
+# one that binds a subscript's name where the renamed index is free would
+# capture it, which is refused.
+function _lane_rename(e::ASTExpr, renames::Dict{String, ASTExpr}, rule::String)
+    isempty(renames) && return e
+    _lane_check_capture(e, renames, rule)
+    return _sub_preserving(e, renames)
+end
+
+function _lane_check_capture(e::ASTExpr, renames::Dict{String, ASTExpr}, rule::String)
+    e isa OpExpr || return nothing
+    o = e::OpExpr
+    bound = _bound_symbols(o)
+    active = renames
+    if !isempty(bound)
+        active = Dict{String, ASTExpr}(k => v for (k, v) in renames if !(k in bound))
+        isempty(active) && return nothing
+        free = nothing
+        for (k, v) in active
+            ((v::VarExpr).name in bound) || continue
+            free === nothing && (free = free_variables(o))
+            k in free && _lane_refuse(
+                rule, "a nested aggregate binds '$((v::VarExpr).name)', which an array " *
+                    "faq's output index '$k' is renamed to"
+            )
+        end
+    end
+    map_children(x -> (_lane_check_capture(x, active, rule); x), o)
+    return nothing
 end
 
 # The lane rewrite of `faq(D(index(v, …)))` / an observed's `faq` definition:
@@ -430,7 +548,8 @@ function _lane_scope_ranges(
             delete!(columns, n)
         end
     end
-    return _LaneScope(lanevars, first, columns), newr
+    scope_ranges = Dict{String, Any}(String(k) => r for (k, r) in ranges)
+    return _LaneScope(lanevars, first, columns, scope_ranges), newr
 end
 
 function _lane_column_ranges!(columns, spec, ranges)
@@ -721,7 +840,7 @@ function _lanes(
         _derived_shared(
             op.shared, inst.f!, length(internal), inst.cap,
             inst.pa, lane_bufs
-        ), inst.tbuf
+        ), inst.tbuf, inst.tshared
     )
 end
 
@@ -733,7 +852,7 @@ function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::
     spec = _LaneSpec(
         kind, S, chunk, _array_shapes(op), index_bufs, _LaneGather[],
         Set{String}(), Dict{String, Vector{String}}(), Dict{String, Int}(),
-        _program_sets(op), form === :oop, tbuf
+        _program_sets(op), form === :oop, tbuf, Set{String}(), String[], Set{String}()
     )
     # The lane-index buffers are live forcing buffers of the build.
     file, model_name, recorded = op.front
@@ -757,7 +876,7 @@ function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::
     end
     return (;
         f!, internal, index_bufs = Vector{Float64}[index_bufs[s] for s in S],
-        gathers = spec.gathers, params = spec.params, cap, pa, tbuf,
+        gathers = spec.gathers, params = spec.params, cap, pa, tbuf, tshared = spec.tshared,
     )
 end
 
@@ -981,7 +1100,8 @@ function rhs!(
 end
 
 # The lanes `1..n` in chunks of the program's `C` lanes, lane `l` at time
-# `tof(l)`; a padding lane copies an active lane's inputs and time.
+# `tof(l)`; a padding lane copies an active lane's inputs and takes the first
+# lane's time, `tof(1)`.
 function _lane_rhs!(du, lp::LaneProgram, ws::RhsWorkspace, u, aux, p, tof::F, fs::ForcingSet, cells, n, L) where {F}
     _prime!(ws, fs)
     C = lp.C
@@ -999,7 +1119,7 @@ function _lane_rhs!(du, lp::LaneProgram, ws::RhsWorkspace, u, aux, p, tof::F, fs
             for k in eachindex(lp.gathers)
                 _lane_gather!(lb[ni + k], c, lp, k, fs, cells, l, env)
             end
-            tb === nothing || (tb[c] = tof(l))
+            tb === nothing || (tb[c] = c <= m ? tof(l) : tof(1))
         end
         _lane_chunk!(du, lp, ws, u, aux, p, tof(s0 + 1), L, s0, m)
     end
@@ -1008,9 +1128,17 @@ end
 
 function rhs!(
         du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
-        aux::AbstractVector, p, t, li::LaneInputs, cells::AbstractMatrix, n::Integer
+        aux::AbstractVector, p, t::Real, li::LaneInputs, cells::AbstractMatrix, n::Integer
     )
     L = _lane_check(lp, ws, du, u, aux, p, cells, n)
+    return _lane_gathered_rhs!(du, lp, ws, u, aux, p, _ -> Float64(t), li, n, L)
+end
+
+# The pre-gathered form of `_lane_rhs!`: every lane input from `li`, lane `l`
+# at time `tof(l)` and a padding lane at `tof(1)`.
+function _lane_gathered_rhs!(
+        du, lp::LaneProgram, ws::RhsWorkspace, u, aux, p, tof::F, li::LaneInputs, n, L
+    ) where {F}
     li.owner === lp.shared || throw(
         ArgumentError(
             "rhs!: the lane inputs were made by lane_inputs of another program"
@@ -1028,6 +1156,7 @@ function rhs!(
     C = lp.C
     ni = length(lp.index_bufs)
     lb = ws.lbufs
+    tb = lp.tbuf === nothing ? nothing : lb[end]
     for s0 in 0:C:(n - 1)
         m = min(C, n - s0)
         for c in 1:C
@@ -1038,9 +1167,9 @@ function rhs!(
             for k in eachindex(lp.gathers)
                 lb[ni + k][c] = li.gathered[k][l]
             end
-            lp.tbuf === nothing || (lb[end][c] = Float64(t))
+            tb === nothing || (tb[c] = c <= m ? tof(l) : tof(1))
         end
-        _lane_chunk!(du, lp, ws, u, aux, p, t, L, s0, m)
+        _lane_chunk!(du, lp, ws, u, aux, p, tof(s0 + 1), L, s0, m)
     end
     return du
 end
@@ -1050,12 +1179,15 @@ end
 
 Each lane at its own time (U19): lane `l ≤ n` evaluates at `ts[l]`, and its
 value equals the whole-domain program's at `cells[:, l]` and time `ts[l]`,
-bit for bit, whatever the other lanes' times. `ts` holds at least `n` times.
+bit for bit, whatever the other lanes' times. `ts` holds at least `n` and at
+most `L` times; a padding lane takes `ts[1]`.
 
 One pass over the batch, whatever its times: the lane program reads `t` from a
 lane buffer of times, and every 0-d observed that depends on `t` is computed
 per lane ([`_range_promote_model`](@ref)). With equal times the call equals
-the one-time call.
+the one-time call. An observed of `t` that carries no lane set is evaluated
+once per call, at one time: when the state equations read one, the times of
+lanes `1..n` must be equal, or the call throws an `ArgumentError` naming it.
 """
 function rhs!(
         du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
@@ -1063,13 +1195,48 @@ function rhs!(
         cells::AbstractMatrix, n::Integer
     )
     L = _lane_check(lp, ws, du, u, aux, p, cells, n)
-    length(ts) >= n || throw(
-        DimensionMismatch("rhs!: $(length(ts)) times for n = $n lanes")
+    _lane_check_times(lp, ts, n, L)
+    return _lane_rhs!(du, lp, ws, u, aux, p, l -> Float64(ts[l]), fs, cells, n, L)
+end
+
+"""
+    rhs!(du, lanes::LaneProgram, ws, u, aux, p, ts::AbstractVector, li::LaneInputs, cells, n) -> du
+
+The pre-gathered call ([`gather_lane_inputs!`](@ref)) with each lane at its
+own time: as the call with a time per lane and a forcing set, every
+non-state input taken from `li`.
+"""
+function rhs!(
+        du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
+        aux::AbstractVector, p, ts::AbstractVector{<:Real}, li::LaneInputs,
+        cells::AbstractMatrix, n::Integer
+    )
+    L = _lane_check(lp, ws, du, u, aux, p, cells, n)
+    _lane_check_times(lp, ts, n, L)
+    return _lane_gathered_rhs!(du, lp, ws, u, aux, p, l -> Float64(ts[l]), li, n, L)
+end
+
+# `ts` for lanes `1..n` of an `L`-lane batch: at least `n` and at most `L`
+# times, a program built with a time per lane, and equal times when an
+# observed of `t` is evaluated once per call.
+function _lane_check_times(lp::LaneProgram, ts, n, L)
+    n <= length(ts) <= L || throw(
+        DimensionMismatch("rhs!: $(length(ts)) times for n = $n lanes of an L = $L batch")
     )
     lp.tbuf === nothing && throw(
         ArgumentError("rhs!: this lane program was built without a time per lane")
     )
-    return _lane_rhs!(du, lp, ws, u, aux, p, l -> Float64(ts[l]), fs, cells, n, L)
+    if !isempty(lp.tshared) && any(l -> ts[l] != ts[1], 2:n)
+        throw(
+            ArgumentError(
+                "rhs!: the lanes' times differ, but the observed(s) " *
+                    join(("'$x'" for x in lp.tshared), ", ") * " depend on `t` and carry " *
+                    "no lane set, so the lane program evaluates them once per call at one " *
+                    "time; give every lane the same time"
+            )
+        )
+    end
+    return nothing
 end
 
 # ---------------------------------------------------------------------------
@@ -1081,104 +1248,102 @@ _range_promote_model(spec, model) = model
     _range_promote_model(spec::_LaneSpec, model) -> model
 
 Before a lane build classifies its variables: every 0-d observed that depends
-on `t`, directly or through other such observeds, becomes an array observed
-over the shape of the written states (the lane sets and any others), each
-element its 0-d value, so a lane program computes it per lane at the lane's
-own time. Its definition becomes an array `faq` over that shape, and every
-read of it inside an array `faq` over that shape (a state equation, a band
-field) the read at that `faq`'s output indices. The values are the 0-d
-observed's, so each lane equals the whole-domain program bit for bit.
+on `t` (through any observeds) becomes one value per lane, an array observed
+over the first lane set whose definition is an array `faq` over it with the
+0-d body, so a lane program computes it once per lane at the lane's own time.
+The lane rewrite reads it at the lane index wherever the 0-d name is read
+([`_lane_rewrite`](@ref)), so every position a 0-d observed can be read in is
+read per lane, and each lane equals the whole-domain program bit for bit.
+
+A 0-d observed read by a definition the lane rewrite does not reach (an array
+observed with no lane set, or another 0-d observed that stays 0-d) stays 0-d.
+It, and every array observed with no lane set that depends on `t`, is
+evaluated once per call at one time; they are recorded in `spec.tshared`
+(those the state equations read), and a call at mixed times refuses them.
 """
 function _range_promote_model(spec::_LaneSpec, model)
     spec.tbuf === nothing && return model
-    # The written states' shape: the first array state carrying every lane set.
-    S = nothing
-    for n in sort!(collect(keys(spec.shapes)))
-        sh = spec.shapes[n]
-        all(x -> x in sh, spec.sets) && (S = sh; break)
-    end
-    S === nothing && return model
-    all(x -> haskey(spec.ext, x), S) || return model
     defs = Dict{String, ASTExpr}()
     for eq in model.equations
         eq.lhs isa VarExpr && (defs[(eq.lhs::VarExpr).name] = eq.rhs)
     end
-    scalar(n) = (v = get(model.variables, n, nothing); v !== nothing && !_is_array_shape(v.shape))
-    memo = Dict{String, Bool}()
-    function tdep(n, seen = Set{String}())
-        haskey(memo, n) && return memo[n]
-        n in seen && return false
-        push!(seen, n)
-        r = _anyof(x -> x == "t" || (haskey(defs, x) && scalar(x) && tdep(x, seen)), _referenced_var_names(defs[n]))
-        memo[n] = r
-        return r
+    tdep = _range_time_dependent(defs)
+    shape(n) = (v = get(model.variables, n, nothing); v === nothing ? nothing : v.shape)
+    laned(n) = (s = shape(n); _is_array_shape(s) && any(x -> String(x) in spec.sets, s))
+    P = Set{String}(n for n in tdep if !_is_array_shape(shape(n)))
+    # Only a lane-rewritten definition has a lane index to read one at.
+    changed = true
+    while changed
+        changed = false
+        for (n, d) in defs
+            (n in P || laned(n)) && continue
+            for r in _referenced_var_names(d)
+                r in P && (delete!(P, r); changed = true)
+            end
+        end
     end
-    P = Set{String}(n for n in keys(defs) if scalar(n) && tdep(n))
+    # The observeds the state equations read, through other observeds.
+    reach = Set{String}()
+    stack = String[]
+    for eq in model.equations
+        eq.lhs isa VarExpr || append!(stack, _referenced_var_names(eq.rhs))
+    end
+    while !isempty(stack)
+        n = pop!(stack)
+        (n in reach || !haskey(defs, n)) && continue
+        push!(reach, n)
+        append!(stack, _referenced_var_names(defs[n]))
+    end
+    spec.tshared = sort!([n for n in tdep if n in reach && !(n in P) && !laned(n)])
+    spec.tnames = union!(Set{String}(["t"]), tdep)
     isempty(P) && return model
-    outs = ["__lt$d" for d in eachindex(S)]
-    sizes = [spec.ext[x] for x in S]
+    spec.promoted = P
+    L1 = spec.sets[1]
     vars = copy(model.variables)
     for n in P
-        vars[n] = reconstruct(model.variables[n]; shape = copy(S))
+        vars[n] = reconstruct(model.variables[n]; shape = [L1])
     end
     eqs = Equation[]
     for eq in model.equations
         if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in P
-            body = _promote_reads(eq.rhs, P, outs)
             F = OpExpr(
-                "faq", ASTExpr[]; output_idx = Any[outs...],
-                ranges = Dict{String, Any}(o => Any[1, k] for (o, k) in zip(outs, sizes)),
-                expr_body = body
+                "faq", ASTExpr[]; output_idx = Any[_LANE_PROMOTED_IDX],
+                ranges = Dict{String, Any}(_LANE_PROMOTED_IDX => IndexSetRef(L1)),
+                expr_body = eq.rhs
             )
             push!(eqs, Equation(eq.lhs, F; _comment = eq._comment))
         else
-            push!(eqs, Equation(eq.lhs, _promote_in_faqs(eq.rhs, P, S, sizes), _comment = eq._comment))
+            push!(eqs, eq)
         end
     end
     return reconstruct(model; variables = vars, equations = eqs)
 end
 
-# Every bare read of a promoted observed in `e`, with `outs` bound, as its
-# read at `outs`.
-function _promote_reads(e, P, outs)
-    if e isa VarExpr
-        return (e::VarExpr).name in P ? OpExpr("index", ASTExpr[e, (VarExpr(o) for o in outs)...]) : e
+# The loop variable of a promoted observed's definition.
+const _LANE_PROMOTED_IDX = "__lane_i"
+
+# The observeds (any shape) whose definitions depend on `t`, directly or
+# through other observeds.
+function _range_time_dependent(defs::Dict{String, ASTExpr})
+    memo = Dict{String, Bool}()
+    function tdep(n, seen)
+        haskey(memo, n) && return memo[n]
+        n in seen && return false
+        push!(seen, n)
+        r = _anyof(
+            x -> x == "t" || (haskey(defs, x) && tdep(x, seen)),
+            _referenced_var_names(defs[n])
+        )
+        memo[n] = r
+        return r
     end
-    e isa OpExpr || return e
-    o = e::OpExpr
-    if o.op == "index" && !isempty(o.args) && o.args[1] isa VarExpr && (o.args[1]::VarExpr).name in P
-        return reconstruct(o; args = ASTExpr[o.args[1], (_promote_reads(a, P, outs) for a in o.args[2:end])...])
-    end
-    return map_children(x -> _promote_reads(x, P, outs), o)
+    return Set{String}(n for n in keys(defs) if tdep(n, Set{String}()))
 end
 
-# Whether a `faq`'s output axes run over the whole of the shape `S`.
-function _promote_faq_matches(o::OpExpr, S, sizes)
-    outs = _output_idx_strings(o)
-    length(outs) == length(S) || return false
-    for (d, x) in enumerate(outs)
-        r = get(o.ranges, x, nothing)
-        if r isa IndexSetRef
-            (r.from == S[d] && isempty(r.of)) || return false
-        elseif r isa AbstractDict && haskey(r, "from")
-            r["from"] == S[d] || return false
-        elseif r isa AbstractVector && length(r) == 2
-            lo = r[1] isa Integer ? Int(r[1]) : r[1] isa IntExpr ? (r[1]::IntExpr).value : nothing
-            hi = r[2] isa Integer ? Int(r[2]) : r[2] isa IntExpr ? (r[2]::IntExpr).value : nothing
-            (lo == 1 && hi == sizes[d]) || return false
-        else
-            return false
-        end
-    end
-    return true
-end
-
-# The reads of promoted observeds inside every array `faq` over `S` in `e`.
-function _promote_in_faqs(e, P, S, sizes)
-    e isa OpExpr || return e
-    o = e::OpExpr
-    if _is_faq_op(o.op) && o.ranges !== nothing && _promote_faq_matches(o, S, sizes)
-        return _promote_reads(o, P, _output_idx_strings(o))
-    end
-    return map_children(x -> _promote_in_faqs(x, P, S, sizes), o)
-end
+# Whether the hoist pass (tree_walk/hoist.jl) keeps a nested reduction with
+# free names `free` in place rather than lift it over the sets `sets`: in a
+# lane build with a time per lane, one that depends on `t` and would land on no
+# lane set, which the lane program would evaluate once per call at one time.
+_range_hoist_keep(spec, free, sets) = false
+_range_hoist_keep(spec::_LaneSpec, free, sets) =
+    !isempty(spec.tnames) && any(in(spec.tnames), free) && !any(in(spec.sets), sets)

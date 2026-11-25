@@ -208,6 +208,9 @@ function _hoist_try(
         gather || haskey(g.ranges, s) && return nothing
         push!(sets, r.from)
     end
+    # A lane build with a time per lane keeps a reduction of `t` in place
+    # when the lift would land on no lane set (src/range/lanes.jl).
+    _range_hoist_keep(_range_spec_now(), free, sets) && return nothing
     # A gather is lifted as the faq producing it over S, its body the gather.
     lift(oi, rg) = gather ?
         OpExpr("faq", ASTExpr[]; output_idx = oi, ranges = rg, expr_body = g) :

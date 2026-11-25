@@ -800,9 +800,12 @@ end
             spec = ESA._LaneSpec(
                 :cells, ["cell"], 3, Dict("u" => ["cell"]), Dict("cell" => zeros(3)),
                 ESA._LaneGather[], Set{String}(), Dict{String, Vector{String}}(),
-                Dict{String, Int}(), Dict("cell" => 4), fragment
+                Dict{String, Int}(), Dict("cell" => 4), fragment, nothing, Set{String}(),
+                String[], Set{String}()
             )
-            scope = ESA._LaneScope(Dict("i" => "cell"), "i", Dict{String, UnitRange{Int}}())
+            scope = ESA._LaneScope(
+                Dict("i" => "cell"), "i", Dict{String, UnitRange{Int}}(), Dict{String, Any}()
+            )
             return ESA._lane_rewrite(spec, nothing, node, scope, "rule")
         end
         native, fragment = rewrite(false), rewrite(true)
