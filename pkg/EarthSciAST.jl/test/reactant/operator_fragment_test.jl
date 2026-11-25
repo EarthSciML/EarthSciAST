@@ -802,7 +802,9 @@ end
                 ESA._LaneGather[], Set{String}(), Dict{String, Vector{String}}(),
                 Dict{String, Int}(), Dict("cell" => 4), fragment
             )
-            scope = ESA._LaneScope(Dict("i" => "cell"), "i", Dict{String, UnitRange{Int}}())
+            scope = ESA._LaneScope(
+                Dict("i" => "cell"), "i", Dict{String, UnitRange{Int}}(), Dict{String, Any}()
+            )
             return ESA._lane_rewrite(spec, nothing, node, scope, "rule")
         end
         native, fragment = rewrite(false), rewrite(true)
