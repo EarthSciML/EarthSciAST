@@ -2531,7 +2531,7 @@ unsafe impl Send for FramesScratch {}
 pub(super) unsafe fn exec_fused_frames<'s>(
     spec: usize,
     prog: &TapeProgram,
-    envs: &[super::Env],
+    envs: &super::interp::FrameEnvs,
     slab_of: &mut dyn FnMut(usize) -> Slab<'s>,
     dy_home: &[usize],
     simd: SimdLevel,
@@ -2539,7 +2539,7 @@ pub(super) unsafe fn exec_fused_frames<'s>(
     to: Option<(usize, &[*mut f64])>,
 ) {
     let fs = &prog.fused[spec];
-    let nk = envs.len();
+    let nk = envs.n;
     let ni = fs.inputs.len();
     let n_el = fs.n_elems();
     let n_whole = fs
@@ -2561,7 +2561,8 @@ pub(super) unsafe fn exec_fused_frames<'s>(
     if whole.len() < nk * n_whole * n_el {
         whole.resize(nk * n_whole * n_el, 0.0);
     }
-    for (k, env) in envs.iter().enumerate() {
+    for k in 0..nk {
+        let env = &envs.get(k);
         let slab = slab_of(k);
         for op in &fs.scalars {
             svals.push(resolve_scalar(op, env, slab));
