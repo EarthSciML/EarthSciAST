@@ -31,6 +31,9 @@ and in `Int64`, else its shortest round-trip decimal digits. All arithmetic is e
 natural-number fractions (`Float.ofScientific` truncates before it rounds, so it is not
 correctly rounded). Unproved adapter code, pinned by the golden files. -/
 
+/-- Round a positive rational to binary64 for the JSON serializers. -/
+abbrev toBinary64 := Esm.F64.Decimal.toBinary64
+
 /-- The fraction `n / d` times `10^k`. -/
 def scale10 (n d : Nat) (k : Int) : Nat × Nat :=
   if 0 ≤ k then (n * 10 ^ k.toNat, d) else (n, d * 10 ^ (-k).toNat)
