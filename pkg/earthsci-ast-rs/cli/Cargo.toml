@@ -55,8 +55,8 @@ serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"]
 # file paths (the document and a run configuration) and hands back plain `f64`
 # state rows. A document newer than the integrator's `earthsci-ast` reads is
 # refused by its planner.
-earthsci-integrator = { version = "0.1.0", optional = true }
-earthsci-integrator-planner = { version = "0.1.0", optional = true }
+earthsci-integrator = { version = "0.2.0", optional = true }
+earthsci-integrator-planner = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 tempfile = "3.10"
