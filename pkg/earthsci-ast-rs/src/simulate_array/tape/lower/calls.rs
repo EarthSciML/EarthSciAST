@@ -88,8 +88,8 @@ enum ArgKind {
     Inline(String),
 }
 
-/// The key of one function: the instance, what each parameter is, and the
-/// call's box.
+/// The key of one function: the instance, what each parameter is, the
+/// call's box, and the precision the body is lowered at.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct FuncKey {
     instance: usize,
@@ -107,6 +107,9 @@ struct FuncKey {
     /// identity of its column (held in [`FuncTable::known_vals`]), by name.
     /// The function is lowered over a list of its own with these columns.
     tuple: Option<Vec<(String, usize)>>,
+    /// The precision in force at the call (esm-spec §11.3.1), which the
+    /// body runs at: a call at another precision is another function.
+    precision: crate::precision::Precision,
 }
 
 /// What a finished function returns, in the caller's terms.
@@ -129,9 +132,12 @@ pub(super) struct FuncTable {
     /// Build-time payloads passed as [`ArgKind::Known`], by address (held, so
     /// the address is not reused).
     known_vals: FxHashMap<usize, Arc<Vec<f64>>>,
-    /// Each function's program text ([`fingerprint`]): two instances that
-    /// compile to the same program are one function.
-    by_program: FxHashMap<u128, (u32, FuncResult)>,
+    /// Each function's program text ([`fingerprint`]) and the precision it
+    /// runs at: two instances that compile to the same program at one
+    /// precision are one function. A body whose instructions carry no
+    /// precision of their own runs at its caller's, so the program text
+    /// alone does not tell two precisions apart.
+    by_program: FxHashMap<(u128, crate::precision::Precision), (u32, FuncResult)>,
 }
 
 /// The whole text of an assembled function program: its instructions, its
@@ -203,7 +209,34 @@ fn fingerprint(prog: &TapeProgram) -> u128 {
 
 pub(super) type SharedFuncs = Rc<RefCell<FuncTable>>;
 
+/// A call's identity: its function, its array arguments' sources, its
+/// scalar arguments' operands, and the precision it runs at (the one in
+/// force where it is emitted).
+pub(super) type CallKey = (
+    u32,
+    Vec<SrcRef>,
+    Vec<OperandKey>,
+    crate::precision::Precision,
+);
+
+/// Whether every slot `key` names (its arguments) is below `n_slots`: a
+/// rolled-back slot's id is handed out again, so a call naming one goes.
+pub(super) fn call_key_live(key: &CallKey, n_slots: SlotId) -> bool {
+    key.1
+        .iter()
+        .all(|a| !matches!(a, SrcRef::Slot(s) if *s >= n_slots))
+        && key
+            .2
+            .iter()
+            .all(|o| !matches!(o, OperandKey::Slot(s) if *s >= n_slots))
+}
+
 impl FuncTable {
+    /// Per function compiled so far: whether running it can latch a fault.
+    pub(super) fn can_fault(&self) -> Vec<bool> {
+        funcs_can_fault(&self.progs)
+    }
+
     /// Whether every function compiled so far can be laid out axis-reversed,
     /// which a column-major caller needs of each of them.
     pub(super) fn all_reversible(&self) -> bool {
@@ -219,9 +252,11 @@ impl FuncTable {
         fuse: Option<super::super::fuse::SuperopCfg>,
     ) -> Result<Vec<Arc<TapeProgram>>, String> {
         let mut done: Vec<Arc<TapeProgram>> = Vec::with_capacity(self.progs.len());
+        let mut faults: Vec<bool> = Vec::with_capacity(self.progs.len());
         for mut prog in std::mem::take(&mut self.progs) {
             prog.funcs = done.clone();
-            finish_program(&mut prog, Layout::Forced(col_major), fuse)?;
+            finish_program(&mut prog, Layout::Forced(col_major), fuse, &faults)?;
+            faults.push(prog.can_fault_with(&faults));
             done.push(Arc::new(prog));
         }
         Ok(done)
@@ -236,11 +271,13 @@ pub(super) enum Layout {
 }
 
 /// The passes after lowering: constant dedup, scan rewrites, the layout,
-/// (fusion), liveness and slab coloring.
+/// (fusion), call batching, liveness and slab coloring. `funcs_fault` says
+/// per function the program calls whether it can latch a fault.
 pub(super) fn finish_program(
     prog: &mut TapeProgram,
     layout: Layout,
     fuse: Option<super::super::fuse::SuperopCfg>,
+    funcs_fault: &[bool],
 ) -> Result<(), String> {
     super::super::dedup::dedup_const(prog);
     super::super::scan_shift::rewrite_scan_makearray_reads(prog);
@@ -275,6 +312,7 @@ pub(super) fn finish_program(
         // A function's result is its export: every instruction runs.
         prog.n_rhs = prog.section_range(Cadence::Continuous).len() as u32;
     }
+    super::super::batch::batch_calls(prog, funcs_fault);
     super::super::slab::color_slab(prog);
     Ok(())
 }
@@ -584,6 +622,7 @@ impl<'m> TapeBuilder<'m> {
             lo: bx.lo.clone(),
             shape: bx.shape.clone(),
             tuple,
+            precision: crate::precision::active(),
         };
         let funcs = Rc::clone(&self.funcs);
         let known = funcs.borrow().by_key.get(&key).cloned();
@@ -598,7 +637,7 @@ impl<'m> TapeBuilder<'m> {
                 let mut t = funcs.borrow_mut();
                 match built {
                     Ok(Built::Function(prog, res)) => {
-                        let text = fingerprint(&prog);
+                        let text = (fingerprint(&prog), key.precision);
                         t.held.push(Arc::clone(&inst));
                         if let Some(same) = t.by_program.get(&text).cloned() {
                             t.by_key.insert(key, Some(same.clone()));
@@ -630,6 +669,23 @@ impl<'m> TapeBuilder<'m> {
                 }
             }
         };
+        // The same function over the same arguments (by identity: the same
+        // source slots and views, the same scalar operands) at the same
+        // precision computes the same values: a call computed
+        // unconditionally before is read instead.
+        let key: CallKey = (
+            func,
+            arrays.clone(),
+            scalars.iter().map(Operand::key).collect(),
+            crate::precision::active(),
+        );
+        if let Some(&(out, scalar)) = self.call_memo.get(&key) {
+            return Ok(if scalar {
+                LV::Scalar(out)
+            } else {
+                LV::Arr(out)
+            });
+        }
         let call = tape_index(self.tables.calls.len(), "calls")?;
         self.tables.calls.push(CallSpec {
             func,
@@ -639,6 +695,11 @@ impl<'m> TapeBuilder<'m> {
         let sec = self.placement(cadence);
         let out = self.new_slot(&res.shape, &res.origin, res.scalar, sec);
         self.emit(Instr::Call { call, out }, sec);
+        // Only a call every later read is sure to follow: not one inside a
+        // conditional branch or a recurrence body.
+        if !self.in_branch() && self.rule.sweep.is_none() {
+            self.call_memo.insert(key, (out, res.scalar));
+        }
         Ok(if res.scalar {
             LV::Scalar(out)
         } else {

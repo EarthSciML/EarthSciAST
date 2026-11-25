@@ -1192,6 +1192,22 @@ impl Instr {
             Instr::Call { .. } => true,
         }
     }
+
+    /// Whether running this instruction can latch a fault: it latches one
+    /// itself, or it is a call of a function that can (`funcs_fault`, per
+    /// function of the program's [`TapeProgram::funcs`], with `calls` its
+    /// call table).
+    pub(crate) fn can_fault(&self, calls: &[CallSpec], funcs_fault: &[bool]) -> bool {
+        match self {
+            Instr::LoadForcing { .. }
+            | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
+            | Instr::ScalarRead { .. }
+            | Instr::DataGather { faults: true, .. } => true,
+            Instr::Call { call, .. } => funcs_fault[calls[*call as usize].func as usize],
+            _ => false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3422,9 +3438,39 @@ pub(crate) struct TapeProgram {
     /// and parameters are the arguments of the running call, not the
     /// model's, so the executor reads them through the call's frame.
     pub is_function: bool,
+    /// Per instruction: at the first of a run of [`Instr::Call`]s of one
+    /// function that are independent of each other, the run's length; they
+    /// execute as one batched call ([`super::batch`]). 0 elsewhere; empty
+    /// when the program has no batch.
+    pub call_batches: Vec<u16>,
+}
+
+/// Per function program of `funcs`, in id order: whether running it can
+/// latch a fault ([`Instr::can_fault`]). A function calls only functions
+/// with smaller ids, so one pass in id order settles each.
+pub(crate) fn funcs_can_fault<'a>(funcs: impl IntoIterator<Item = &'a TapeProgram>) -> Vec<bool> {
+    let mut can = Vec::new();
+    for f in funcs {
+        let c = f.can_fault_with(&can);
+        can.push(c);
+    }
+    can
 }
 
 impl TapeProgram {
+    /// Whether running this program can latch a fault, `funcs_fault` saying
+    /// per function it calls whether that function can.
+    pub(crate) fn can_fault_with(&self, funcs_fault: &[bool]) -> bool {
+        self.instrs
+            .iter()
+            .any(|i| i.can_fault(&self.tables.calls, funcs_fault))
+    }
+
+    /// Whether running this program can latch a fault.
+    pub(crate) fn can_fault(&self) -> bool {
+        self.can_fault_with(&funcs_can_fault(self.funcs.iter().map(|f| &**f)))
+    }
+
     /// The executor's analyses of this program ([`super::prepared`]), built
     /// on first use. Only a finished program is asked: an execution context
     /// holds it behind an `Arc`, so nothing rewrites it afterwards.
@@ -3502,6 +3548,8 @@ impl TapeProgram {
         &mut self,
         edits: impl IntoIterator<Item = (std::ops::Range<usize>, Vec<(Instr, usize)>)>,
     ) {
+        // Positions move: a batch table made before is void.
+        self.call_batches.clear();
         let old = std::mem::take(&mut self.instrs);
         let old_prov = std::mem::take(&mut self.provenance);
         let old_prec = std::mem::take(&mut self.precision);

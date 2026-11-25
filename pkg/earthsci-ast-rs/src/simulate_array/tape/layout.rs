@@ -240,6 +240,8 @@ fn reverse(prog: &mut TapeProgram) {
         // (`TapeBuilder::finish_functions`).
         funcs: _,
         is_function: _,
+        // Positions of instructions, which the layout does not move.
+        call_batches: _,
     } = prog;
 
     // Instructions: the axis fields that live inline.

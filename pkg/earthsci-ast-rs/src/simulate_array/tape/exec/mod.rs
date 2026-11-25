@@ -233,6 +233,9 @@ pub(crate) struct TapeExec {
     primed_forcing_epoch: u64,
     /// The calling thread's scratch for straight-line instructions.
     scratch: Scratch,
+    /// Where the slab of the frame being run starts in `slab` (a function's
+    /// batched execution, [`FuncFrames`]); 0 otherwise.
+    frame_off: usize,
     /// Per fused group: the resolved positions of its folded gathers whose
     /// subscripts the CONST or SEGMENT section defines, refilled each time
     /// those sections run.
@@ -283,9 +286,146 @@ pub(super) struct Scratch {
     /// only), sized by the first split so steady calls do not allocate.
     #[cfg(not(target_arch = "wasm32"))]
     asm_parts: Vec<par::AsmPart>,
-    /// This thread's execution context of each function the program calls
+    /// This thread's execution contexts of each function the program calls
     /// ([`TapeProgram::funcs`]), made by its first call on this thread.
-    pub(super) funcs: Vec<Option<Box<TapeCtx>>>,
+    pub(super) funcs: Vec<Option<Box<FuncFrames>>>,
+}
+
+/// One thread's execution context of one function ([`TapeProgram::funcs`]),
+/// for one call or for the frames of a batched execution
+/// ([`super::batch`]): frame `k`'s slots live at `k * frame_len` in the
+/// context's slab, laid out alike, so the frames share the decoded scalar
+/// code, the index tables and the scratch. Frame 0 also runs a lone call.
+pub(super) struct FuncFrames {
+    pub(super) ctx: Box<TapeCtx>,
+    /// The slab length of one frame.
+    pub(super) frame_len: usize,
+    /// The frames the slab holds.
+    pub(super) cap: usize,
+    /// Whether the CONST section has run. A function's CONST section reads
+    /// no argument (a scalar argument, an array argument and the time are
+    /// CONTINUOUS inside a function), so it runs once, in frame 0; a frame
+    /// added later starts as a copy of frame 0.
+    pub(super) primed: bool,
+    /// The arguments of the calls being executed, frame by frame.
+    pub(super) args: FrameArgs,
+    /// Whether the body can run one instruction at a time across the frames:
+    /// it has no branch region, no recurrence body and no per-instruction
+    /// precision after its CONST part.
+    pub(super) by_instr: bool,
+    /// Whether the body can latch a fault ([`TapeProgram::can_fault`]): run
+    /// one instruction at a time across the frames, a later frame can reach
+    /// a fault before an earlier one does, so a batched execution that
+    /// latched one runs again frame by frame ([`interp::run_frames`]).
+    pub(super) can_fault: bool,
+    /// Per state variable: `false` (a function's state is its arguments,
+    /// never mirrored).
+    pub(super) no_mirror: Vec<bool>,
+    /// Per fused group: whether it runs over all the frames at once
+    /// ([`fused::frames_ok`]).
+    pub(super) fused_frames: Vec<bool>,
+    /// The scratch of a fused group run over the frames.
+    pub(super) fx: fused::FramesScratch,
+    /// `(pc, output)`: the fused group that defines the function's result,
+    /// as that output, when it is the result's only definition and nothing
+    /// after it reads the result: it writes each frame's result straight
+    /// into the caller's slot ([`FrameArgs::targets`]).
+    pub(super) direct: Option<(usize, usize)>,
+}
+
+/// `(pc, output)` of the fused group that may write function `prog`'s
+/// result straight into its caller's slot (see [`FuncFrames::direct`]).
+fn direct_result(prog: &TapeProgram) -> Option<(usize, usize)> {
+    let (_, result) = *prog.exports.first()?;
+    let tables = prog.slot_tables();
+    let mut writer = None;
+    let mut n_defs = 0usize;
+    for (pc, ins) in prog.instrs.iter().enumerate() {
+        ins.for_each_def(&tables, |s| {
+            if s == result {
+                n_defs += 1;
+                writer = Some(pc);
+            }
+        });
+    }
+    let pc = writer?;
+    let prime_end = (prog.n_const + prog.n_segment) as usize;
+    let Instr::Fused { spec } = prog.instrs[pc] else {
+        return None;
+    };
+    let fs = &prog.fused[spec as usize];
+    if n_defs != 1 || pc < prime_end || !fused::frames_ok(fs) {
+        return None;
+    }
+    let mut read_after = false;
+    for ins in &prog.instrs[pc + 1..] {
+        if matches!(ins, Instr::Export { .. }) {
+            continue;
+        }
+        ins.for_each_read(&tables, |s| read_after |= s == result);
+    }
+    if read_after {
+        return None;
+    }
+    let o = fs.outputs.iter().position(|&(_, s)| s == result)?;
+    Some((pc, o))
+}
+
+/// The resolved arguments of the frames of one batched execution: frame
+/// `k`'s array arguments are `arrays[k * n_arrays..]` (where each starts in
+/// its caller's storage: a view, never a copy), its scalars
+/// `scalars[k * n_scalars..]`.
+#[derive(Default)]
+pub(super) struct FrameArgs {
+    pub(super) arrays: Vec<*const f64>,
+    pub(super) scalars: Vec<f64>,
+    /// Per frame: the caller's slot its result is copied into.
+    pub(super) targets: Vec<*mut f64>,
+    pub(super) n: usize,
+}
+
+// SAFETY: the argument pointers are scratch, written by each batched
+// execution before it reads them and meaningless between executions.
+unsafe impl Send for FrameArgs {}
+
+impl FuncFrames {
+    pub(super) fn new(prog: &Arc<TapeProgram>) -> Self {
+        let tables = prog.slot_tables();
+        let prime_end = (prog.n_const + prog.n_segment) as usize;
+        // Per-instruction precision is armed by the instruction loop.
+        let by_instr = prog.precision.is_empty()
+            && prog.instrs[prime_end..]
+                .iter()
+                .all(|i| i.region_len(&tables) == 0 && !matches!(i, Instr::Lanes { .. }));
+        let mut ctx = Box::new(TapeCtx::new(Arc::clone(prog)));
+        // A function runs whole on the thread that calls it: independent
+        // calls are what a call plan runs side by side.
+        ctx.set_serial();
+        let frame_len = ctx.exec.slab.len();
+        FuncFrames {
+            ctx,
+            frame_len,
+            cap: 1,
+            primed: false,
+            args: FrameArgs::default(),
+            by_instr,
+            can_fault: by_instr && prog.can_fault(),
+            no_mirror: vec![false; prog.state_vars.len()],
+            fused_frames: prog.fused.iter().map(fused::frames_ok).collect(),
+            fx: Default::default(),
+            direct: if by_instr { direct_result(prog) } else { None },
+        }
+    }
+
+    /// Where frame `k`'s result (the function's one export) starts in the
+    /// context's slab.
+    pub(super) fn result(&self, k: usize) -> *const f64 {
+        let (_, result) = self.ctx.prog.exports[0];
+        let exec = &self.ctx.exec;
+        exec.slab
+            .as_ptr()
+            .wrapping_add(k * self.frame_len + exec.slot_off[result as usize])
+    }
 }
 
 impl TapeExec {
@@ -332,6 +472,7 @@ impl TapeExec {
                 asm_parts: Vec::new(),
                 funcs: Vec::new(),
             },
+            frame_off: 0,
             idx_tables: fused::index_tables_for(prog),
             lscratch: lanes::LaneScratch::for_program(prog),
             exports_active: false,
@@ -480,6 +621,7 @@ impl TapeCtx {
 
 /// Everything immutable an instruction may consult, bundled so the
 /// interpreter loop can split-borrow the mutable executor pieces beside it.
+#[derive(Clone, Copy)]
 struct Env<'a> {
     prog: &'a TapeProgram,
     /// The program's executor-side analyses ([`TapeProgram::prepared`]).
@@ -641,73 +783,6 @@ pub(crate) fn section_primes() -> (u64, u64) {
 
 /// Whether `params` is, bit for bit, the slice `last` recorded (so `-0.0`
 /// and `0.0` differ and a NaN equals only the same NaN).
-/// Run function program `ctx.prog` ([`TapeProgram::is_function`]) for one
-/// [`Instr::Call`]: its state variables read `arrays` in place, its
-/// parameters are `scalars`. Returns where its result (its one export)
-/// starts in its slab. The function writes no `dy` and publishes nothing; it
-/// runs on the calling thread.
-pub(super) fn run_function(
-    ctx: &mut TapeCtx,
-    arrays: &[*const f64],
-    scalars: &[f64],
-    t: f64,
-    forcing: ForcingView,
-    declared: &HashSet<String>,
-) -> *const f64 {
-    match &mut ctx.last_params {
-        Some(last) if same_params(last, scalars) => {}
-        slot => {
-            let last = slot.get_or_insert_with(Vec::new);
-            last.clear();
-            last.extend_from_slice(scalars);
-            ctx.param_epoch += 1;
-        }
-    }
-    let param_epoch = ctx.param_epoch;
-    let TapeCtx {
-        prog, exec, mirror, ..
-    } = ctx;
-    let prog = &**prog;
-    let prep = prog.prepared();
-    let env = Env {
-        prog,
-        prep,
-        forcing,
-        state: &[],
-        state_rm: &mirror.state_rm,
-        mirror: &mirror.mirror,
-        params: scalars,
-        t,
-        declared,
-        arrays,
-    };
-    // A function's array work splits across the process-wide pool as the
-    // caller's does: a call runs on the calling thread, between the caller's
-    // own phases.
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let (ways, threads) = if exec.serial {
-            (1, 1)
-        } else {
-            (par::call_ways(exec.call_work), par::thread_budget())
-        };
-        exec.scratch.fscratch.workers.call_ways = ways;
-        exec.scratch.fscratch.workers.threads = threads;
-    }
-    let prime_end = (prog.n_const + prog.n_segment) as usize;
-    let mut no_dy: [f64; 0] = [];
-    if exec.primed_param_epoch != param_epoch {
-        exec.primed_param_epoch = param_epoch;
-        interp::run_range(&env, 0..prime_end, exec, &mut no_dy);
-        refill_primed(prog, exec);
-    }
-    run_continuous(&env, prime_end..prog.instrs.len(), exec, &mut no_dy);
-    let (_, result) = prog.exports[0];
-    exec.slab
-        .as_ptr()
-        .wrapping_add(exec.slot_off[result as usize])
-}
-
 fn same_params(last: &[f64], params: &[f64]) -> bool {
     last.len() == params.len()
         && last
