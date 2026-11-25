@@ -37,6 +37,8 @@ on:
       - 'tests/conformance/relational_templates/**'
       - 'tests/conformance/geometry_templates/**'
       - 'tests/conformance/document_format/**'
+      - 'tests/property_corpus/**'
+      - 'scripts/run-property-corpus-conformance.py'
       - 'scripts/gen-document-format-fixtures.py'
       - 'tests/**/*.esm'
       - 'typst/packages/**'
@@ -64,6 +66,8 @@ on:
       - 'tests/conformance/relational_templates/**'
       - 'tests/conformance/geometry_templates/**'
       - 'tests/conformance/document_format/**'
+      - 'tests/property_corpus/**'
+      - 'scripts/run-property-corpus-conformance.py'
       - 'scripts/gen-document-format-fixtures.py'
       - 'tests/**/*.esm'
       - 'typst/packages/**'
@@ -99,10 +103,11 @@ jobs:
       run: python3 formal/scripts/gen-lib-templates.py --check
 
     # The generator's and the scorer's own tests: pure Python, and instant.
-    - name: Test the generator and the scorer
+    - name: Test the generator and the scorers
       run: |
         python3 formal/scripts/test_gen_lib_templates.py
         python3 scripts/test_run_closed_functions_lean.py
+        python3 scripts/run-property-corpus-conformance.py --self-test
 
     - name: Cache Lean toolchain
       uses: actions/cache@v6
@@ -159,6 +164,11 @@ jobs:
     # the fixtures are regenerated (scripts/gen-document-format-fixtures.py).
     - name: Check the document-format fixtures against the model
       run: python3 scripts/formal-audit.py fixtures
+
+    - name: Score the model against the expression property corpus
+      env:
+        EARTHSCI_PROPERTY_CORPUS_ADAPTER_LEAN: formal/.lake/build/bin/esm-lean expressions
+      run: python3 scripts/run-property-corpus-conformance.py --bindings lean --fail-on-source-mismatch
 
     # The document source formats on the whole corpus: every .esm under tests/
     # that is a JSON object round-trips through Markdown and Typst

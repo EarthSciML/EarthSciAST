@@ -56,6 +56,11 @@ binding like the others, in the divergence comparison included. Unconfigured, it
 is a named, unrequired exclusion (``summary.optional_exclusions``) that
 ``--require-all-bindings`` does not count.
 
+To check one explicit participant against the original source, pass
+``--bindings <name> --fail-on-source-mismatch``. For the built Lean model,
+set ``EARTHSCI_PROPERTY_CORPUS_ADAPTER_LEAN`` to
+``formal/.lake/build/bin/esm-lean expressions``.
+
 Usage::
 
     python3 scripts/run-property-corpus-conformance.py [--corpus <dir>] \\
@@ -365,6 +370,11 @@ def summarize(report: List[dict], bindings: List[str]) -> dict:
     }
 
 
+def printable_result(entry: dict) -> str:
+    """Render both a serialized value and a per-fixture driver error."""
+    return entry["canonical"] if entry["ok"] else f"error: {entry['error']}"
+
+
 def self_test() -> int:
     """No live binding: assert the comparison's two signals and the optional-
     participant contract on synthetic driver outputs."""
@@ -400,6 +410,16 @@ def self_test() -> int:
     )
     r = run(a=src, b=dropped)
     check(r["diverged"], "single-drop-is-a-divergence", str(r))
+    r = run(lean=dropped)
+    check(r["source_mismatch"], "single-binding-drop-is-a-source-mismatch", str(r))
+    r = compare(
+        {SOURCE_PARTICIPANT: out(src), "lean": {"expr_0.json": {"ok": False, "error": "bad arg"}}}
+    )[0]
+    check(
+        r["source_mismatch"] and printable_result(r["bindings"]["lean"]) == "error: bad arg",
+        "single-binding-rejection-is-a-source-mismatch",
+        str(r),
+    )
     r = run(a=src, b={"args": [1, "x"], "op": "+", "units": "m"})
     check(r["diverged"], "argument-order-is-not-free", str(r))
     r = run(a={"units": "m", "args": ["x", 1], "op": "+"}, b=src)
@@ -463,10 +483,9 @@ def main() -> int:
     ap.add_argument(
         "--fail-on-source-mismatch",
         action="store_true",
-        help="Exit 1 when every binding AGREES and they all differ from the authored "
-        "fixture. A separate question from --fail-on-divergence and never folded into "
-        "it: this one asks whether the agreed answer is RIGHT. Mismatches are printed "
-        "either way; the flag only decides whether they stop the build.",
+        help="Exit 1 when the agreeing bindings differ from the authored fixture. "
+        "Use with --bindings NAME to check a single required participant against SOURCE. "
+        "Mismatches are printed even without this flag.",
     )
     ap.add_argument(
         "--require-all-bindings",
@@ -490,6 +509,7 @@ def main() -> int:
     args = ap.parse_args()
     if args.self_test:
         return self_test()
+    single_source_check = args.fail_on_source_mismatch and len(args.bindings or []) == 1
 
     # Resolve: the go and rust drivers run with `cwd` set to their own package
     # directory, so a corpus spelled relatively would reach them as a path that
@@ -530,9 +550,12 @@ def main() -> int:
             print(f"[fail] {binding.name}: {exc}", file=sys.stderr)
             return 1
 
-    # Optional participants (`lean`) do not count toward the minimum: one binding
-    # checked against the Lean model alone is not a cross-binding comparison.
-    if len([b for b in outputs if b not in OPTIONAL_BINDINGS]) < 2:
+    # The cross-binding mode still requires two regular bindings. An explicit
+    # single-participant check instead needs that participant and the source.
+    if single_source_check and not outputs:
+        print(f"error: requested participant {args.bindings[0]} did not run", file=sys.stderr)
+        return 1
+    if not single_source_check and len([b for b in outputs if b not in OPTIONAL_BINDINGS]) < 2:
         print(
             f"error: need at least 2 available bindings, optional participants not "
             f"counted (got {list(outputs)}); skipped: {skipped}",
@@ -548,9 +571,6 @@ def main() -> int:
         )
         return 1
 
-    # Add the SOURCE fixture as a participant — AFTER the binding-count and
-    # required-binding gates above, which count real bindings: the source is an
-    # oracle, not a stand-in for a binding that did not run.
     outputs[SOURCE_PARTICIPANT] = read_sources(fixtures)
 
     report = compare(outputs)
@@ -587,16 +607,17 @@ def main() -> int:
             if not entry.get("source_mismatch"):
                 continue
             got = next(
-                r["canonical"]
+                printable_result(r)
                 for n, r in sorted(entry["bindings"].items())
-                if n != SOURCE_PARTICIPANT and r["ok"]
+                if n != SOURCE_PARTICIPANT
             )
             print(f"  {entry['fixture']}", file=sys.stderr)
             print(
                 f"    SOURCE   {entry['bindings'][SOURCE_PARTICIPANT]['canonical']}",
                 file=sys.stderr,
             )
-            print(f"    bindings {got}", file=sys.stderr)
+            label = args.bindings[0] if single_source_check else "bindings"
+            print(f"    {label:<8} {got}", file=sys.stderr)
 
     if args.require_divergence and summary["diverged_count"] == 0:
         print(
@@ -643,6 +664,16 @@ def main() -> int:
             "(listed above)",
             file=sys.stderr,
         )
+        return 1
+
+    if single_source_check and summary["any_parse_failure_count"]:
+        for entry in report:
+            result = entry["bindings"][SOURCE_PARTICIPANT]
+            if not result["ok"]:
+                print(
+                    f"error: cannot read SOURCE for {entry['fixture']}: {result['error']}",
+                    file=sys.stderr,
+                )
         return 1
 
     return 0
