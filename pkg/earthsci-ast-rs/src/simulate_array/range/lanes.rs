@@ -409,11 +409,17 @@ struct Rewriter<'a> {
 }
 
 /// The symbols in force while rewriting: the original output symbols that
-/// run along a lane set (each mapped to that set), and every other symbol.
+/// run along a lane set (each mapped to that set), every other symbol, and
+/// the output indices of an array `faq` read at a non-lane subscript (each
+/// mapped to its value there, an expression over the enclosing symbols that
+/// is already rewritten).
 #[derive(Clone, Default)]
 struct LScope {
     lane_syms: Vec<(String, String)>,
     inner: Vec<String>,
+    alias: Vec<(String, Expr)>,
+    /// The range each of the rule's own non-lane loop symbols runs over.
+    extents: Vec<(String, (i64, i64))>,
 }
 
 impl LScope {
@@ -423,6 +429,59 @@ impl LScope {
             .find(|(s, _)| s == sym)
             .map(|(_, set)| set.as_str())
     }
+
+    fn alias(&self, sym: &str) -> Option<&Expr> {
+        self.alias.iter().find(|(s, _)| s == sym).map(|(_, e)| e)
+    }
+
+    /// `sym` as a plain non-lane loop symbol in force, with the range it
+    /// runs over: itself, or the symbol an alias names.
+    fn inner_extent(&self, sym: &str) -> Option<(String, (i64, i64))> {
+        let sym = match self.alias(sym) {
+            Some(Expr::Variable(y)) => y.as_str(),
+            Some(_) => return None,
+            None => sym,
+        };
+        if !self.inner.iter().any(|s| s == sym) {
+            return None;
+        }
+        self.extents
+            .iter()
+            .find(|(s, _)| s == sym)
+            .map(|(s, e)| (s.clone(), *e))
+    }
+
+    /// Whether `x`, a name in a rewritten expression, is a loop symbol of
+    /// the enclosing rule: one in force, or one an alias's value names.
+    fn is_loop(&self, x: &str) -> bool {
+        self.inner.iter().any(|s| s == x)
+            || self.alias.iter().any(|(_, e)| mentions(e, &mut |y| y == x))
+    }
+
+    /// Drop every meaning of `names`, which a nested binder rebinds.
+    fn unbind(&mut self, names: &[&String]) {
+        self.lane_syms.retain(|(s, _)| !names.contains(&s));
+        self.inner.retain(|s| !names.contains(&s));
+        self.alias.retain(|(s, _)| !names.contains(&s));
+        self.extents.retain(|(s, _)| !names.contains(&s));
+    }
+
+    /// The alias in force whose value names one of `names`, which a nested
+    /// binder is about to rebind: that binder would capture it.
+    fn captured(&self, names: &[&String]) -> Option<&str> {
+        self.alias
+            .iter()
+            .find(|(_, e)| mentions(e, &mut |x| names.iter().any(|n| *n == x)))
+            .map(|(s, _)| s.as_str())
+    }
+}
+
+/// How an output index of an array `faq` is bound where the `faq` is read.
+enum OutBind {
+    /// The lane's cell along this lane set.
+    Lane(String),
+    /// This (already rewritten) expression.
+    At(Expr),
 }
 
 type RResult<T> = Result<T, SimulateError>;
@@ -455,6 +514,9 @@ impl Rewriter<'_> {
         match e {
             Expr::Number(_) | Expr::Integer(_) => Ok(e.clone()),
             Expr::Variable(v) => {
+                if let Some(e) = sc.alias(v) {
+                    return Ok(e.clone());
+                }
                 if let Some(set) = sc.lane_set(v) {
                     return Ok(lane_read(set));
                 }
@@ -475,12 +537,15 @@ impl Rewriter<'_> {
                     }
                     let mut inner = sc.clone();
                     if let Some(r) = &node.ranges {
-                        for k in r.keys() {
-                            inner.lane_syms.retain(|(s, _)| s != k);
-                            if !inner.inner.contains(k) {
-                                inner.inner.push(k.clone());
-                            }
+                        let keys: Vec<&String> = r.keys().collect();
+                        inner.unbind(&keys);
+                        if let Some(o) = inner.captured(&keys) {
+                            return self.refuse(format_args!(
+                                "reads an array faq whose output index `{o}` stands for a \
+                                 subscript a nested faq rebinds"
+                            ));
                         }
+                        inner.inner.extend(keys.into_iter().cloned());
                     }
                     let mut n = ExpressionNode::clone(node);
                     if let Some(b) = node.expr.as_deref() {
@@ -551,8 +616,7 @@ impl Rewriter<'_> {
                 let read = Expr::operator(n);
                 // A read whose subscripts depend on the lane's cell alone
                 // (and on no other symbol) is one value per lane: hoisted.
-                let by_cell = read_mentions_lane(&read)
-                    && !mentions(&read, &mut |x| sc.inner.iter().any(|s| s == x));
+                let by_cell = read_mentions_lane(&read) && !mentions(&read, &mut |x| sc.is_loop(x));
                 if !by_cell {
                     return Ok(read);
                 }
@@ -576,6 +640,11 @@ impl Rewriter<'_> {
                 Ok(read)
             }
             Expr::Operator(m) if m.op == "makearray" => self.makearray_read(node, m, sc),
+            Expr::Operator(m)
+                if m.op == "faq" && m.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
+            {
+                self.faq_read(node, m, sc)
+            }
             _ => self.refuse("subscripts an array expression a lane cannot restrict"),
         }
     }
@@ -601,12 +670,37 @@ impl Rewriter<'_> {
                 Expr::Variable(x) if sc.lane_set(x).is_some() => {
                     lane_axes.push(sc.lane_set(x).map(str::to_string));
                 }
-                Expr::Variable(x) if sc.inner.contains(x) => {
+                Expr::Variable(x) => {
+                    // A loop symbol of the rule, or an output index an
+                    // enclosing array faq read binds to one.
+                    let y = match sc.alias(x) {
+                        Some(Expr::Variable(y)) => y,
+                        Some(_) => {
+                            return self.refuse(
+                                "subscripts a makearray at a shifted or computed position",
+                            );
+                        }
+                        None => x,
+                    };
+                    if !sc.is_loop(y) {
+                        return self
+                            .refuse("subscripts a makearray at a shifted or computed position");
+                    }
                     lane_axes.push(None);
-                    inner_subs.push(s.clone());
+                    inner_subs.push(Expr::Variable(y.clone()));
                 }
                 _ => {
                     return self.refuse("subscripts a makearray at a shifted or computed position");
+                }
+            }
+        }
+        // Where the assembled array starts along each axis: subscript `s`
+        // reads the element at `origin + s - 1` (§4.3.2's bounding box).
+        let mut origin = vec![i64::MAX; subs.len()];
+        for region in regions {
+            for (d, b) in region.iter().enumerate().take(subs.len()) {
+                if let Some([lo, _]) = crate::types::region_bounds(b) {
+                    origin[d] = origin[d].min(lo);
                 }
             }
         }
@@ -635,13 +729,15 @@ impl Rewriter<'_> {
                     None => r.push(b.clone()),
                 }
             }
-            if let Expr::Operator(v) = value
-                && (v.op == "faq")
-                && v.output_idx.as_ref().is_some_and(|o| !o.is_empty())
-            {
-                return self.refuse("holds a faq region value");
-            }
-            new_values.push(self.expr(value, &inner_sc)?);
+            let v = match value {
+                Expr::Operator(v)
+                    if v.op == "faq" && v.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
+                {
+                    self.region_faq(v, region, &lane_axes, subs, &origin, &inner_sc)?
+                }
+                _ => self.expr(value, &inner_sc)?,
+            };
+            new_values.push(v);
             new_regions.push(r);
         }
         let mut nm = ExpressionNode::clone(m);
@@ -653,6 +749,245 @@ impl Rewriter<'_> {
             .chain(inner_subs)
             .collect();
         Ok(Expr::operator(n))
+    }
+}
+
+impl Rewriter<'_> {
+    /// An array `faq` region value of a makearray read at `subs`, at one
+    /// cell of its region. The value must fit the region exactly — each
+    /// output axis over the region's own bounds, along a lane set the whole
+    /// set (`from` it or `[1, n]`) — and the assembled array must start at 1
+    /// along every other axis; then the region's element at the read is the
+    /// value's element at the same coordinate, so an output index along a
+    /// lane set is bound to the lane's cell and one along another axis to
+    /// that axis's subscript. Anything else is refused (the Julia binding
+    /// refuses the same documents).
+    fn region_faq(
+        &mut self,
+        f: &ExpressionNode,
+        region: &[[RegionBound; 2]],
+        lane_axes: &[Option<String>],
+        subs: &[Expr],
+        origin: &[i64],
+        sc: &LScope,
+    ) -> RResult<Expr> {
+        let outs = f.output_idx.as_deref().unwrap_or_default();
+        if outs.len() != region.len() {
+            return self.refuse("holds a faq region value that does not fit its region");
+        }
+        let ranges = f.ranges.clone().unwrap_or_default();
+        let mut binds = Vec::with_capacity(outs.len());
+        for (d, o) in outs.iter().enumerate() {
+            let Some([lo, hi]) = crate::types::region_bounds(&region[d]) else {
+                return self.refuse("holds a makearray with a symbolic region bound");
+            };
+            let range = ranges.get(o);
+            let b = match &lane_axes[d] {
+                Some(set) => {
+                    if !range.is_some_and(|r| self.whole_lane_range(r, set)) {
+                        return self.refuse(format_args!(
+                            "holds a faq region value whose axis `{o}` does not run over the \
+                             whole lane set `{set}`"
+                        ));
+                    }
+                    OutBind::Lane(set.clone())
+                }
+                None => {
+                    if range.and_then(|r| self.range_bounds(r)) != Some((lo, hi)) {
+                        return self.refuse(format_args!(
+                            "holds a faq region value whose axis `{o}` does not run over its \
+                             region {lo}..{hi}"
+                        ));
+                    }
+                    if origin[d] != 1 {
+                        return self.refuse(
+                            "holds a faq region value in a makearray that does not start at 1",
+                        );
+                    }
+                    let Expr::Variable(x) = &subs[d] else {
+                        return self.refuse("subscripts a makearray at a computed position");
+                    };
+                    OutBind::At(sc.alias(x).cloned().unwrap_or_else(|| subs[d].clone()))
+                }
+            };
+            binds.push((o.clone(), b));
+        }
+        self.faq_at(f, binds, sc)
+    }
+
+    /// Whether the range `r` runs over the whole lane set `set`: `from` it,
+    /// or `[1, n]`.
+    fn whole_lane_range(&self, r: &crate::types::RangeSpec, set: &str) -> bool {
+        let n = self.sizes.get(set).copied().unwrap_or(-1);
+        match r {
+            crate::types::RangeSpec::IndexSetRef { from, of: None } => from == set,
+            crate::types::RangeSpec::Interval([lo, hi]) => *lo == 1 && *hi == n,
+            _ => false,
+        }
+    }
+
+    /// `index(faq{output_idx o, ranges, expr}, s…)` at the lane's own cell:
+    /// the array `faq` read where every subscript `s_d` is a lane symbol of
+    /// a set the output axis `o_d` runs over whole, or one of the rule's
+    /// own non-lane loop symbols over the range `o_d` runs over (from 1).
+    /// That is the `faq`'s body with each `o_d` bound to the lane's cell
+    /// along that set, or to the loop symbol: see [`Self::faq_at`]. The
+    /// planner's whole-array right-hand sides `D(x) = faq{…}` arrive here,
+    /// lowered to `index(faq{…}, loops…)`.
+    fn faq_read(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        f: &Arc<ExpressionNode>,
+        sc: &LScope,
+    ) -> RResult<Expr> {
+        let subs = &node.args[1..];
+        let outs = f.output_idx.as_deref().unwrap_or_default();
+        if subs.len() != outs.len() {
+            return self.refuse("reads an array faq at the wrong rank");
+        }
+        let ranges = f.ranges.clone().unwrap_or_default();
+        let mut binds = Vec::with_capacity(outs.len());
+        for (o, s) in outs.iter().zip(subs) {
+            let Expr::Variable(x) = s else {
+                return self.refuse("reads an array faq off the lane's own cell");
+            };
+            let range = ranges.get(o).and_then(|r| self.range_bounds(r));
+            if let Some(set) = sc.lane_set(x) {
+                if !ranges.get(o).is_some_and(|r| self.whole_lane_range(r, set)) {
+                    return self.refuse(format_args!(
+                        "reads an array faq whose axis `{o}` does not run over the whole lane \
+                         set `{set}`"
+                    ));
+                }
+                binds.push((o.clone(), OutBind::Lane(set.to_string())));
+                continue;
+            }
+            let Some((y, (lo, hi))) = sc.inner_extent(x) else {
+                return self.refuse("reads an array faq off the lane's own cell");
+            };
+            if lo != 1 || range != Some((1, hi)) {
+                return self.refuse(format_args!(
+                    "reads an array faq whose axis `{o}` does not run over the range {lo}..{hi} \
+                     of its subscript `{x}`"
+                ));
+            }
+            binds.push((o.clone(), OutBind::At(Expr::Variable(y))));
+        }
+        self.faq_at(f, binds, sc)
+    }
+
+    /// The value of the array `faq` `f` at one element: its body with each
+    /// output index bound as `binds` says (an output index along a lane set
+    /// to the lane's cell, any other to an expression over the enclosing
+    /// symbols), rewritten in that scope. Any other range of the `faq` (a
+    /// contraction) stays a scalar `faq` over it, with the `faq`'s filter;
+    /// with no contraction, a filter selects the body where it holds and
+    /// the reduction's identity elsewhere, as the array `faq`'s element is. A `faq` carrying a `key`,
+    /// `args`, `join` or `distinct` is refused: those name the output
+    /// indices too, and are not rewritten here.
+    fn faq_at(
+        &mut self,
+        f: &ExpressionNode,
+        binds: Vec<(String, OutBind)>,
+        sc: &LScope,
+    ) -> RResult<Expr> {
+        if f.key.is_some()
+            || !f.args.is_empty()
+            || f.join.as_ref().is_some_and(|j| !j.is_empty())
+            || f.distinct == Some(true)
+        {
+            return self.refuse(
+                "reads an array faq that carries a `key`, `args`, `join` or `distinct`, which a \
+                 lane does not rewrite",
+            );
+        }
+        let Some(body) = f.expr.as_deref() else {
+            return self.refuse("reads an array faq with no body");
+        };
+        let ranges = f.ranges.clone().unwrap_or_default();
+        let outs: Vec<&String> = binds.iter().map(|(o, _)| o).collect();
+        let contracted: HashMap<String, crate::types::RangeSpec> = ranges
+            .into_iter()
+            .filter(|(k, _)| !outs.contains(&k))
+            .collect();
+        for r in contracted.values() {
+            let parents = match r {
+                crate::types::RangeSpec::IndexSetRef { of: Some(of), .. }
+                | crate::types::RangeSpec::RaggedDyn { of, .. } => of.as_slice(),
+                _ => &[],
+            };
+            if parents.iter().any(|p| outs.contains(&p)) {
+                return self.refuse(
+                    "reads an array faq whose contraction runs over a set of one of its output \
+                     indices",
+                );
+            }
+        }
+        let mut inner = sc.clone();
+        let bound: Vec<&String> = outs.iter().copied().chain(contracted.keys()).collect();
+        inner.unbind(&bound);
+        let keys: Vec<&String> = contracted.keys().collect();
+        let fresh: Vec<&Expr> = binds
+            .iter()
+            .filter_map(|(_, b)| match b {
+                OutBind::At(e) => Some(e),
+                OutBind::Lane(_) => None,
+            })
+            .collect();
+        let captured = inner.captured(&keys).is_some()
+            || fresh
+                .iter()
+                .any(|e| mentions(e, &mut |x| keys.iter().any(|k| *k == x)));
+        if captured {
+            return self
+                .refuse("reads an array faq whose contraction rebinds one of its subscripts");
+        }
+        for (o, b) in binds {
+            match b {
+                OutBind::Lane(set) => inner.lane_syms.push((o, set)),
+                OutBind::At(e) => inner.alias.push((o, e)),
+            }
+        }
+        inner.inner.extend(keys.into_iter().cloned());
+        let new_body = self.expr(body, &inner)?;
+        if contracted.is_empty() {
+            let Some(flt) = f.filter.as_deref() else {
+                return Ok(new_body);
+            };
+            // The element where the filter holds, else the reduction's
+            // identity, as the whole-domain program selects it.
+            let Ok(oplus) =
+                crate::faq::effective_reduce_kind(f.semiring.as_deref(), f.reduce.as_deref())
+            else {
+                return self.refuse("reads an array faq with an unknown reduction");
+            };
+            let flt = self.expr(flt, &inner)?;
+            return Ok(Expr::operator(ExpressionNode {
+                op: "ifelse".to_string(),
+                args: vec![flt, new_body, Expr::Number(oplus.identity())],
+                ..Default::default()
+            }));
+        }
+        let mut n = ExpressionNode::clone(f);
+        n.output_idx = Some(Vec::new());
+        n.ranges = Some(contracted);
+        n.expr = Some(Box::new(new_body));
+        if let Some(flt) = f.filter.as_deref() {
+            n.filter = Some(Box::new(self.expr(flt, &inner)?));
+        }
+        Ok(Expr::operator(n))
+    }
+
+    /// The `[lo, hi]` an output or contraction range runs over, when it is
+    /// a unit-step interval or a whole interval index set.
+    fn range_bounds(&self, r: &crate::types::RangeSpec) -> Option<(i64, i64)> {
+        match r {
+            crate::types::RangeSpec::Interval([lo, hi]) => Some((*lo, *hi)),
+            crate::types::RangeSpec::IndexSetRef { from, of: None } => {
+                self.sizes.get(from).map(|&n| (1, n))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -727,6 +1062,7 @@ fn rewrite(
                         ));
                     }
                     sc.inner.push(s.clone());
+                    sc.extents.push((s.clone(), ranges[d]));
                     out_syms.push(s.clone());
                     out_ranges.push(ranges[d]);
                 }

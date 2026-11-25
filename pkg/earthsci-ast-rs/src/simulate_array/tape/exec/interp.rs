@@ -1344,25 +1344,31 @@ pub(super) unsafe fn run_frames(
     let prep = prog.prepared();
     let n = args.n;
     let l = *frame_len;
-    let (na, ns) = (prog.state_vars.len(), prog.params_len);
-    let env_of = |k: usize| Env {
-        prog,
-        prep,
-        forcing,
-        state: &[],
-        state_rm: &[],
-        mirror: no_mirror,
-        params: &args.scalars[k * ns..(k + 1) * ns],
-        t,
-        declared,
-        arrays: &args.arrays[k * na..(k + 1) * na],
+    let envs = FrameEnvs {
+        base: Env {
+            prog,
+            prep,
+            forcing,
+            state: &[],
+            state_rm: &[],
+            mirror: no_mirror,
+            params: &[],
+            t,
+            declared,
+            arrays: &[],
+        },
+        scalars: &args.scalars,
+        arrays: &args.arrays,
+        ns: prog.params_len,
+        na: prog.state_vars.len(),
+        n,
     };
     let prime_end = (prog.n_const + prog.n_segment) as usize;
     let end = prog.instrs.len();
     let mut no_dy: [f64; 0] = [];
     if !*primed {
         exec.frame_off = 0;
-        run_range(&env_of(0), 0..prime_end, exec, &mut no_dy);
+        run_range(&envs.get(0), 0..prime_end, exec, &mut no_dy);
         super::refill_primed(prog, exec);
         *primed = true;
     }
@@ -1377,12 +1383,11 @@ pub(super) unsafe fn run_frames(
     if !*by_instr || (n == 1 && direct.is_none()) {
         for k in 0..n {
             exec.frame_off = k * l;
-            run_range(&env_of(k), prime_end..end, exec, &mut no_dy);
+            run_range(&envs.get(k), prime_end..end, exec, &mut no_dy);
         }
         exec.frame_off = 0;
         return false;
     }
-    let envs: SmallVec<[Env; 8]> = (0..n).map(env_of).collect();
     // What the frames latch, apart from the caller's latch: run one
     // instruction at a time across the frames, a later frame can fault
     // before an earlier one, so on a fault the frames run again one by one.
@@ -1403,7 +1408,8 @@ pub(super) unsafe fn run_frames(
                     scalar,
                     ..
                 } = &mut *exec;
-                for (k, env) in envs.iter().enumerate() {
+                for k in 0..n {
+                    let env = &envs.get(k);
                     let fs = frame_slab(slab, l, k, slot_off, slots);
                     // SAFETY: decoded against every frame's layout, the
                     // instructions before it have run in this frame, and
@@ -1417,7 +1423,7 @@ pub(super) unsafe fn run_frames(
             // path latches it.
             for k in faulted {
                 exec.frame_off = k * l;
-                run_range(&envs[k], pc..b.end, exec, &mut no_dy);
+                run_range(&envs.get(k), pc..b.end, exec, &mut no_dy);
             }
             exec.frame_off = 0;
             pc = b.end;
@@ -1491,7 +1497,8 @@ pub(super) unsafe fn run_frames(
                     scratch,
                     ..
                 } = &mut *exec;
-                for (k, env) in envs.iter().enumerate() {
+                for k in 0..n {
+                    let env = &envs.get(k);
                     let cx = Cx {
                         env,
                         slab: frame_slab(slab, l, k, slot_off, slots),
@@ -1510,9 +1517,9 @@ pub(super) unsafe fn run_frames(
             // load, a run-time subscript): the instruction loop, frame by
             // frame.
             _ => {
-                for (k, env) in envs.iter().enumerate() {
+                for k in 0..n {
                     exec.frame_off = k * l;
-                    run_range(env, pc..pc + 1, exec, &mut no_dy);
+                    run_range(&envs.get(k), pc..pc + 1, exec, &mut no_dy);
                 }
                 exec.frame_off = 0;
             }
@@ -1526,9 +1533,9 @@ pub(super) unsafe fn run_frames(
         // the calls run without batching: the same values, and the first
         // fault latched is theirs.
         drop(faults);
-        for (k, env) in envs.iter().enumerate() {
+        for k in 0..n {
             exec.frame_off = k * l;
-            run_range(env, prime_end..end, exec, &mut no_dy);
+            run_range(&envs.get(k), prime_end..end, exec, &mut no_dy);
         }
         exec.frame_off = 0;
         return false;
@@ -1545,6 +1552,34 @@ fn frame_slab<'a>(
     slots: &[SlotDesc],
 ) -> Slab<'a> {
     Slab::new(&mut slab[k * l..(k + 1) * l], slot_off, slots)
+}
+
+/// The environments of a batched execution's `n` frames, made on demand:
+/// they differ only in frame `k`'s parameters (`scalars`, `ns` a frame) and
+/// array arguments (`arrays`, `na` a frame), so a steady call keeps no
+/// per-frame list of them and allocates nothing however many frames it runs.
+#[derive(Clone, Copy)]
+pub(super) struct FrameEnvs<'a> {
+    /// Every frame's environment but its parameters and array arguments.
+    base: Env<'a>,
+    scalars: &'a [f64],
+    arrays: &'a [*const f64],
+    ns: usize,
+    na: usize,
+    /// The number of frames.
+    pub(super) n: usize,
+}
+
+impl<'a> FrameEnvs<'a> {
+    /// Frame `k`'s environment.
+    pub(super) fn get(&self, k: usize) -> Env<'a> {
+        let (ns, na) = (self.ns, self.na);
+        Env {
+            params: &self.scalars[k * ns..(k + 1) * ns],
+            arrays: &self.arrays[k * na..(k + 1) * na],
+            ..self.base
+        }
+    }
 }
 
 /// The frames of a batched execution's slab, for the calls its body makes.
@@ -1572,7 +1607,7 @@ unsafe fn exec_calls_frames(
     prog: &TapeProgram,
     pc: usize,
     len: usize,
-    envs: &[Env],
+    envs: &FrameEnvs,
     mut frames: Frames,
     funcs: &mut Vec<Option<Box<super::FuncFrames>>>,
 ) {
@@ -1582,18 +1617,18 @@ unsafe fn exec_calls_frames(
     for ins in calls {
         let spec = &prog.tables.calls[call_of(ins) as usize];
         let out = out_of(ins);
-        for (k, env) in envs.iter().enumerate() {
+        for k in 0..envs.n {
             let slab = frames.get(k);
             let target = slab.slot(out);
-            ff.args.push(spec, env, slab, target);
+            ff.args.push(spec, &envs.get(k), slab, target);
         }
     }
-    let env0 = &envs[0];
+    let env0 = &envs.base;
     if unsafe { run_frames(&mut ff, env0.t, env0.forcing, env0.declared) } {
         funcs[func_of(prog, pc)] = Some(ff);
         return;
     }
-    let n = envs.len();
+    let n = envs.n;
     for (m, ins) in calls.iter().enumerate() {
         let out = out_of(ins);
         let elems = prog.tables.slots[out as usize].elems().max(1);

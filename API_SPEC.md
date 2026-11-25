@@ -1719,6 +1719,15 @@ keep their global 1-based values.
   gathered per lane. A read that leaves the cell (pointwise) or the column
   (column) is refused with `compiler_refused_rule`, naming the rule and saying
   "lane".
+- **Array `faq` reads.** An array `faq` read at loop subscripts (a whole-array
+  right-hand side `D(x) = faq{…}`, or a `makearray` region value) is its body at
+  the lane's cell, and a range that is not an output index stays a contraction.
+  Each output axis must run over exactly what reads it: the whole lane set
+  (`from` that set with no `of`, or `[1, n]`), the range of a non-lane loop
+  variable that starts at 1, or a `makearray` region's own bounds. A value that
+  does not fit, a computed subscript, a nested binder that would capture a
+  renamed index, and an array `faq` carrying `args`, `key`, `join` or
+  `distinct` are refused.
 - **Pre-gathered inputs.** `lane_inputs` returns per-lane buffers for every
   non-state input, `gather_lane_inputs!` fills them for a `cells` list, and the
   pre-gathered evaluation reads them in place of the gathers. Its results are

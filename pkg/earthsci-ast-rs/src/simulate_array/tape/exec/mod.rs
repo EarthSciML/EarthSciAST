@@ -621,6 +621,7 @@ impl TapeCtx {
 
 /// Everything immutable an instruction may consult, bundled so the
 /// interpreter loop can split-borrow the mutable executor pieces beside it.
+#[derive(Clone, Copy)]
 struct Env<'a> {
     prog: &'a TapeProgram,
     /// The program's executor-side analyses ([`TapeProgram::prepared`]).
