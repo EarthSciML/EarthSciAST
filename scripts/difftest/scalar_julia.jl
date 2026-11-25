@@ -5,7 +5,7 @@ using OrdinaryDiffEqTsit5: Tsit5
 
 function result(case)
     document = load_string(JSON3.write(case.document))
-    assertions = run_inline_tests(document; model_name = "Probe", compiler = :interpreter, alg = Tsit5())
+    assertions = run_inline_tests(document; model_name = "Probe", compiler = :native, alg = Tsit5())
     by_id = Dict((r.test_id, r.assertion_idx) => r for r in assertions)
     values = String[]
     for request in case.requests

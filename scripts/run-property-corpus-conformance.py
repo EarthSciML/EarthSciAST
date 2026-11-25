@@ -57,7 +57,9 @@ is a named, unrequired exclusion (``summary.optional_exclusions``) that
 ``--require-all-bindings`` does not count.
 
 To check one explicit participant against the original source, pass
-``--bindings <name> --fail-on-source-mismatch``. For the built Lean model,
+``--bindings <name> --fail-on-source-mismatch``. Add
+``--check-number-spelling`` to compare the original JSON number tokens.
+For the built Lean model,
 set ``EARTHSCI_PROPERTY_CORPUS_ADAPTER_LEAN`` to
 ``formal/.lake/build/bin/esm-lean expressions``.
 
@@ -216,7 +218,26 @@ def detect_bindings() -> List[Binding]:
     return bindings
 
 
-def run_binding(binding: Binding, fixtures: List[Path]) -> Dict[str, dict]:
+@dataclass(frozen=True)
+class NumberToken:
+    text: str
+
+
+def parse_wire(text: str, check_number_spelling: bool):
+    if not check_number_spelling:
+        return json.loads(text)
+
+    def reject_constant(token: str):
+        raise ValueError(f"invalid JSON number {token}")
+
+    return json.loads(
+        text, parse_int=NumberToken, parse_float=NumberToken, parse_constant=reject_constant
+    )
+
+
+def run_binding(
+    binding: Binding, fixtures: List[Path], check_number_spelling: bool = False
+) -> Dict[str, dict]:
     """Invoke the binding driver with the fixture paths and parse its JSON output."""
     cmd = binding.cmd + [str(p) for p in fixtures]
     proc = subprocess.run(
@@ -236,8 +257,8 @@ def run_binding(binding: Binding, fixtures: List[Path]) -> Dict[str, dict]:
     lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
     for candidate in reversed(lines):
         try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
+            return parse_wire(candidate, check_number_spelling)
+        except ValueError:
             continue
     raise RuntimeError(
         f"binding {binding.name} did not emit parseable JSON\n"
@@ -247,7 +268,17 @@ def run_binding(binding: Binding, fixtures: List[Path]) -> Dict[str, dict]:
 
 def canonicalize(value) -> str:
     """Stable stringification for cross-binding comparison."""
-    return json.dumps(value, sort_keys=True)
+    if isinstance(value, NumberToken):
+        return value.text
+    if isinstance(value, list):
+        return "[" + ", ".join(map(canonicalize, value)) + "]"
+    if isinstance(value, dict):
+        return (
+            "{"
+            + ", ".join(f"{json.dumps(key)}: {canonicalize(value[key])}" for key in sorted(value))
+            + "}"
+        )
+    return json.dumps(value)
 
 
 # The name under which the SOURCE fixture enters the comparison. Upper-case so
@@ -265,7 +296,7 @@ def source_path(fixture: Path) -> Path:
     return expected if expected.is_file() else fixture
 
 
-def read_sources(fixtures: List[Path]) -> Dict[str, dict]:
+def read_sources(fixtures: List[Path], check_number_spelling: bool = False) -> Dict[str, dict]:
     """The corpus fixtures themselves, shaped like a binding driver's output.
 
     THE SOURCE IS A PARTICIPANT. Without it this stage was cross-binding-
@@ -290,7 +321,10 @@ def read_sources(fixtures: List[Path]) -> Dict[str, dict]:
     out: Dict[str, dict] = {}
     for path in fixtures:
         try:
-            out[path.name] = {"ok": True, "value": json.loads(source_path(path).read_text())}
+            out[path.name] = {
+                "ok": True,
+                "value": parse_wire(source_path(path).read_text(), check_number_spelling),
+            }
         except Exception as exc:  # pragma: no cover — a corrupt corpus file
             out[path.name] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     return out
@@ -428,6 +462,13 @@ def self_test() -> int:
         "object-key-order-is-free",
         str(r),
     )
+    r = compare(
+        {
+            SOURCE_PARTICIPANT: out(parse_wire('{"args":[1.0e-9,"1e-9"], "op":"+"}', True)),
+            "lean": out(parse_wire('{"op":"+","args":[1e-9,"1e-9"]}', True)),
+        }
+    )[0]
+    check(r["source_mismatch"], "number-token-spelling-is-checked", str(r))
 
     # The non-canonical fixture is judged against its authored canonical form,
     # and that form differs from the source in spelling only.
@@ -494,6 +535,11 @@ def main() -> int:
         "has not been checked).",
     )
     ap.add_argument(
+        "--check-number-spelling",
+        action="store_true",
+        help="Compare exact JSON number tokens while allowing whitespace and object-key order.",
+    )
+    ap.add_argument(
         "--require-divergence",
         action="store_true",
         help="CORPUS-QUALITY check, not a conformance gate: exit 1 if the corpus surfaces "
@@ -545,7 +591,7 @@ def main() -> int:
             continue
         print(f"[run ] {binding.name}: {len(fixtures)} fixtures", file=sys.stderr)
         try:
-            outputs[binding.name] = run_binding(binding, fixtures)
+            outputs[binding.name] = run_binding(binding, fixtures, args.check_number_spelling)
         except RuntimeError as exc:
             print(f"[fail] {binding.name}: {exc}", file=sys.stderr)
             return 1
@@ -571,7 +617,7 @@ def main() -> int:
         )
         return 1
 
-    outputs[SOURCE_PARTICIPANT] = read_sources(fixtures)
+    outputs[SOURCE_PARTICIPANT] = read_sources(fixtures, args.check_number_spelling)
 
     report = compare(outputs)
     summary = summarize(report, sorted(outputs.keys()))

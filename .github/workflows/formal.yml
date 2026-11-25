@@ -30,6 +30,7 @@ on:
       - 'scripts/run-inline-tests-conformance.py'
       - 'scripts/run-lean-inline-tests.py'
       - 'scripts/difftest/**'
+      - 'pkg/earthsci-ast-py/**'
       - 'tests/conformance/scalar_operator_semantics/**'
       - 'scripts/conformance_lib.py'
       - 'tests/closed_functions/**'
@@ -50,7 +51,6 @@ on:
       - 'tests/conformance/canonical/**'
       - '.github/workflows/formal.yml'
   pull_request:
-    branches: [ main ]
     paths:
       - 'formal/**'
       - 'lib/interp.esm'
@@ -65,6 +65,7 @@ on:
       - 'scripts/run-inline-tests-conformance.py'
       - 'scripts/run-lean-inline-tests.py'
       - 'scripts/difftest/**'
+      - 'pkg/earthsci-ast-py/**'
       - 'tests/conformance/scalar_operator_semantics/**'
       - 'scripts/conformance_lib.py'
       - 'tests/closed_functions/**'
@@ -184,7 +185,9 @@ jobs:
       run: python -m pip install ./pkg/earthsci-ast-py hypothesis==6.170.17
 
     - name: Compare generated scalar cases in observer mode
-      run: python scripts/difftest/scalar.py --observer
+      run: |
+        python scripts/difftest/test_scalar.py
+        python scripts/difftest/scalar.py --observer
 
     - uses: actions/upload-artifact@v7
       if: always() && hashFiles('conformance-results/scalar-difftest.esm') != ''
@@ -201,7 +204,9 @@ jobs:
     - name: Score the model against the expression property corpus
       env:
         EARTHSCI_PROPERTY_CORPUS_ADAPTER_LEAN: formal/.lake/build/bin/esm-lean expressions
-      run: python3 scripts/run-property-corpus-conformance.py --bindings lean --fail-on-source-mismatch
+      run: >-
+        python3 scripts/run-property-corpus-conformance.py
+        --bindings lean --fail-on-source-mismatch --check-number-spelling
 
     # The document source formats on the whole corpus: every .esm under tests/
     # that is a JSON object round-trips through Markdown and Typst

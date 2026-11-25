@@ -70,7 +70,8 @@ EARTHSCI_INLINE_TESTS_ADAPTER_LEAN="python3 scripts/run-lean-inline-tests.py" \
 The report lists integrated state assertions and out-of-scope fixtures as
 exclusions. The `static-assertions` executable mode also accepts a JSON array
 of `{test_id, assertion_idx}` requests on stdin and returns binary64 bit
-patterns in the same order.
+patterns in the same order. It reports unsupported precision and angle units
+explicitly when a model declares Float32 or requires angle-unit handling.
 
 ## Rules
 
@@ -102,7 +103,8 @@ parse/emit adapter against the shared source fixtures:
 
 ```bash
 EARTHSCI_PROPERTY_CORPUS_ADAPTER_LEAN='formal/.lake/build/bin/esm-lean expressions' \
-  python3 scripts/run-property-corpus-conformance.py --bindings lean --fail-on-source-mismatch
+  python3 scripts/run-property-corpus-conformance.py \
+    --bindings lean --fail-on-source-mismatch --check-number-spelling
 ```
 
 The runner checks every `tests/property_corpus/expressions/expr_*.json` against

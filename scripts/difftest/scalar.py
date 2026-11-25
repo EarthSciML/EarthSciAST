@@ -6,11 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import select
+import os
+import selectors
 import shlex
 import struct
 import subprocess
 import sys
+import time
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
@@ -127,10 +129,10 @@ class AdapterRejection(Exception):
 
 @contextmanager
 def adapter(command: list[str]):
-    with subprocess.Popen(
-        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
-    ) as proc:
+    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as proc:
         assert proc.stdin is not None and proc.stdout is not None
+        os.set_blocking(proc.stdin.fileno(), False)
+        os.set_blocking(proc.stdout.fileno(), False)
         try:
             yield proc
         finally:
@@ -144,13 +146,32 @@ def adapter(command: list[str]):
 
 def ask(proc: subprocess.Popen, request: dict, timeout: float) -> int:
     assert proc.stdin is not None and proc.stdout is not None
-    proc.stdin.write(dumps(request) + "\n")
-    proc.stdin.flush()
-    if not select.select([proc.stdout], [], [], timeout)[0]:
-        raise RuntimeError(f"{proc.args[0]} timed out waiting for a scalar result")
-    line = proc.stdout.readline()
-    if not line:
-        raise RuntimeError(f"{proc.args[0]} exited before returning a scalar result")
+    pending = memoryview((dumps(request) + "\n").encode("utf-8"))
+    deadline = time.monotonic() + timeout
+    line = bytearray()
+    with selectors.DefaultSelector() as selector:
+        selector.register(proc.stdin, selectors.EVENT_WRITE)
+        while True:
+            ready = selector.select(max(0, deadline - time.monotonic()))
+            if not ready or time.monotonic() >= deadline:
+                raise RuntimeError(f"{proc.args[0]} timed out waiting for a scalar result")
+            try:
+                if pending:
+                    pending = pending[os.write(proc.stdin.fileno(), pending) :]
+                    if not pending:
+                        selector.unregister(proc.stdin)
+                        selector.register(proc.stdout, selectors.EVENT_READ)
+                else:
+                    chunk = os.read(proc.stdout.fileno(), 65536)
+                    if not chunk:
+                        raise RuntimeError(
+                            f"{proc.args[0]} exited before returning a complete scalar result"
+                        )
+                    line.extend(chunk)
+                    if b"\n" in chunk:
+                        break
+            except BlockingIOError:
+                continue
     response = json.loads(line)
     if "error" in response:
         raise AdapterRejection(response["error"])

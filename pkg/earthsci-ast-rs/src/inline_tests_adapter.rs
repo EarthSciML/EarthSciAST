@@ -205,7 +205,7 @@ fn probe_values(line: &[u8]) -> Result<Vec<String>, String> {
     let file = crate::load_document(&request.document).map_err(|e| format!("load: {e:?}"))?;
     let options = InlineTestOptions {
         model_name: Some("Probe".to_owned()),
-        compiler: Some(Compiler::Interpreter),
+        compiler: Some(Compiler::Native),
         ..Default::default()
     };
     let results = run_inline_tests_with_options(&file, &options);

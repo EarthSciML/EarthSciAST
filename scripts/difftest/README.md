@@ -10,7 +10,8 @@ python scripts/difftest/scalar.py --seed 20261026 --cases 200
 
 Each case is an ESM document with one static scalar observation. Lean calls the
 same AST evaluator as `static-assertions`, and Python calls its public inline
-test runner using the interpreter compiler. The driver compares actual results
+test runner using the native compiler. The optional Julia and Rust participants
+also use their native compilers. The driver compares actual results
 and ignores the inline assertion's placeholder expectation. Arithmetic,
 comparisons, logical operations, extrema and conditionals use bit comparison.
 Two NaNs agree for propagation checks, with any sign or payload.
@@ -25,7 +26,8 @@ the generated static slice. Angle conversion, libm tolerances, validator
 diagnostics, and arrays have separate test surfaces.
 
 Each participant stays alive for the sweep. Use `--adapter NAME=COMMAND` to
-add a participant. Each input line is a JSON object with `document` and
+add a participant. `--timeout` bounds each complete request and response.
+Each input line is a JSON object with `document` and
 `requests` fields. Requests identify inline assertions by `test_id` and
 one-based `assertion_idx`. The response line has `values` in request order,
 encoded as decimal strings containing the unsigned binary64 bits, or an

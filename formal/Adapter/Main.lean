@@ -4,7 +4,6 @@ import Adapter.Static
 import Adapter.Units
 import Adapter.Doc
 import Adapter.Expressions
-
 import Adapter.CanonicalExpr
 
 /-! The `esm-lean` adapter: `esm-lean <mode> <args>…`. Each mode reads the same

@@ -76,15 +76,15 @@ def shortest (m : Nat) (k : Int) : List Nat × Int :=
       | false, false => go fuel
   go 17
 
-/-- The canonical number a JSON number token `m × 10^-e` is. -/
-def toJNum (m : Int) (e : Nat) : JNum :=
-  if m = 0 then .int 0
-  else if e = 0 ∧ -(2 ^ 63 : Int) ≤ m ∧ m < 2 ^ 63 then .int m
+/-- The canonical number a JSON number token `m × 10^-e` is, if finite. -/
+def toJNum? (m : Int) (e : Nat) : Option JNum :=
+  if m = 0 then some (.int 0)
+  else if e = 0 ∧ -(2 ^ 63 : Int) ≤ m ∧ m < 2 ^ 63 then some (.int m)
   else
     let neg := decide (m < 0)
     match toBinary64 m.natAbs (10 ^ e) with
-    | none => Number.mkDec neg (natDigits m.natAbs) (((natDigits m.natAbs).length : Int) - 1 - e)
-    | some (bm, bk) =>
+    | none => none
+    | some (bm, bk) => some <|
       let z : Int := (if neg then -1 else 1) * (bm * 2 ^ bk.toNat : Nat)
       if 0 ≤ bk ∧ -(2 ^ 63 : Int) ≤ z ∧ z < 2 ^ 63 then .int z
       else if bk < 0 ∧ bm % 2 ^ (-bk).toNat = 0 then
@@ -95,14 +95,22 @@ def toJNum (m : Int) (e : Nat) : JNum :=
 
 instance : Inhabited Json := ⟨.null⟩
 
-/-- A parsed JSON value as a document value. -/
-partial def conv : Lean.Json → Json
-  | .null => .null
-  | .bool b => .bool b
-  | .num n => .num (toJNum n.mantissa n.exponent)
-  | .str s => .str s
-  | .arr a => .arr (a.toList.map conv)
-  | .obj o => .obj (o.toList.map fun (k, v) => (k, conv v))
+/-- A parsed JSON value as a document value. Strict readers reject overflow
+even inside fields that carry plain JSON rather than expressions. -/
+partial def conv (strictNumbers : Bool) : Lean.Json → Except String Json
+  | .null => pure .null
+  | .bool b => pure (.bool b)
+  | .num n =>
+    match toJNum? n.mantissa n.exponent with
+    | some value => pure (.num value)
+    | none =>
+      if strictNumbers then throw "number is outside the finite binary64 range"
+      else
+        let ds := natDigits n.mantissa.natAbs
+        pure (.num (Number.mkDec (decide (n.mantissa < 0)) ds ((ds.length : Int) - 1 - n.exponent)))
+  | .str s => pure (.str s)
+  | .arr a => .arr <$> a.toList.mapM (conv strictNumbers)
+  | .obj o => .obj <$> o.toList.mapM (fun (k, v) => do return (k, ← conv strictNumbers v))
 
 /-- Compact canonical JSON text. -/
 partial def render : Json → String
@@ -271,7 +279,7 @@ def spellRules (isMap : Bool) (j : Json) : Json :=
 `Lean.Json.parse` folds a positive exponent into the mantissa, so `1.999999999999999e16`
 and the integer token `19999999999999990` parse alike; padding the fraction with zeros past
 the exponent (`1.9999999999999990e16`) keeps the value and keeps a fraction digit, so
-`toJNum` reads it as the decimal token it is. Exponents above 400 are left alone (such a
+`toJNum?` reads it as the decimal token it is. Exponents above 400 are left alone (such a
 value is outside `Int64`, so it is rounded either way). -/
 def padExponent (t : List Char) : List Char :=
   match t.span (fun c => c != 'e' && c != 'E') with
@@ -300,12 +308,14 @@ partial def padExponents (cs : List Char) (inStr : Bool) (acc : Array Char) : Ar
       padExponents rest false (acc ++ (padExponent tok).toArray)
     else padExponents r false (acc.push c)
 
-def readDoc (path : String) : IO Json := do
+def readDoc (path : String) (strictNumbers : Bool := false) : IO Json := do
   let text ← IO.FS.readFile path
   let text := String.ofList (padExponents text.toList false #[]).toList
   match Lean.Json.parse text with
-  | .ok j => pure (conv j)
   | .error e => throw (IO.userError s!"{path}: not JSON: {e}")
+  | .ok j => match conv strictNumbers j with
+    | .ok doc => pure doc
+    | .error e => throw (IO.userError s!"{path}: {e}")
 
 def main (mode : String) (args : List String) : IO UInt32 := do
   let [path] := args | IO.eprintln s!"usage: esm-lean {mode} <file>"; return 2

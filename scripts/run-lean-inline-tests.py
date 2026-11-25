@@ -36,7 +36,7 @@ def run_fixture(manifest_path, fixture):
     if proc.returncode:
         message = proc.stderr.strip()
         code, sep, reason = message.partition(": ")
-        if sep and code == "unsupported_construct":
+        if sep and code in {"unsupported_construct", "float32_unsupported"}:
             return {"status": "refused", "code": code, "reason": reason}
         return {"error": message or f"esm-lean exited {proc.returncode}"}
 

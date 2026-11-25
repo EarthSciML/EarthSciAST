@@ -1,10 +1,12 @@
 import Adapter.Templates
+import Esm.Units.Grammar
 
 /-! `esm-lean static-assertions <document.esm> <model>` reads a JSON array of
 `{test_id, assertion_idx}` requests on stdin, and returns the values in that
 order as binary64 bit patterns. Each value comes from `Esm.Expr.eval` on the
 model's parsed equations at the assertion's time and parameter overrides.
-This covers scalar parameters and observations whose values require no solve. -/
+This covers binary64 scalar parameters and observations whose values require
+no solve or angle-unit conversion. -/
 
 namespace Adapter.Static
 
@@ -17,24 +19,47 @@ private def number (value : Json) : Except String Float := do
   let n ← value.getNum?
   return Lits.ofDec n.mantissa n.exponent
 
+private def checkPrecision (location : String) (decl : Json) : Except String Unit := do
+  if (decl.getObjValAs? String "element_type").toOption == some "Float32" then
+    throw s!"float32_unsupported: {location} declares Float32"
+
+private def checkAngleUnit (location : String) (decl : Json) : Except String Unit := do
+  if let .ok units := decl.getObjValAs? String "units" then
+    if let .ok unit := Esm.Units.resolve units then
+      if unit.dim .rad ≠ 0 then unsupported s!"angle units {units} in {location}"
+
+private partial def checkConstantUnits (location : String) : Json → Except String Unit
+  | .obj fields => do
+    let node := Json.obj fields
+    if (node.getObjValAs? String "op").toOption == some "const" then
+      checkAngleUnit location node
+    fields.toArray.forM fun (_, child) => checkConstantUnits location child
+  | .arr items => items.forM (checkConstantUnits location)
+  | _ => pure ()
+
 structure Model where
+  name : String
   independent : String
   parameters : List (String × Json)
   equations : List (String × Except String Ast)
   deriving Inhabited
 
-def readModel (doc component : Json) : Except String Model := do
+def readModel (doc component : Json) (modelName : String) : Except String Model := do
   for field in ["coupling", "subsystems"] do
     if (doc.getObjVal? field).isOk then unsupported s!"document uses {field}"
   for field in ["events", "operators", "operator_imports", "expression_templates",
       "expression_template_imports", "subsystems"] do
     if (component.getObjVal? field).isOk then unsupported s!"model uses {field}"
-  let independent := ((doc.getObjValD "domain").getObjValAs? String "independent_variable").toOption.getD "t"
+  let domain := doc.getObjValD "domain"
+  checkPrecision "domain.element_type" domain
+  let independent := (domain.getObjValAs? String "independent_variable").toOption.getD "t"
   let vars ← (← component.getObjVal? "variables").getObj?
   let mut parameters := []
   for (name, decl) in vars.toArray do
     if (decl.getObjValD "shape").getArr?.toOption.any (fun shape => !shape.isEmpty) then
       unsupported s!"shaped variable {name}"
+    checkPrecision s!"variable {name}" decl
+    checkAngleUnit s!"variable {name}" decl
     if (decl.getObjValAs? String "type").toOption == some "parameter" then
       if (decl.getObjVal? "update").isOk then unsupported s!"parameter {name} has an update"
       parameters := (name, decl.getObjValD "default") :: parameters
@@ -44,17 +69,25 @@ def readModel (doc component : Json) : Except String Model := do
       if equations.any (fun e => e.1 == name) then throw s!"multiple equations for {name}"
       unless ((← (Json.obj vars).getObjVal? name).getObjValAs? String "type").toOption == some "unknown" do
         throw s!"{name} is not a declared unknown"
-      equations := (name, (eq.getObjVal? "rhs").bind Templates.astOf) :: equations
-  return { independent, parameters, equations := equations.reverse }
+      let rhs ← eq.getObjVal? "rhs"
+      checkConstantUnits s!"equation {name}" rhs
+      equations := (name, Templates.astOf rhs) :: equations
+  return { name := modelName, independent, parameters, equations := equations.reverse }
 
 private def environment (model : Model) (atTime : Float) (overrides : Json) :
     Except String (Env Float) := do
   let overrides ← if overrides.isNull then pure [] else (·.toArray.toList) <$> overrides.getObj?
-  for (name, _) in overrides do
-    unless (model.parameters.lookup name).isSome do throw s!"unknown parameter override {name}"
+  let mut resolved := []
+  let modelPrefix := model.name ++ "."
+  for (key, value) in overrides do
+    let name := if (model.parameters.lookup key).isNone && key.startsWith modelPrefix then
+      String.ofList (key.toList.drop modelPrefix.length) else key
+    unless (model.parameters.lookup name).isSome do throw s!"unknown parameter override {key}"
+    if (resolved.lookup name).isSome then throw s!"duplicate parameter override for {name}"
+    resolved := (name, value) :: resolved
   let mut env : Env Float := [(model.independent, .num atTime)]
   for (name, defaultValue) in model.parameters do
-    let value := (overrides.lookup name).getD defaultValue
+    let value := (resolved.lookup name).getD defaultValue
     unless value.isNull do env := (name, .num (← number value)) :: env
   return env
 
@@ -104,7 +137,7 @@ private def evalRequest (model : Model) (tests : Array Json) (request : Json) : 
 
 private def evaluateRequests (doc : Json) (name : String) (requests : Json) : Except String Json := do
   let component ← (← doc.getObjVal? "models").getObjVal? name
-  let model ← readModel doc component
+  let model ← readModel doc component name
   let tests ← (← component.getObjVal? "tests").getArr?
   return .arr (← (← requests.getArr?).mapM (evalRequest model tests))
 

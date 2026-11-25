@@ -1,4 +1,5 @@
 import Adapter.Doc
+import Adapter.JsonString
 
 /-! The discretization RFC §5.4 `canonical_json` expression format. Its typed
 float tokens, signed zeros and algebraic rewrites are specific to this API.
@@ -127,29 +128,6 @@ private partial def decodePayload (path : String) : Wire → Except Failure Payl
   | .array xs => .array <$> xs.zipIdx.mapM (fun (x, i) => decodePayload (fieldPath path (toString i)) x)
   | .object _ => .error (invalid path "canonical value payloads must be literal data")
 
-private partial def decode (path : String) : Wire → Except Failure Expression
-  | .number (some n) => .ok (.number n)
-  | .number none => .error (nonFinite path)
-  | .string s => .ok (.reference s)
-  | .object fields => do
-    let some (.string op) := look fields "op" | throw (invalid path "expected string op")
-    let some (.array args) := look fields "args" | throw (invalid path "expected array args")
-    let extras ← fields.filterMapM fun (key, value) => do
-      if ["op", "args", "arg", "bindings"].contains key then return none
-      let pointer := fieldPath path key
-      if key == "value" then
-        if let .null := value then return none
-        return some (key, ← decodePayload pointer value)
-      if ["wrt", "dim", "fn", "name", "units"].contains key then
-        match value with
-        | .null => return none
-        | .string s => return some (key, .string s)
-        | _ => throw (invalid pointer "expected a string")
-      throw ⟨"E_CANONICAL_UNSUPPORTED_FIELD", pointer, s!"no canonical slot for {key}"⟩
-    let args ← args.zipIdx.mapM fun (a, i) => decode (s!"{path}/args/{i}") a
-    return .node op args extras
-  | _ => .error (invalid path "expected a number, reference, or operator node")
-
 private def printFloat (negative : Bool) (m : Nat) (k : Int) : String :=
   let sign := if negative then "-" else ""
   if m == 0 then sign ++ "0.0"
@@ -175,7 +153,7 @@ private def Literal.render : Literal → String
   | .int n => toString n
   | .float sign m k => printFloat sign m k
 
-private def quote (s : String) : String := (Lean.Json.str s).compress
+private abbrev quote := JsonString.quote
 
 private def renderArray (items : List String) : String := "[" ++ ",".intercalate items ++ "]"
 
@@ -341,6 +319,38 @@ private partial def canonicalize (path : String) : Expression → Except Failure
     | "/", [.number a, _], [] => return if a.is 0 then .number a else original
     | _, _, _ => return original
   | e => .ok e
+
+private partial def decode (path : String) : Wire → Except Failure Expression
+  | .number (some n) => .ok (.number n)
+  | .number none => .error (nonFinite path)
+  | .string s => .ok (.reference s)
+  | .object fields => do
+    let some (.string op) := look fields "op" | throw (invalid path "expected string op")
+    let some (.array args) := look fields "args" | throw (invalid path "expected array args")
+    let extras ← fields.filterMapM fun (key, value) => do
+      if ["op", "args", "arg"].contains key then return none
+      let pointer := fieldPath path key
+      if key == "bindings" then
+        match value with
+        | .null => return none
+        | .object bindings =>
+          for (name, child) in bindings do
+            let childPath := fieldPath pointer name
+            let _ ← canonicalize childPath (← decode childPath child)
+          return none
+        | _ => throw (invalid pointer "expected an object")
+      if key == "value" then
+        if let .null := value then return none
+        return some (key, ← decodePayload pointer value)
+      if ["wrt", "dim", "fn", "name", "units"].contains key then
+        match value with
+        | .null => return none
+        | .string s => return some (key, .string s)
+        | _ => throw (invalid pointer "expected a string")
+      throw ⟨"E_CANONICAL_UNSUPPORTED_FIELD", pointer, s!"no canonical slot for {key}"⟩
+    let args ← args.zipIdx.mapM fun (a, i) => decode (s!"{path}/args/{i}") a
+    return .node op args extras
+  | _ => .error (invalid path "expected a number, reference, or operator node")
 
 private def run (input : String) (fixture : Bool) : Except Failure String := do
   let wire ← (Parser.run (ws *> readWire <* eof) input).mapError (invalid "")

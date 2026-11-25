@@ -38,7 +38,7 @@ private partial def checkExpr : Json → Except String Unit
 
 private def result (path : String) : IO Json := do
   let outcome ← try
-    let expr ← Doc.readDoc path
+    let expr ← Doc.readDoc path (strictNumbers := true)
     pure (checkExpr expr |>.map fun () => expr)
   catch error => pure (.error error.toString)
   return match outcome with

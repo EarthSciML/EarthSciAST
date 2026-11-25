@@ -26,7 +26,7 @@
 //!
 //! The JSONL mode takes one `{"document": {...}, "requests": [{"test_id":
 //! "probe", "assertion_idx": 1}]}` object per line. Each document's `Probe`
-//! model runs under the interpreter. It returns `{"values": ["<binary64 bits>"]}`
+//! model runs under the native compiler. It returns `{"values": ["<binary64 bits>"]}`
 //! in request order or `{"error": "..."}` for the line.
 //!
 //! Everything of substance lives in [`earthsci_ast::inline_tests_adapter`], so

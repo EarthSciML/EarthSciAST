@@ -54,15 +54,15 @@
       "primitive": "group_by_sum",
       "doc": "Group-by faq under the integer (+) semiring with STRING keys. Exercises (a) total order on strings = Unicode code-point (UTF-8 byte) order, NOT locale collation: code-point order is 'B'(U+0042) < 'Z'(U+005A) < 'a'(U+0061), whereas a case-insensitive locale would interleave 'a' among the capitals; (b) associativity+commutativity of (+) — permuting the input rows cannot change any bucket sum; (c) emit sorted by canonical key, never hash-bucket order. dense_ids_canonical ranks the emitted (sorted) distinct keys.",
       "inputs": {
-        "canonical": { "rows": [["B", 2], ["a", 5], ["B", 3], ["Z", 1], ["a", 4]] },
+        "canonical": { "rows": [["B", 2], ["a", 5], ["a\t\b\f", 6], ["B", 3], ["Z", 1], ["a", 4]] },
         "variants": {
-          "permuted_rows": { "rows": [["a", 4], ["Z", 1], ["B", 2], ["a", 5], ["B", 3]] }
+          "permuted_rows": { "rows": [["a", 4], ["Z", 1], ["B", 2], ["a", 5], ["B", 3], ["a\t\b\f", 6]] }
         }
       },
       "expected": {
-        "index_set": [["B", 5], ["Z", 1], ["a", 9]],
-        "serialized": "[[\"B\",5],[\"Z\",1],[\"a\",9]]",
-        "dense_ids_canonical": [0, 1, 2]
+        "index_set": [["B", 5], ["Z", 1], ["a", 9], ["a\t\b\f", 6]],
+        "serialized": "[[\"B\",5],[\"Z\",1],[\"a\",9],[\"a\\t\\b\\f\",6]]",
+        "dense_ids_canonical": [0, 1, 2, 3]
       }
     }
   ],

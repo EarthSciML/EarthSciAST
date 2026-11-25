@@ -458,6 +458,14 @@ def main (args : List String) : IO UInt32 := do
             | .ok _ => out := out.push (Json.mkObj [("name", lhs), ("error", "not a scalar")])
             | .error err =>
               out := out.push (Json.mkObj [("name", lhs), ("error", errorString err)])
+          else if op == some "faq" && !indexed &&
+              ((rhs.getObjValD "output_idx").getArr?.toOption.any Array.isEmpty) &&
+              (rhs.getObjValAs? String "semiring").toOption == some "bool_and_or" then
+            match astOf rhs >>= fun body => evalAt scope env body [] [] with
+            | .error why => out := out.push (Json.mkObj [("name", lhs), ("skipped", why)])
+            | .ok x =>
+              out := out.push ((floatJson x).mergeObj (Json.mkObj [("name", lhs)]))
+              env := (lhs, .num x) :: env
           else if op == some "faq" && (rhs.getObjVal? "output_idx").toOption.isSome then
             match mapFaq sets derived rhs with
             | .error why => out := out.push (Json.mkObj [("name", lhs), ("skipped", why)])

@@ -72,6 +72,11 @@ def score_controls(adapter):
         (b"1e21", b"1e21"),
         (b'{"op":"*","args":[-0.0,"x"]}', b"-0.0"),
         (b'{"op":"*","args":[1.0,"x"]}', b'{"args":[1.0,"x"],"op":"*"}'),
+        (rb'"a\u0009\u0008\u000cb\\u0009"', rb'"a\t\b\fb\\u0009"'),
+        (
+            b'{"op":"apply_operator","args":[],"name":"f","bindings":{"x":1}}',
+            b'{"args":[],"name":"f","op":"apply_operator"}',
+        ),
     )
     for source, expected in controls:
         failure = compare_bytes(invoke(adapter, "-", source=source), expected)
@@ -86,6 +91,16 @@ def score_controls(adapter):
     failure = compare_error(division, "E_CANONICAL_DIVBY_ZERO", "")
     if failure:
         yield f"division control: {failure}"
+    for expression, code in (
+        (b'{"op":"/","args":[0,0]}', "E_CANONICAL_DIVBY_ZERO"),
+        (b"1e400", "E_CANONICAL_NONFINITE"),
+    ):
+        source = (
+            b'{"op":"apply_operator","args":[],"name":"f","bindings":{"x/y":' + expression + b"}}"
+        )
+        failure = compare_error(invoke(adapter, "-", source=source), code, "/bindings/x~1y")
+        if failure:
+            yield f"binding control: {failure}"
     mixed_zero = invoke(adapter, "-", source=b'{"op":"*","args":[0,-0.0]}')
     failure = compare_error(mixed_zero, "E_CANONICAL_UNSUPPORTED_EXPRESSION", "")
     if failure:

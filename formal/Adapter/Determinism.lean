@@ -1,5 +1,5 @@
 import Esm.Determinism
-import Lean.Data.Json
+import Adapter.JsonString
 
 /-! The determinism runner supplies relational producer inputs directly. The
 adapter translates the manifest's payloads to the model's exact relational
@@ -33,9 +33,14 @@ private def edgeRows (payload : Json) : Except String (List (Int × Int)) := do
 private def ranksOf {α : Type} [DecidableEq α] (keys : List α) : List Nat :=
   keys.attach.map fun key => (denseRank keys key).val
 
+private partial def serializeRow : Json → String
+  | .str s => JsonString.quote s
+  | .arr items => "[" ++ ",".intercalate (items.toList.map serializeRow) ++ "]"
+  | json => json.compress
+
 private def result (rows : List Json) (ranks : List Nat) : List (String × Json) :=
   let indexSet := Json.arr rows.toArray
-  [("index_set", indexSet), ("serialized", toJson indexSet.compress),
+  [("index_set", indexSet), ("serialized", toJson (serializeRow indexSet)),
     ("dense_ids_canonical", toJson ranks)]
 
 private def runPayload (fixture payload : Json) : Except String (List (String × Json)) := do
