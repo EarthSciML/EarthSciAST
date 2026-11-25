@@ -90,20 +90,24 @@ pub(crate) fn pow<F: Elem>(x: F, y: F) -> F {
 pub(crate) fn atan2<F: Elem>(x: F, y: F) -> F {
     x.atan2(y)
 }
-/// `min` with NaN propagation (a NaN operand gives NaN).
+/// IEEE 754-2019 `minimum` with NaN propagation and −0 < +0.
 #[inline(always)]
 pub(crate) fn min<F: Elem>(x: F, y: F) -> F {
     if x.is_nan() || y.is_nan() {
         F::nan()
+    } else if x.is_zero() && y.is_zero() {
+        if x.is_sign_negative() { x } else { y }
     } else {
         x.min(y)
     }
 }
-/// `max` with NaN propagation (a NaN operand gives NaN).
+/// IEEE 754-2019 `maximum` with NaN propagation and −0 < +0.
 #[inline(always)]
 pub(crate) fn max<F: Elem>(x: F, y: F) -> F {
     if x.is_nan() || y.is_nan() {
         F::nan()
+    } else if x.is_zero() && y.is_zero() {
+        if x.is_sign_positive() { x } else { y }
     } else {
         x.max(y)
     }

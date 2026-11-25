@@ -270,51 +270,72 @@ mod tests {
         );
     }
 
-    #[test]
-    fn jsonl_keeps_request_order_and_continues_after_bad_input() {
-        let request = json!({
+    fn scalar_request(parameter: &str, value: f64, probes: &[(&str, Value)]) -> Value {
+        let mut variables = serde_json::Map::new();
+        variables.insert(
+            parameter.to_owned(),
+            json!({ "type": "parameter", "units": "1", "description": parameter, "default": value }),
+        );
+        let mut equations = Vec::new();
+        let mut assertions = Vec::new();
+        for (name, expr) in probes {
+            variables.insert(
+                (*name).to_owned(),
+                json!({ "type": "unknown", "units": "1", "description": name }),
+            );
+            equations.push(json!({ "lhs": name, "rhs": expr }));
+            assertions.push(json!({ "variable": name, "time": 0, "expected": 0 }));
+        }
+        let requests: Vec<_> = (1..=probes.len())
+            .map(|idx| json!({ "test_id": "probe", "assertion_idx": idx }))
+            .collect();
+        json!({
             "document": {
                 "esm": "2.4.0",
                 "metadata": { "name": "ScalarProbe", "description": "JSONL adapter probe" },
                 "models": {
                     "Probe": {
-                        "variables": {
-                            "x": { "type": "parameter", "units": "1", "description": "Input", "default": 1.5 },
-                            "positive": { "type": "unknown", "units": "1", "description": "Positive value" },
-                            "negative": { "type": "unknown", "units": "1", "description": "Negative value" }
-                        },
-                        "equations": [
-                            { "lhs": "positive", "rhs": "x" },
-                            { "lhs": "negative", "rhs": { "op": "-", "args": ["x"] } }
-                        ],
+                        "variables": variables,
+                        "equations": equations,
                         "tests": [{
                             "id": "probe",
                             "time_span": { "start": 0, "end": 1 },
-                            "assertions": [
-                                { "variable": "positive", "time": 0, "expected": 0 },
-                                { "variable": "negative", "time": 0, "expected": 0 }
-                            ]
+                            "assertions": assertions
                         }]
                     }
                 }
             },
-            "requests": [
-                { "test_id": "probe", "assertion_idx": 2 },
-                { "test_id": "probe", "assertion_idx": 1 }
-            ]
-        });
+            "requests": requests
+        })
+    }
+
+    fn jsonl_responses(input: &str) -> Vec<Value> {
+        let mut output = Vec::new();
+        run_jsonl(input.as_bytes(), &mut output).expect("adapter streams responses");
+        std::str::from_utf8(&output)
+            .expect("UTF-8")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("one JSON response per line"))
+            .collect()
+    }
+
+    #[test]
+    fn jsonl_keeps_request_order_and_continues_after_bad_input() {
+        let mut request = scalar_request(
+            "x",
+            1.5,
+            &[
+                ("positive", json!("x")),
+                ("negative", json!({ "op": "-", "args": ["x"] })),
+            ],
+        );
+        request["requests"].as_array_mut().unwrap().reverse();
         let missing_assertion = json!({
             "document": request["document"],
             "requests": [{ "test_id": "probe", "assertion_idx": 3 }]
         });
         let input = format!("{{bad JSON}}\n{missing_assertion}\n{request}\n");
-        let mut output = Vec::new();
-        run_jsonl(input.as_bytes(), &mut output).expect("adapter streams responses");
-        let responses: Vec<Value> = std::str::from_utf8(&output)
-            .expect("UTF-8")
-            .lines()
-            .map(|line| serde_json::from_str(line).expect("one JSON response per line"))
-            .collect();
+        let responses = jsonl_responses(&input);
         assert_eq!(responses.len(), 3);
         assert!(
             responses[0]["error"]
@@ -335,6 +356,64 @@ mod tests {
                 1.5f64.to_bits().to_string()
             ])
         );
+    }
+
+    #[test]
+    fn jsonl_extrema_preserve_signed_zero_and_propagate_nan() {
+        let zero = json!("z");
+        let neg_zero = json!({ "op": "-", "args": ["z"] });
+        let nan = json!({ "op": "/", "args": ["z", "z"] });
+        let mut probes = Vec::new();
+        for (op, names) in [
+            (
+                "min",
+                [
+                    "min_forward",
+                    "min_reverse",
+                    "min_nan_left",
+                    "min_nan_right",
+                ],
+            ),
+            (
+                "max",
+                [
+                    "max_forward",
+                    "max_reverse",
+                    "max_nan_left",
+                    "max_nan_right",
+                ],
+            ),
+        ] {
+            for (name, args) in names.into_iter().zip([
+                [&zero, &neg_zero],
+                [&neg_zero, &zero],
+                [&nan, &zero],
+                [&zero, &nan],
+            ]) {
+                probes.push((name, json!({ "op": op, "args": args })));
+            }
+        }
+        let mut request = scalar_request("z", 0.0, &probes);
+        for width in ["Float64", "Float32"] {
+            request["document"]["domain"] = json!({ "element_type": width });
+            let responses = jsonl_responses(&format!("{request}\n"));
+            assert_eq!(responses.len(), 1);
+            let actual: Vec<u64> = responses[0]["values"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{width} response: {}", responses[0]))
+                .iter()
+                .map(|value| value.as_str().unwrap().parse().unwrap())
+                .collect();
+            assert_eq!(actual.len(), 8);
+            assert_eq!(actual[..2], [(-0.0f64).to_bits(); 2], "{width} min");
+            assert_eq!(actual[4..6], [0.0f64.to_bits(); 2], "{width} max");
+            assert!(
+                [2, 3, 6, 7]
+                    .iter()
+                    .all(|&i| f64::from_bits(actual[i]).is_nan()),
+                "{width} NaN results: {actual:?}"
+            );
+        }
     }
 
     #[test]
