@@ -3,6 +3,8 @@ import Esm.Float64.Decimal
 import Mathlib.Analysis.SpecialFunctions.Complex.Arg
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
 
+import Esm.Semiring.Registry
+
 /-!
 # The ESM Expression AST and its evaluator (esm-spec §4.1–4.3), first slice
 
@@ -38,8 +40,7 @@ The evaluator covers the scalar operations and the array operations below:
   seeded at `+0.0` (`1` for `*`), in increasing index order (§4.3.1). A `min` /
   `max` fold starts from its first term (IEEE `minimum(+∞, x) = x`, so this is
   the fold from the identity); over no term it is the identity `±∞`, the value
-  `Val.inf`, which the scalar types do not have: only `min` and `max` consume
-  it, and every other op refuses it. The same `faq` with a `filter` (reduce `+`,
+  `Val.inf`, which the scalar types do not have. The same `faq` with a `filter` (reduce `+`,
   `min` or `max`) folds only the terms at whose index the filter holds. A `faq`
   nested in another's body is evaluated afresh at each outer index.
 * the same `faq`s with the one range `{"from": S}` over an index set whose size
@@ -48,8 +49,12 @@ The evaluator covers the scalar operations and the array operations below:
   §9.6.1). A set with no size bound (a derived set, whose size value invention
   fixes, or a ragged set) is refused.
 
+* scalar `bool_and_or` (`CONFORMANCE_SPEC` §5.6.1), with any number of
+  dense two-bound or named-set ranges and an optional filter. The result is
+  a crisp zero or one, and NaN as an admitted term counts as nonzero.
+
 Everything else — another op, a `faq` with output indices, another reduction,
-a stepped range, several range symbols — evaluates to
+a stepped range, or several range symbols on a numeric reduction — evaluates to
 `EvalError.unsupported`, never to a value. Signed zeros are not modelled by
 `Num`/`Bin64` (so `min`/`max` do not order `-0.0` below `+0.0`).
 -/
@@ -226,9 +231,9 @@ inductive Val (α : Type) where
   | arr1 (v : List α)
   | arr2 (v : List (List α))
   | arr3 (v : List (List (List α)))
-  /-- `+∞` (`neg = false`) or `-∞`: only the value of a `min` / `max`
-  reduction over no term (its identity, §4.3.1). `min` and `max` consume it;
-  every other op refuses it, as the scalar types have no infinities. -/
+  /-- `+∞` (`neg = false`) or `-∞`: the identity of an empty `min` / `max`
+  reduction (§4.3.1). Scalar extrema and Boolean FAQ terms consume it explicitly
+  because the exact scalar types have no infinity. -/
   | inf (neg : Bool)
 
 inductive EvalError where
@@ -530,6 +535,27 @@ def foldWhere (red : String) (js : List Int) (pred term : Int → Except EvalErr
   else if red = "max" then return (match r with | some x => .num x | none => .inf true)
   else .error (.unsupported s!"filtered faq with reduce {red}")
 
+/-- A numeric FAQ term counts as true exactly when it is not zero. Unlike
+a branch condition in this evaluator, an admitted NaN is true (§5.6.1). -/
+def nonzeroTerm : Val α → Except EvalError Bool
+  | .num v => return isNaN v || truthy v
+  | .inf _ => return true
+  | _ => throw (.typeError "expected a scalar")
+
+/-- An index range and the function that resolves its visiting order in the
+current environment. -/
+abbrev BoolRange (α : Type) := String × (Env α → Except EvalError (List Int))
+
+/-- Visit every combination in range order, while retaining any evaluation
+error from an admitted term even if a preceding term was true. -/
+def foldBoolRanges (term : Env α → Except EvalError Bool) :
+    List (BoolRange α) → Env α → Except EvalError Bool
+  | [], env => term env
+  | (k, bounds) :: rs, env => do
+    let js ← bounds env
+    Semiring.foldBoolM js
+      (fun j => foldBoolRanges term rs ((k, .num (Lits.ofDec j 0)) :: env))
+
 mutual
 
 /-- Evaluation of the modelled slice (§4.2, §4.3.1, §4.3.3). -/
@@ -547,6 +573,16 @@ def eval : Ast → Env α → Except EvalError (Val α)
       let vs ← evalList args env
       if hasInf vs then infMinMax o vs else return .num (← applyStrict o vs)
     | .other s => .error (.unsupported s)
+  | .faq [] "bool_and_or" rs body _, env => do
+    let ranges ← boolRanges rs
+    let b ← foldBoolRanges (fun e => do nonzeroTerm (← eval body e)) ranges env
+    return .num (ofBool b)
+  | .faqWhere [] "bool_and_or" rs p body _, env => do
+    let ranges ← boolRanges rs
+    let b ← foldBoolRanges (fun e => do
+      if truthy (← asNum (← eval p e)) then nonzeroTerm (← eval body e)
+      else pure false) ranges env
+    return .num (ofBool b)
   | .faq [] "+" (.cons k [s, t] .nil) body _, env => do
     -- §4.3.1: a `+` reduction over one dense range, seeded at `+0.0`, in index order
     let a ← asInt (← asNum (← eval s env))
@@ -610,6 +646,21 @@ def eval : Ast → Env α → Except EvalError (Val α)
   | .apply n _, _ => .error (.unsupported s!"apply_operator {n}: not expanded")
   | .faq _ _ _ _ _, _ =>
     .error (.unsupported "faq outside output_idx [], reduce + * min max, one dense [start, stop] or from range")
+
+/-- Resolve the two supported range forms without materializing the
+Cartesian product. -/
+def boolRanges : Ranges → Except EvalError (List (BoolRange α))
+  | .nil => return []
+  | .cons k [lo, hi] rest => do
+    let ranges ← boolRanges rest
+    return (k, fun env => do
+      let a ← asInt (← asNum (← eval lo env))
+      let b ← asInt (← asNum (← eval hi env))
+      return indices a b) :: ranges
+  | .fromSet k set rest => do
+    let ranges ← boolRanges rest
+    return (k, fun env => do return indices 1 (← setSize set env)) :: ranges
+  | .cons _ _ _ => throw (.unsupported "bool_and_or range outside dense [start, stop] or from set")
 
 def evalList : List Ast → Env α → Except EvalError (List (Val α))
   | [], _ => .ok []

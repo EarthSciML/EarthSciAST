@@ -133,6 +133,13 @@ with a pending question among its own clauses.
 - Problem: Does not say whether a document that does write an identity is invalid (rejected) or the field is ignored, so the verdict on such a document is unspecified.
 - Ruling: (pending)
 
+## Q-114 CONFORMANCE_SPEC.md §5.6.1: max_product carrier and domain policy
+- Clauses: `conf.5.6.identities-not-in-file`, `conf.5.6.3.empty-reduction-registry-identity`
+- Phase: 2
+- Found by: exact registry model (`Esm/Semiring/Laws.lean`).
+- Problem: The stated domain ℝ≥0 excludes −∞, the required empty reduction. Adjoining −∞ and making it absorb the abstract semiring product gives a closed algebra. The author writes multiplication as an ordinary numeric Expression (§4.8.3), where in binary64 multiplying an empty result of −∞ by zero gives NaN. The table also does not specify a validation or runtime verdict for a negative term. Ordinary multiplication over signed reals fails distributivity over max: with factors −1, 0 and 1, the two sides are −1 and 0.
+- Ruling: (pending) Clarify the distinction between the exact carrier and the executable empty result, and whether negative factors are rejected or only excluded from the algebraic guarantee.
+
 ## Q-18 CONFORMANCE_SPEC.md §7.1: unresolved order not unbound
 - Clauses: `conf.7.1.unresolved-order-not-unbound`
 - Phase: 2
