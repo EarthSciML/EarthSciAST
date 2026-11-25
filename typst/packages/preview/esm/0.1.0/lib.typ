@@ -21,24 +21,30 @@
 #let _template-kind = "esm-template"
 #let _rule-kind = "esm-rule"
 #let _reference-kind = "esm-reference"
+// Marks where a template's or rule's body ends.
+#let _figure-end = <esm-figure-end>
 
 // ---------------------------------------------------------------------------
 // References
 
-/// The citation key of a reference: its first author's surname and its year
-/// (`grell2005`), or `ref<n>` when the citation shows neither. A document cites
-/// a reference by this key (`@grell2005`); keys a document shares get `a`, `b`, …
+/// The citation key of a reference: its first author's surname (its letters, in
+/// any script, lowercased) and its year (`grell2005`, `müller2005`), or
+/// `ref<n>` when the citation shows neither. A document cites a reference by
+/// this key (`@grell2005`); keys a document shares get `a`, `b`, … `z`, then
+/// `-27`, `-28`, …
 #let _reference-keys(refs) = {
   let base = refs.enumerate().map(((i, r)) => {
     let c = if type(r) == dictionary { r.at("citation", default: "") } else { "" }
     if type(c) != str { c = "" }
-    let surname = lower(c.split(",").first()).replace(regex("[^a-z]"), "")
+    let surname = lower(c.split(",").first()).replace(regex("[^\p{L}]"), "")
     let year = c.find(regex("\b(1[5-9]|20)\d\d\b"))
     if surname == "" or year == none { "ref" + str(i + 1) } else { surname + year }
   })
+  let letters = "abcdefghijklmnopqrstuvwxyz"
   base.enumerate().map(((i, k)) => {
-    if base.filter(x => x == k).len() == 1 { k }
-    else { k + "abcdefghijklmnopqrstuvwxyz".at(base.slice(0, i).filter(x => x == k).len()) }
+    if base.filter(x => x == k).len() == 1 { return k }
+    let n = base.slice(0, i).filter(x => x == k).len()
+    if n < letters.len() { k + letters.at(n) } else { k + "-" + str(n + 1) }
   })
 }
 
@@ -57,7 +63,14 @@
       if url != none { [ #link(url)] }
       if rest.len() > 0 { block(text(0.9em, show-pairs(rest))) }
     } else { show-value(r) }
-    [#figure(kind: _reference-kind, supplement: none, numbering: "1", body) #label(key)]
+    let entry = figure(kind: _reference-kind, supplement: none, numbering: "1", body)
+    // A key the document already uses as a label of its own stays the
+    // document's: the entry goes unlabelled rather than make the label
+    // ambiguous.
+    context {
+      let taken = query(label(key)).any(e => not (e.func() == figure and e.kind == _reference-kind))
+      if taken { entry } else [#entry #label(key)]
+    }
   }
 }
 
@@ -133,6 +146,21 @@
     let el = it.element
     if el != none and el.func() == figure and el.kind == _reference-kind {
       link(it.target)[\[#numbering("1", ..el.counter.at(it.target))\]]
+    } else if el != none and el.func() == math.equation and el.numbering == none {
+      // An equation inside a template or rule is numbered by its figure, so a
+      // label on it refers to that figure.
+      let fig = query(
+        selector.or(figure.where(kind: _template-kind), figure.where(kind: _rule-kind))
+          .before(el.location()),
+      )
+      // The figure holds the equation when no figure ended between them.
+      let inside = fig.len() > 0 and query(
+        selector(_figure-end).after(fig.last().location()).before(el.location()),
+      ).len() == 0
+      if not inside { it } else {
+        let f = fig.last()
+        link(it.target)[#f.supplement #numbering("1", ..f.counter.at(f.location()))]
+      }
     } else { it }
   }
 
@@ -186,7 +214,9 @@
 
 // Declarations share their column widths, so consecutive ones line up as the
 // rows of one table: the name, then its kind, units and shape, then its
-// description and any other attributes.
+// description and any other attributes. A name wider than its column takes a
+// line of its own, the rest starting under it.
+#let _decl-name-width = 7em
 #let _decl(kind, name, attrs) = {
   let units = attrs.at("units", default: none)
   let shape = attrs.at("shape", default: none)
@@ -195,18 +225,22 @@
   let facts = (text(fill: _muted, _kind-names.at(kind)),)
   if units != none { facts.push(raw(show-value(units))) }
   if shape != none { facts.push(raw(show-value(shape))) }
-  block(
-    breakable: false,
-    above: 0.9em,
+  let facts = facts.join(h(0.4em) + text(fill: _faint)[|] + h(0.4em))
+  block(breakable: false, above: 0.9em, context {
+    let first = if measure([#name]).width <= _decl-name-width.to-absolute() {
+      ([#name], facts)
+    } else {
+      (grid.cell(colspan: 2, [#name]), none, facts)
+    }
     grid(
-      columns: (7em, 1fr),
+      columns: (_decl-name-width, 1fr),
       column-gutter: 1em,
       row-gutter: 0.45em,
-      [#name], facts.join(h(0.4em) + text(fill: _faint)[|] + h(0.4em)),
+      ..first,
       ..if desc != none { (none, text(0.95em, show-value(desc))) },
       ..if rest.len() > 0 { (none, text(0.9em, _attr-rows(rest).join(h(1em)))) },
-    ),
-  )
+    )
+  })
 }
 
 /// A variable declaration: the name in math, then its attributes.
@@ -287,15 +321,25 @@
   } else { (raw(n), [], raw(show-value(m)), []) }),
 )
 
-/// Definition and coupling imports: each `ref` with what it binds or renames.
-#let _imports(v) = list(..v.map(i => if type(i) == dictionary {
+/// Definition and coupling imports: each `ref` with what it binds or renames. A
+/// coupling entry keys its imports by the system they go to: one list per system.
+#let _imports(v) = if type(v) == dictionary {
+  grid(
+    columns: (auto, 1fr),
+    column-gutter: 0.6em,
+    row-gutter: 0.45em,
+    ..v.pairs().map(((k, x)) => (raw(k + ":"), if type(x) == array { _imports(x) } else {
+      raw(show-value(x))
+    })).flatten(),
+  )
+} else { list(..v.map(i => if type(i) == dictionary {
   let r = i.at("ref", default: none)
   let b = i.at("bindings", default: none)
   let rest = i.pairs().filter(((k, _)) => k not in ("ref", "bindings"))
   [#if r != none { raw(show-value(r)) }#if type(b) == dictionary and b.len() > 0 {
     [ with ] + b.pairs().map(((k, x)) => show-expr(k) + $=$ + show-expr(x)).join[, ]
   }#if rest.len() > 0 { linebreak() + text(0.9em, _attr-rows(rest).join(h(1em))) }]
-} else { raw(show-value(i)) }))
+} else { raw(show-value(i)) })) }
 
 /// The renderers of the path blocks with a layout of their own, by the last
 /// segment of their path. Every other block is shown as JSON.
@@ -324,6 +368,8 @@
   block(sticky: true, heading(level: 2, outlined: false, _block-title(path)))
   if layout-of != none and type(value) in (dictionary, array) and not _has-math(value) {
     layout-of(value)
+  } else if type(value) == content {
+    _block-value(value)
   } else if type(value) not in (dictionary, array) {
     raw(json.encode(value))
   } else {
@@ -382,6 +428,7 @@
       set math.equation(numbering: none)
       body
       _fields(a.pairs().filter(((k, _)) => k != "description"))
+      [#metadata(none) #_figure-end]
     },
   )
 }
@@ -401,6 +448,7 @@
       text(0.9em, raw(name))
       math.equation(block: true, $#lhs arrow.r.double #rhs$)
       _fields(a.pairs().filter(((k, _)) => k != "description"))
+      [#metadata(none) #_figure-end]
     },
   )
 }
