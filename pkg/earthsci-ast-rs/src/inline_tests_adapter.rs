@@ -30,8 +30,10 @@
 //! drive exactly the path the binary runs — the same split
 //! [`crate::compiler_agreement_adapter`] uses.
 
+use std::io::{self, BufRead, Write};
 use std::path::Path;
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub use crate::adapter_support::Report;
@@ -185,6 +187,69 @@ pub fn run_manifest(manifest_path: &Path, compiler: Compiler) -> Result<Report, 
     adapter_support::run_manifest(&InlineTests(compiler), manifest_path)
 }
 
+#[derive(Deserialize)]
+struct ProbeRequest {
+    document: Value,
+    requests: Vec<ProbeAssertion>,
+}
+
+#[derive(Deserialize)]
+struct ProbeAssertion {
+    test_id: String,
+    assertion_idx: usize,
+}
+
+fn probe_values(line: &[u8]) -> Result<Vec<String>, String> {
+    let request: ProbeRequest =
+        serde_json::from_slice(line).map_err(|error| format!("invalid request: {error}"))?;
+    let file = crate::load_document(&request.document).map_err(|e| format!("load: {e:?}"))?;
+    let options = InlineTestOptions {
+        model_name: Some("Probe".to_owned()),
+        compiler: Some(Compiler::Interpreter),
+        ..Default::default()
+    };
+    let results = run_inline_tests_with_options(&file, &options);
+    request
+        .requests
+        .iter()
+        .map(|assertion| {
+            let result = results
+                .iter()
+                .find(|r| {
+                    r.test_id == assertion.test_id && r.assertion_idx == assertion.assertion_idx
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "missing Probe assertion {:?} at index {}",
+                        assertion.test_id, assertion.assertion_idx
+                    )
+                })?;
+            // The expected value in a generated probe is a placeholder.
+            result
+                .actual
+                .map(|value| value.to_bits().to_string())
+                .ok_or_else(|| result.message.clone())
+        })
+        .collect()
+}
+
+/// Run a stream of generated scalar probes through the inline-test runner.
+/// A response contains raw binary64 bits in request order or the error for
+/// that input line. Flush each response so a caller can submit one case at a
+/// time while keeping the same interpreter process.
+pub fn run_jsonl(input: impl BufRead, mut output: impl Write) -> io::Result<()> {
+    for line in input.split(b'\n') {
+        let response = match probe_values(&line?) {
+            Ok(values) => json!({ "values": values }),
+            Err(error) => json!({ "error": error }),
+        };
+        serde_json::to_writer(&mut output, &response)?;
+        writeln!(output)?;
+        output.flush()?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +267,73 @@ mod tests {
         assert_eq!(
             refusal_code("build: E_TREEWALK_CONSTARRAY_OOB at cell 5"),
             Some("E_TREEWALK_CONSTARRAY_OOB".to_string())
+        );
+    }
+
+    #[test]
+    fn jsonl_keeps_request_order_and_continues_after_bad_input() {
+        let request = json!({
+            "document": {
+                "esm": "2.4.0",
+                "metadata": { "name": "ScalarProbe", "description": "JSONL adapter probe" },
+                "models": {
+                    "Probe": {
+                        "variables": {
+                            "x": { "type": "parameter", "units": "1", "description": "Input", "default": 1.5 },
+                            "positive": { "type": "unknown", "units": "1", "description": "Positive value" },
+                            "negative": { "type": "unknown", "units": "1", "description": "Negative value" }
+                        },
+                        "equations": [
+                            { "lhs": "positive", "rhs": "x" },
+                            { "lhs": "negative", "rhs": { "op": "-", "args": ["x"] } }
+                        ],
+                        "tests": [{
+                            "id": "probe",
+                            "time_span": { "start": 0, "end": 1 },
+                            "assertions": [
+                                { "variable": "positive", "time": 0, "expected": 0 },
+                                { "variable": "negative", "time": 0, "expected": 0 }
+                            ]
+                        }]
+                    }
+                }
+            },
+            "requests": [
+                { "test_id": "probe", "assertion_idx": 2 },
+                { "test_id": "probe", "assertion_idx": 1 }
+            ]
+        });
+        let missing_assertion = json!({
+            "document": request["document"],
+            "requests": [{ "test_id": "probe", "assertion_idx": 3 }]
+        });
+        let input = format!("{{bad JSON}}\n{missing_assertion}\n{request}\n");
+        let mut output = Vec::new();
+        run_jsonl(input.as_bytes(), &mut output).expect("adapter streams responses");
+        let responses: Vec<Value> = std::str::from_utf8(&output)
+            .expect("UTF-8")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("one JSON response per line"))
+            .collect();
+        assert_eq!(responses.len(), 3);
+        assert!(
+            responses[0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("invalid request")
+        );
+        assert!(
+            responses[1]["error"]
+                .as_str()
+                .unwrap()
+                .contains("missing Probe assertion")
+        );
+        assert_eq!(
+            responses[2]["values"],
+            json!([
+                (-1.5f64).to_bits().to_string(),
+                1.5f64.to_bits().to_string()
+            ])
         );
     }
 
