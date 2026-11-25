@@ -1,5 +1,7 @@
 import Esm.Closed.Interp.Template
+import Esm.Float64.Decimal
 import Mathlib.Analysis.SpecialFunctions.Complex.Arg
+import Mathlib.Analysis.SpecialFunctions.Pow.Real
 
 /-!
 # The ESM Expression AST and its evaluator (esm-spec §4.1–4.3), first slice
@@ -9,7 +11,7 @@ Expression AST of §4.1 and an evaluator over the scalar types of
 `Esm/Closed/Interp.lean` (`Scalar`), so the same code runs at the exact `Num`,
 at the binary64 `Bin64`, and at the adapter's `Float`.
 
-The evaluator covers exactly the slice the `lib/interp.esm` templates use:
+The evaluator covers the scalar operations and the array operations below:
 
 * numeric literals (a JSON number `m · 10^-e`, rounded as the scalar type
   rounds, `Lits.ofDec`);
@@ -24,8 +26,9 @@ The evaluator covers exactly the slice the `lib/interp.esm` templates use:
   as `1`/`0` in a numeric position), `and`, `or`, `not` (an operand holds when
   it is a nonzero number) and `ifelse`, which evaluates only the branch it
   takes (§4.3.3 "Only a read that happens can fault");
-* the elementary functions `floor`, `abs`, `sqrt`, `sin`, `cos` and `atan2`,
-  through the `Elem` operations of the scalar type;
+* the boolean literals `true` / `false`, `sign`, and the elementary functions
+  `^`, `floor`, `ceil`, `abs`, `sqrt`, `sin`, `cos`, `tan`, `atan2`, `exp`, `log`
+  and `log10`, through the scalar operations or `Elem`;
 * `min` / `max`, n-ary with arity ≥ 2, left folds, NaN-propagating (§4.2: IEEE
   754-2019 `minimum`/`maximum`, not `minNum`/`maxNum`);
 * `index` on a rank-1, rank-2 or rank-3 array, 1-based, each index a value holding an
@@ -78,9 +81,7 @@ noncomputable instance : Lits Bin64 where
     | .nan => none
 
 instance : Lits Float where
-  ofDec m e :=
-    let v := Float.ofScientific m.natAbs true e
-    if m < 0 then -v else v
+  ofDec := Esm.F64.Decimal.toFloat
   toInt? x :=
     if x.isFinite && x.floor == x && x.abs < 9.0e15 then
       some (if x < 0 then -((-x).toUInt64.toNat : Int) else (x.toUInt64.toNat : Int))
@@ -96,6 +97,12 @@ idealisation of a binding's libm); at `Float` they are Lean's `Float`
 functions. NaN propagates, and `sqrt` of a negative number is NaN. -/
 class Elem (α : Type) where
   floor : α → α
+  ceil : α → α
+  exp : α → α
+  log : α → α
+  log10 : α → α
+  pow : α → α → α
+  tan : α → α
   abs : α → α
   neg : α → α
   sqrt : α → α
@@ -108,8 +115,22 @@ class Elem (α : Type) where
 real `atan2(y, x)`. -/
 noncomputable def realAtan2 (y x : ℝ) : ℝ := Complex.arg ⟨x, y⟩
 
+/-- A negative real base has a real power only for integral exponents in
+this model. The exact model represents out-of-domain results as NaN. -/
+noncomputable def realPow (a b : ℝ) : Num :=
+  if a < 0 then
+    if ((⌊b⌋ : ℤ) : ℝ) = b then .fin (a ^ (⌊b⌋ : ℤ)) else .nan
+  else if a = 0 ∧ b < 0 then .nan
+  else .fin (Real.rpow a b)
+
 noncomputable instance : Elem Num where
   floor | .fin r => .fin ⌊r⌋ | .nan => .nan
+  ceil | .fin r => .fin ⌈r⌉ | .nan => .nan
+  exp | .fin r => .fin (Real.exp r) | .nan => .nan
+  log | .fin r => if 0 < r then .fin (Real.log r) else .nan | .nan => .nan
+  log10 | .fin r => if 0 < r then .fin (Real.log r / Real.log 10) else .nan | .nan => .nan
+  pow | .fin a, .fin b => realPow a b | _, _ => .nan
+  tan | .fin r => .fin (Real.tan r) | .nan => .nan
   abs | .fin r => .fin |r| | .nan => .nan
   neg | .fin r => .fin (-r) | .nan => .nan
   sqrt | .fin r => if r < 0 then .nan else .fin (Real.sqrt r) | .nan => .nan
@@ -119,6 +140,16 @@ noncomputable instance : Elem Num where
 
 noncomputable instance : Elem Bin64 where
   floor | .fin r => .fin ⌊r⌋ | .nan => .nan
+  ceil | .fin r => .fin ⌈r⌉ | .nan => .nan
+  exp | .fin r => .fin (Esm.F64.rn (Real.exp r)) | .nan => .nan
+  log | .fin r => if 0 < r then .fin (Esm.F64.rn (Real.log r)) else .nan | .nan => .nan
+  log10 | .fin r => if 0 < r then .fin (Esm.F64.rn (Real.log r / Real.log 10)) else .nan | .nan => .nan
+  pow
+    | .fin a, .fin b => match realPow a b with
+      | .fin r => .fin (Esm.F64.rn r)
+      | .nan => .nan
+    | _, _ => .nan
+  tan | .fin r => .fin (Esm.F64.rn (Real.tan r)) | .nan => .nan
   abs | .fin r => .fin |r| | .nan => .nan
   neg | .fin r => .fin (-r) | .nan => .nan
   sqrt | .fin r => if r < 0 then .nan else .fin (Esm.F64.rn (Real.sqrt r)) | .nan => .nan
@@ -128,6 +159,12 @@ noncomputable instance : Elem Bin64 where
 
 instance : Elem Float where
   floor := Float.floor
+  ceil := Float.ceil
+  exp := Float.exp
+  log := Float.log
+  log10 := Float.log10
+  pow := Float.pow
+  tan := Float.tan
   abs := Float.abs
   neg := fun x => -x
   sqrt := Float.sqrt
@@ -291,6 +328,7 @@ but `ifelse`). -/
 inductive StrictOp where
   | index | add | mul | sub | div | le | ge | lt | gt | max | min
   | eq | ne | and | or | not | neg | floor | abs | sqrt | sin | cos | atan2
+  | pow | sign | ceil | exp | log | log10 | tan | bool (value : Bool)
   deriving DecidableEq
 
 /-- How an `op` string is dispatched. -/
@@ -306,6 +344,7 @@ def Op.ofString (s : String) : Op :=
   else if s = "*" then .strict .mul
   else if s = "-" then .strict .sub
   else if s = "/" then .strict .div
+  else if s = "^" || s = "pow" then .strict .pow
   else if s = "<=" then .strict .le
   else if s = ">=" then .strict .ge
   else if s = "<" then .strict .lt
@@ -324,6 +363,14 @@ def Op.ofString (s : String) : Op :=
   else if s = "sin" then .strict .sin
   else if s = "cos" then .strict .cos
   else if s = "atan2" then .strict .atan2
+  else if s = "sign" then .strict .sign
+  else if s = "ceil" then .strict .ceil
+  else if s = "exp" then .strict .exp
+  else if s = "log" then .strict .log
+  else if s = "log10" then .strict .log10
+  else if s = "tan" then .strict .tan
+  else if s = "true" then .strict (.bool true)
+  else if s = "false" then .strict (.bool false)
   else .other s
 
 /-- A strict op on its evaluated operands. -/
@@ -384,6 +431,16 @@ def applyStrict : StrictOp → List (Val α) → Except EvalError α
   | .sin, [a] => do return Elem.sin (← asNum a)
   | .cos, [a] => do return Elem.cos (← asNum a)
   | .atan2, [a, b] => do return Elem.atan2 (← asNum a) (← asNum b)
+  | .pow, [a, b] => do return Elem.pow (← asNum a) (← asNum b)
+  | .sign, [a] => do
+    let x ← asNum a
+    return if lt x zero then Elem.neg one else if lt zero x then one else x
+  | .ceil, [a] => do return Elem.ceil (← asNum a)
+  | .exp, [a] => do return Elem.exp (← asNum a)
+  | .log, [a] => do return Elem.log (← asNum a)
+  | .log10, [a] => do return Elem.log10 (← asNum a)
+  | .tan, [a] => do return Elem.tan (← asNum a)
+  | .bool b, [] => .ok (ofBool b)
   | _, _ => .error (.typeError "operand count")
 
 /-- Some operand is an infinity (the value of an empty `min` / `max`). -/

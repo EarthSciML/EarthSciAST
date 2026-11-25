@@ -30,8 +30,18 @@ It serves two purposes:
 
 ## Building locally
 
-The toolchain and Mathlib cache are large. On the cluster, keep them on
-`/projects` or `/scratch` — never `/` or `/tmp`, which are RAM-backed:
+On the Illinois cluster, the pinned Lean and Mathlib install lives on project
+storage. Use it from an EarthSciAST checkout with matching dependency pins.
+
+```bash
+lean_bundle=/projects/illinois/eng/cee/ctessum/ctessum/libs/earthsci-lean/v4.35.0
+source "$lean_bundle/env.sh"
+"$lean_bundle/attach" formal
+(cd formal && lake build)
+```
+
+`attach` checks the toolchain and manifest before linking the shared package
+cache. A fresh installation needs a filesystem with room for several GB.
 
 ```bash
 export ELAN_HOME=/projects/illinois/eng/cee/ctessum/ctessum/libs/elan
@@ -41,6 +51,25 @@ lake exe cache get   # prebuilt Mathlib; never build Mathlib from source
 lake build
 python3 ../scripts/formal-audit.py all
 ```
+
+## Static scalar conformance
+
+The Lean adapter reads the original ESM documents and evaluates scalar
+observations at the authored times and parameter overrides. To score it against
+the current inline-test goldens, run the shared harness from the repository
+root after `lake build`.
+
+```bash
+EARTHSCI_INLINE_TESTS_ADAPTER_LEAN="python3 scripts/run-lean-inline-tests.py" \
+  python3 scripts/run-inline-tests-conformance.py \
+  --manifest tests/conformance/scalar_operator_semantics/manifest.json \
+  --bindings lean --compiler interpreter
+```
+
+The report lists integrated state assertions and out-of-scope fixtures as
+exclusions. The `static-assertions` executable mode also accepts a JSON array
+of `{test_id, assertion_idx}` requests on stdin and returns binary64 bit
+patterns in the same order.
 
 ## Rules
 

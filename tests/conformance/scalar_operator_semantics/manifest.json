@@ -63,7 +63,10 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [],
+      "lean_assertion_exclusions": {
+        "probe": "The probe is an integrated state."
+      }
     },
     {
       "id": "boolean_literal_false",
@@ -91,7 +94,10 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [],
+      "lean_assertion_exclusions": {
+        "probe": "The probe is an integrated state."
+      }
     },
     {
       "id": "pow_alias",
@@ -119,7 +125,10 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [],
+      "lean_assertion_exclusions": {
+        "probe": "The probe is an integrated state."
+      }
     },
     {
       "id": "boolean_literal_true",
@@ -147,7 +156,10 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [],
+      "lean_assertion_exclusions": {
+        "probe": "The probe is an integrated state."
+      }
     },
     {
       "id": "angle_array_element",
@@ -177,7 +189,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "Angle conversion and shaped variables are outside the scalar model."
+        }
+      ]
     },
     {
       "id": "angle_nested_fields",
@@ -208,7 +229,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "Angle conversion and shaped variables are outside the scalar model."
+        }
+      ]
     },
     {
       "id": "pre_passthrough",
@@ -236,7 +266,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "Pre and its event semantics are outside the scalar model."
+        }
+      ]
     }
   ]
 }

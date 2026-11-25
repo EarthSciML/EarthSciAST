@@ -6903,6 +6903,12 @@ An exclusion that no longer excludes anything — the binding ran the fixture
 cleanly — is reported as a **stale-exclusion note**, not a failure. Failing the
 binding that got better is the one way a ratchet can run backwards.
 
+The optional Lean interpreter can score the scalar part of a fixture through
+`lean_assertion_exclusions`. This manifest field maps assertion variable names
+to reasons for excluding them from the Lean interpreter's coverage. The runner
+reports every such assertion by test ID and index. The complete fixture still
+runs through the ordinary binding adapters with the same golden.
+
 #### 5.45.4 The tiers of this family
 
 | Tier | What it gates |
