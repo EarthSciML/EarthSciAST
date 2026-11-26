@@ -257,13 +257,16 @@ impl DataProvider for LinearProvider {
     }
     fn refresh_times(&self) -> Vec<f64> {
         let mut out = self.times.clone();
-        if let Some(t) = self.primed_at {
-            if !out.contains(&t) {
-                out.push(t);
-                out.sort_by(f64::total_cmp);
-            }
+        if let Some(t) = self.primed_at
+            && !out.contains(&t)
+        {
+            out.push(t);
+            out.sort_by(f64::total_cmp);
         }
         out
+    }
+    fn primed(&self) -> bool {
+        self.primed_at.is_some()
     }
 }
 

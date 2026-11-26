@@ -857,7 +857,7 @@ impl Rewriter<'_> {
                     _ => None,
                 })
                 .collect();
-            let lowered = membership_read(regions, values, subs, &lane_of, self.axes)
+            let lowered = membership_read(regions, values, subs, &lane_of, self.axes, self.sizes)
                 .map_err(|why| refused(format!("lane: rule `{}` {why}", self.rule)))?;
             return self.expr(&lowered, sc);
         }
@@ -1780,12 +1780,17 @@ fn op_node(op: &str, args: Vec<Expr>) -> Expr {
 
 /// `index(makearray(regions, values), subs…)` as region membership:
 /// `ifelse(in_k, value_k at subs, …ifelse(in_1, value_1 at subs, 0))`, the
-/// last region holding the element winning (esm-spec §4.3.2). A region value
-/// is a scalar expression (the same at every element) or an array `faq`
-/// whose output indices span either every dimension of its region or only
-/// its non-singleton ones, starting at its ranges' lower bounds; it is read
-/// at `sub − lo + start` on each dimension it spans. Anything else is an
-/// error, which the caller refuses.
+/// last region holding the element winning (esm-spec §4.3.2). The assembled
+/// array must start at 1 along every axis, so a subscript is the element's
+/// coordinate. A region value is a scalar expression (the same at every
+/// element) or an array `faq` whose output indices span either every
+/// dimension of its region or only its non-singleton ones, each over a unit
+/// stride range exactly as long as its region dimension; it is read at
+/// `sub − lo + start` on each dimension it spans. A `faq` value carrying a
+/// `key`, `args`, `join` or `distinct`, one whose contraction runs over a set
+/// of an output index, and one whose contraction (or any nested binder)
+/// would capture a subscript are refused too. Anything else is an error,
+/// which the caller refuses.
 ///
 /// Inside a region one cell thick along a lane set (`lo == hi`), the lane's
 /// coordinate there is `lo`, so a read of a state or array observed at the
@@ -1797,10 +1802,13 @@ fn membership_read(
     subs: &[Expr],
     lane_of: &[Option<String>],
     axes: &HashMap<String, Vec<Option<String>>>,
+    sizes: &HashMap<String, i64>,
 ) -> Result<Expr, String> {
+    use crate::types::RangeSpec;
     let int = |k: i64| Expr::Integer(k);
-    let mut out = Expr::Number(0.0);
-    for (region, value) in regions.iter().zip(values) {
+    // Every region's numeric bounds, checked before any is lowered.
+    let mut all_bounds: Vec<Vec<[i64; 2]>> = Vec::with_capacity(regions.len());
+    for region in regions {
         if region.len() != subs.len() {
             return Err("reads a makearray at the wrong rank".into());
         }
@@ -1811,8 +1819,33 @@ fn membership_read(
             };
             bounds.push(lh);
         }
+        all_bounds.push(bounds);
+    }
+    for d in 0..subs.len() {
+        if all_bounds
+            .iter()
+            .map(|b| b[d][0])
+            .min()
+            .is_some_and(|o| o != 1)
+        {
+            return Err("holds a makearray that does not start at 1".into());
+        }
+    }
+    // The names the subscripts mention: a binder of one of them in a region
+    // value would capture the subscript once it is substituted in.
+    let sub_names: HashSet<String> = subs
+        .iter()
+        .flat_map(|e| crate::binders::free_names(e, crate::binders::Binders::BODY))
+        .collect();
+    let range_bounds = |r: &RangeSpec| match r {
+        RangeSpec::Interval([lo, hi]) => Some((*lo, *hi)),
+        RangeSpec::IndexSetRef { from, of: None } => sizes.get(from).map(|&n| (1, n)),
+        _ => None,
+    };
+    let mut out = Expr::Number(0.0);
+    for (bounds, value) in all_bounds.iter().zip(values) {
         let mut conds = Vec::new();
-        for (s, [lo, hi]) in subs.iter().zip(&bounds) {
+        for (s, [lo, hi]) in subs.iter().zip(bounds) {
             if lo == hi {
                 conds.push(op_node("==", vec![s.clone(), int(*lo)]));
             } else {
@@ -1820,23 +1853,24 @@ fn membership_read(
                 conds.push(op_node("<=", vec![s.clone(), int(*hi)]));
             }
         }
-        // The lane sets this region is one cell thick along: (set, lo, sub).
-        let thin: Vec<(&str, i64, &Expr)> = (0..subs.len())
-            .filter_map(|d| {
-                let set = lane_of[d].as_deref()?;
-                (bounds[d][0] == bounds[d][1]).then_some((set, bounds[d][0], &subs[d]))
-            })
-            .collect();
-        let value = &retarget_thin(value, &thin, axes);
         let read = match value {
             Expr::Operator(f)
                 if f.op == "faq" && f.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
             {
+                if f.key.is_some()
+                    || !f.args.is_empty()
+                    || f.join.as_ref().is_some_and(|j| !j.is_empty())
+                    || f.distinct == Some(true)
+                {
+                    return Err("holds a faq region value that carries a `key`, `args`, \
+                                `join` or `distinct`, which a lane does not rewrite"
+                        .into());
+                }
                 let outs = f.output_idx.as_deref().unwrap_or_default();
-                let dims: Vec<usize> = if outs.len() == region.len() {
-                    (0..region.len()).collect()
+                let dims: Vec<usize> = if outs.len() == bounds.len() {
+                    (0..bounds.len()).collect()
                 } else {
-                    (0..region.len())
+                    (0..bounds.len())
                         .filter(|&d| bounds[d][0] != bounds[d][1])
                         .collect()
                 };
@@ -1845,18 +1879,26 @@ fn membership_read(
                 }
                 // The value's element at the read: its body with each output
                 // index renamed to the subscript, shifted onto the value's
-                // own range (`sub - lo + start`). Inside the region's
-                // condition the subscript lies in the region, so the value's
-                // range need not span the lane set.
+                // own range (`sub - lo + start`). Each output range must be
+                // exactly as long as its region dimension, so the shifted
+                // subscript stays inside it.
                 let ranges = f.ranges.clone().unwrap_or_default();
                 let mut renames: HashMap<String, Expr> = HashMap::new();
                 for (o, &d) in outs.iter().zip(&dims) {
-                    let start = match ranges.get(o) {
-                        Some(crate::types::RangeSpec::Interval([lo, _])) => *lo,
-                        Some(crate::types::RangeSpec::Strided([lo, _, _])) => *lo,
-                        _ => 1,
+                    let [lo, hi] = bounds[d];
+                    let Some((start, end)) = ranges.get(o).and_then(range_bounds) else {
+                        return Err(format!(
+                            "holds a faq region value whose axis `{o}` does not run over a unit \
+                             stride range"
+                        ));
                     };
-                    let shift = start - bounds[d][0];
+                    if end - start != hi - lo {
+                        return Err(format!(
+                            "holds a faq region value whose axis `{o}` does not run over its \
+                             region {lo}..{hi}"
+                        ));
+                    }
+                    let shift = start - lo;
                     renames.insert(
                         o.clone(),
                         if shift == 0 {
@@ -1866,19 +1908,32 @@ fn membership_read(
                         },
                     );
                 }
-                let free: HashSet<String> = renames
-                    .values()
-                    .flat_map(|e| crate::binders::free_names(e, crate::binders::Binders::BODY))
-                    .collect();
-                let Some(body) = f.expr.as_deref() else {
-                    return Err("holds a faq region value with no body".into());
-                };
-                let body = rename_free(body, &renames, &free)?;
-                let contracted: HashMap<String, crate::types::RangeSpec> = ranges
+                let contracted: HashMap<String, RangeSpec> = ranges
                     .iter()
                     .filter(|(k, _)| !outs.contains(k))
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
+                if contracted.keys().any(|k| sub_names.contains(k)) {
+                    return Err("holds a faq region value whose contraction rebinds a \
+                                subscript"
+                        .into());
+                }
+                for r in contracted.values() {
+                    let parents = match r {
+                        RangeSpec::IndexSetRef { of: Some(of), .. }
+                        | RangeSpec::RaggedDyn { of, .. } => of.as_slice(),
+                        _ => &[],
+                    };
+                    if parents.iter().any(|p| outs.contains(p)) {
+                        return Err("holds a faq region value whose contraction runs over a \
+                                    set of one of its output indices"
+                            .into());
+                    }
+                }
+                let Some(body) = f.expr.as_deref() else {
+                    return Err("holds a faq region value with no body".into());
+                };
+                let body = rename_free(body, &renames, &sub_names)?;
                 if contracted.is_empty() && f.filter.is_none() {
                     body
                 } else {
@@ -1887,7 +1942,7 @@ fn membership_read(
                     g.ranges = Some(contracted);
                     g.expr = Some(Box::new(body));
                     if let Some(fl) = f.filter.as_deref() {
-                        g.filter = Some(Box::new(rename_free(fl, &renames, &free)?));
+                        g.filter = Some(Box::new(rename_free(fl, &renames, &sub_names)?));
                     }
                     Expr::operator(g)
                 }
@@ -1897,6 +1952,16 @@ fn membership_read(
             }
             _ => value.clone(),
         };
+        // The lane sets this region is one cell thick along: (set, lo, sub).
+        // Retargeted after the rename, so a subscript it writes in is not
+        // renamed again.
+        let thin: Vec<(&str, i64, &Expr)> = (0..subs.len())
+            .filter_map(|d| {
+                let set = lane_of[d].as_deref()?;
+                (bounds[d][0] == bounds[d][1]).then_some((set, bounds[d][0], &subs[d]))
+            })
+            .collect();
+        let read = retarget_thin(&read, &thin, axes, &HashSet::new())?;
         let cond = if conds.len() == 1 {
             conds.pop().expect("one")
         } else {
@@ -1909,38 +1974,65 @@ fn membership_read(
 
 /// `e` with every `index(v, …)` whose subscript on an axis of lane set `set`
 /// is the literal `lo` of a `thin` entry read at that entry's subscript
-/// instead ([`membership_read`]).
+/// instead ([`membership_read`]). `bound` holds the names the binders
+/// enclosing `e` bind; writing a subscript in under a binder of one of its
+/// names would capture it, which is an error.
 fn retarget_thin(
     e: &Expr,
     thin: &[(&str, i64, &Expr)],
     axes: &HashMap<String, Vec<Option<String>>>,
-) -> Expr {
+    bound: &HashSet<String>,
+) -> Result<Expr, String> {
     if thin.is_empty() {
-        return e.clone();
+        return Ok(e.clone());
     }
     let Expr::Operator(n) = e else {
-        return e.clone();
+        return Ok(e.clone());
     };
-    let mut out = ExpressionNode::clone(n);
-    let mut f = |c: &Expr| retarget_thin(c, thin, axes);
-    out = out.map_children(&mut f);
-    if out.op == "index" {
-        if let Some(Expr::Variable(v)) = out.args.first() {
-            if let Some(ax) = axes.get(v) {
-                for (p, a) in ax.iter().enumerate() {
-                    let Some(set) = a.as_deref() else { continue };
-                    if let Some(arg) = out.args.get_mut(p + 1) {
-                        if let Some((_, _, sub)) = thin.iter().find(|(s, lo, _)| {
-                            *s == set && matches!(arg, Expr::Integer(k) if k == lo)
-                        }) {
-                            *arg = (*sub).clone();
-                        }
-                    }
-                }
+    let mut inner = bound.clone();
+    if let Some(r) = n.ranges.as_ref() {
+        inner.extend(r.keys().cloned());
+    }
+    let mut err = None;
+    let mut out = ExpressionNode::clone(n).map_children(&mut |c: &Expr| match retarget_thin(
+        c, thin, axes, &inner,
+    ) {
+        Ok(x) => x,
+        Err(m) => {
+            err.get_or_insert(m);
+            c.clone()
+        }
+    });
+    if let Some(m) = err {
+        return Err(m);
+    }
+    if out.op == "index"
+        && let Some(Expr::Variable(v)) = out.args.first()
+        && let Some(ax) = axes.get(v)
+    {
+        for (p, a) in ax.iter().enumerate() {
+            let Some(set) = a.as_deref() else { continue };
+            let Some(arg) = out.args.get_mut(p + 1) else {
+                continue;
+            };
+            let Some((_, _, sub)) = thin
+                .iter()
+                .find(|(s, lo, _)| *s == set && matches!(arg, Expr::Integer(k) if k == lo))
+            else {
+                continue;
+            };
+            if crate::binders::free_names(sub, crate::binders::Binders::BODY)
+                .iter()
+                .any(|x| bound.contains(x))
+            {
+                return Err(
+                    "holds a region value whose binder would capture a lane subscript".into(),
+                );
             }
+            *arg = (*sub).clone();
         }
     }
-    Expr::operator(out)
+    Ok(Expr::operator(out))
 }
 
 /// `e` with each free variable of `renames` replaced, capture-avoiding: a
@@ -1990,5 +2082,111 @@ fn rename_free(
             }
         }
         _ => Ok(e.clone()),
+    }
+}
+
+#[cfg(test)]
+mod membership_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn e(v: serde_json::Value) -> Expr {
+        serde_json::from_value(v).expect("expression")
+    }
+
+    /// `membership_read` over the lane subscript `i` (lane set `lev`, 4
+    /// cells) and, for rank 2, the loop symbol `j`.
+    fn lower(regions: serde_json::Value, values: Vec<serde_json::Value>) -> Result<Expr, String> {
+        let regions: Vec<Vec<[RegionBound; 2]>> = serde_json::from_value(regions).expect("regions");
+        let rank = regions[0].len();
+        let subs: Vec<Expr> = ["i", "j"][..rank].iter().map(|s| e(json!(s))).collect();
+        let lane_of: Vec<Option<String>> = (0..rank)
+            .map(|d| (d == 0).then(|| "lev".to_string()))
+            .collect();
+        let axes = HashMap::from([("x".to_string(), vec![Some("lev".to_string())])]);
+        let sizes = HashMap::from([("lev".to_string(), 4)]);
+        let values: Vec<Expr> = values.into_iter().map(e).collect();
+        membership_read(&regions, &values, &subs, &lane_of, &axes, &sizes)
+    }
+
+    fn faq(
+        output: &[&str],
+        ranges: serde_json::Value,
+        body: serde_json::Value,
+    ) -> serde_json::Value {
+        json!({"op": "faq", "args": [], "output_idx": output, "ranges": ranges, "expr": body})
+    }
+
+    #[test]
+    fn faq_value_shifted_onto_its_own_range() {
+        let v = faq(
+            &["a"],
+            json!({"a": [1, 2]}),
+            json!({"op": "index", "args": ["B", "a"]}),
+        );
+        let out = lower(json!([[[1, 1]], [[2, 3]]]), vec![json!(0.5), v]).expect("lowers");
+        let s = serde_json::to_string(&out).unwrap();
+        assert!(s.contains(r#"{"op":"+","args":["i",-1]}"#), "{s}");
+    }
+
+    #[test]
+    fn faq_value_shorter_than_its_region_is_refused() {
+        let v = faq(
+            &["a"],
+            json!({"a": [1, 2]}),
+            json!({"op": "index", "args": ["B", "a"]}),
+        );
+        let err = lower(json!([[[1, 4]]]), vec![v]).unwrap_err();
+        assert!(err.contains("does not run over its region"), "{err}");
+    }
+
+    #[test]
+    fn strided_output_range_is_refused() {
+        let v = faq(
+            &["a"],
+            json!({"a": [1, 2, 7]}),
+            json!({"op": "index", "args": ["B", "a"]}),
+        );
+        let err = lower(json!([[[1, 4]]]), vec![v]).unwrap_err();
+        assert!(err.contains("unit stride"), "{err}");
+    }
+
+    #[test]
+    fn contraction_rebinding_a_subscript_is_refused() {
+        let body = json!({"op": "*", "args": [
+            {"op": "index", "args": ["B", "a"]},
+            {"op": "index", "args": ["C", "j"]}]});
+        let v = faq(&["a"], json!({"a": [1, 4], "j": [1, 3]}), body);
+        let err = lower(json!([[[1, 4], [1, 1]]]), vec![v]).unwrap_err();
+        assert!(err.contains("rebinds a subscript"), "{err}");
+    }
+
+    #[test]
+    fn faq_value_with_distinct_is_refused() {
+        let mut v = faq(
+            &["a"],
+            json!({"a": [1, 4]}),
+            json!({"op": "index", "args": ["B", "a"]}),
+        );
+        v["distinct"] = json!(true);
+        let err = lower(json!([[[1, 4]]]), vec![v]).unwrap_err();
+        assert!(err.contains("distinct"), "{err}");
+    }
+
+    #[test]
+    fn regions_not_starting_at_one_are_refused() {
+        let err = lower(json!([[[2, 2]], [[3, 4]]]), vec![json!(1.0), json!(2.0)]).unwrap_err();
+        assert!(err.contains("does not start at 1"), "{err}");
+    }
+
+    #[test]
+    fn thin_retarget_under_a_capturing_binder_is_refused() {
+        // A value with a sum over `i` inside it: writing the lane subscript
+        // `i` in for `x[1]` under that sum would be captured.
+        let sum = json!({"op": "faq", "args": [], "ranges": {"i": [1, 3]}, "expr": {"op": "*",
+            "args": [{"op": "index", "args": ["x", 1]}, {"op": "index", "args": ["B", "i"]}]}});
+        let v = json!({"op": "+", "args": [1.0, sum]});
+        let err = lower(json!([[[1, 1]]]), vec![v]).unwrap_err();
+        assert!(err.contains("capture"), "{err}");
     }
 }

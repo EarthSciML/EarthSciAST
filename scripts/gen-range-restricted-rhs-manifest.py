@@ -616,7 +616,11 @@ def lane_cases():
             "capacity": cap,
             "batches": [
                 {"id": "mixed_levels", "cells": perm[:cap], "n": cap},
-                {"id": "mixed_levels_padded", "cells": perm[cap : cap + 11] + [perm[cap]] * (cap - 11), "n": 11},
+                {
+                    "id": "mixed_levels_padded",
+                    "cells": perm[cap : cap + 11] + [perm[cap]] * (cap - 11),
+                    "n": 11,
+                },
             ],
             "negative_control": {"batch": "mixed_levels", "swap_lanes": [1, 2]},
             "covers": ["lanes", "makearray_region_along_lane_set"],

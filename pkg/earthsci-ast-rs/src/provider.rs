@@ -240,6 +240,18 @@ pub trait DataProvider {
     fn extent_metaparameter(&self) -> Option<String> {
         None
     }
+
+    /// Whether this provider is primed: it holds the record in effect at the
+    /// start of its window before any refresh, lists that instant among its
+    /// refresh times, and answers "unchanged" (`None`) there because it
+    /// considers that record delivered. The executor then reads the primed
+    /// record with [`Self::sample`] the first time it asks for the record in
+    /// effect. A provider that is not primed (the default) answers `None`
+    /// only for a time that is not one of its refresh times, and its `None`
+    /// is never read as a record.
+    fn primed(&self) -> bool {
+        false
+    }
 }
 
 /// One loader's binding: its declared cadence and the model variables it feeds.
@@ -363,10 +375,10 @@ struct Feed {
     /// since it last delivered, so until it delivers again that record is
     /// this one, not the buffer's.
     detached: Option<ArrayD<f64>>,
-    /// Whether the provider has delivered a record yet. A provider may
-    /// answer "unchanged" (`None`) before its first delivery, for the record
-    /// it was primed with (EarthSciIO's providers prime at the start of
-    /// their window): that record is then read with [`DataProvider::sample`].
+    /// Whether the provider has delivered a record yet. A primed provider
+    /// ([`DataProvider::primed`]) may answer "unchanged" (`None`) before its
+    /// first delivery, for the record it was primed with: that record is
+    /// then read with [`DataProvider::sample`].
     delivered: bool,
 }
 
@@ -437,17 +449,17 @@ impl Feed {
     }
 
     /// A refresh's answer at a time the provider has a record in effect,
-    /// with "unchanged" (`None`) before the provider's first delivery read as
-    /// the record it holds: a provider may be primed with the record in
-    /// effect at the start of its window (EarthSciIO's are) and answer
-    /// `None` for it, and nothing has read that record yet. Without this an
+    /// with "unchanged" (`None`) before a primed provider's first delivery
+    /// ([`DataProvider::primed`]) read as the record it holds: it answers
+    /// `None` for the record it was primed with, and nothing has read that
+    /// record yet. Any other provider's `None` is passed through. Without this an
     /// `ic` at the start of the run, or the forcing at construction, would
     /// take the parameter's declared default instead of its data.
     fn primed_if_unchanged(
         &mut self,
         a: Option<ArrayD<f64>>,
     ) -> Result<Option<ArrayD<f64>>, ProviderError> {
-        if a.is_some() || self.delivered {
+        if a.is_some() || self.delivered || !self.provider.primed() {
             return Ok(a);
         }
         self.delivered = true;
@@ -1139,6 +1151,33 @@ mod tests {
             *refresh_log.borrow(),
             vec![0.0, 6.0, 12.0],
             "refresh fired at every anchor"
+        );
+    }
+
+    #[test]
+    fn unchanged_before_a_first_delivery_is_not_a_record_unless_primed() {
+        // `met` answers "unchanged" at its first anchor and has no CONST
+        // baseline: it is not primed, so its `None` writes nothing and
+        // `sample()` (which would panic here) is never called.
+        let doc = mixed_doc();
+        let met = FakeProvider::discrete_loader("wind", vec![(0.0, None), (6.0, Some(20.0))]);
+        let calls = Rc::clone(&met.materialize_calls);
+        let providers: HashMap<String, Box<dyn DataProvider>> = HashMap::from([
+            ("wind".to_string(), Box::new(met) as Box<dyn DataProvider>),
+            (
+                "elev".to_string(),
+                Box::new(FakeProvider::const_loader("elev", 7.0)) as Box<dyn DataProvider>,
+            ),
+        ]);
+        let mut exec = RefreshExecutor::new(&doc["models"]["M"], &doc, providers).unwrap();
+        let forcing = buffer();
+        let written = exec.sample_at(0.0, &forcing).unwrap();
+        assert!(!written.contains(&"wind".to_string()), "{written:?}");
+        assert_eq!(buf_get(&forcing, "wind"), None);
+        assert_eq!(
+            *calls.borrow(),
+            0,
+            "a provider that is not primed is never sampled"
         );
     }
 
