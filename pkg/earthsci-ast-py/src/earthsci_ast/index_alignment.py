@@ -22,9 +22,9 @@ rather than transposed, so it came out silently TRANSPOSED.
 The rule
 --------
 
-**Where both the operand and the result carry declared index-set names, align by
-NAME; reject what cannot be aligned. Everywhere else, keep the existing
-positional behaviour.**
+Where the operand and the result carry index-set names, align by name. An
+undeclared result takes the union of its operands' named axes in operand
+order. Anonymous operands align positionally.
 
 Concretely, for an operand declared over axes ``A`` used in a result declared
 over axes ``T``:
@@ -46,15 +46,11 @@ over axes ``T``:
 The scope boundary
 ------------------
 
-Name-based alignment applies ONLY where names exist. The results of ``reshape``,
-``transpose``, ``concat``, ``makearray``, ``index``, ``faq``, ``fn`` and
-literal arrays are ANONYMOUS — they have shapes but no index-set names — and
-they keep NumPy's positional semantics (and, under ``broadcast``, that op's
-established Julia-parity left-align). :data:`ELEMENTWISE_OPS` is what encodes
-the boundary: the walk descends through the scalar element-wise layer, where an
-operand is combined cell-wise with its siblings and so must share their frame,
-and stops at every op that RESHAPES or RE-INDEXES its operands, where the
-operand's axes are the op's business rather than the result's.
+The scalar elementwise layer combines cells in a shared frame. A whole-array
+consumer, such as ``index`` or ``reshape``, holds each operand in the operand's
+own frame. If one of those operands is elementwise, its named operands still
+align with each other. Anonymous operands in a named frame use the same
+left-aligned positional rule as explicit ``broadcast``.
 
 How the alignment is applied
 ----------------------------
@@ -74,11 +70,16 @@ form the simulator sees.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import replace
-from typing import Any
+from graphlib import CycleError, TopologicalSorter
+from typing import TYPE_CHECKING, Any
 
 from . import op_registry
 from .esm_types import ExprNode
+
+if TYPE_CHECKING:
+    from .flatten import FlattenedSystem
 
 __all__ = [
     "ELEMENTWISE_OPS",
@@ -120,6 +121,7 @@ __all__ = [
 ELEMENTWISE_OPS: frozenset[str] = frozenset({"broadcast"}).union(
     *(op_registry.by_category(c) for c in op_registry.SCALAR_FN_CATEGORIES)
 )
+_BROADCAST_FNS = op_registry.scalar_fn_names()
 
 
 def _op_and_args(node: Any) -> tuple[str | None, list]:
@@ -180,17 +182,91 @@ def iter_named_operands(expr: Any, var_axes: dict[str, tuple[str, ...]]):
     equivalent walk (``structural::collect_bare_array_operands``) is a
     left-to-right recursive descent, so the stack is fed reversed to match it.
     """
+    for name in _elementwise_names(expr):
+        axes = var_axes.get(name)
+        if axes:
+            yield name, axes
+
+
+def _elementwise_names(expr: Any) -> Iterator[str]:
     stack = [expr]
     while stack:
         node = stack.pop()
         if isinstance(node, str):
-            axes = var_axes.get(node)
-            if axes:
-                yield node, axes
+            yield node
             continue
         op, args = _op_and_args(node)
         if op is not None and op in ELEMENTWISE_OPS:
             stack.extend(reversed(args))
+
+
+def _expression_axes(expr: Any, axes: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
+    """Union the named axes on the elementwise value path in operand order."""
+    return tuple(
+        dict.fromkeys(axis for _, frame in iter_named_operands(expr, axes) for axis in frame)
+    )
+
+
+def _producer_axes(rhs: Any, target: str, include_anonymous: bool) -> tuple[str, ...]:
+    """Index sets declared by a producer, or labels for an inline FAQ box."""
+    if not isinstance(rhs, ExprNode) or rhs.op not in {"faq", "makearray"}:
+        return ()
+    ranges = rhs.ranges or {}
+    outputs = rhs.output_idx or []
+    if not outputs or not all(isinstance(sym, str) for sym in outputs):
+        return ()
+    operands = [ranges.get(sym) for sym in outputs]
+    if all(isinstance(r, dict) and isinstance(r.get("from"), str) for r in operands):
+        return tuple(r["from"] for r in operands)
+    if include_anonymous and all(
+        isinstance(r, list) and len(r) == 2 and r[0] == 1 for r in operands
+    ):
+        return tuple(f"{target}__{sym}" for sym in outputs)
+    return ()
+
+
+def promoted_axes(
+    flat: FlattenedSystem, *, include_anonymous: bool = False
+) -> dict[str, tuple[str, ...]]:
+    """Declared frames and the frames inferred from bare observed definitions.
+
+    Look up earlier or later definitions on demand so visiting equations in a
+    different order cannot change an inferred frame. An explicit empty shape
+    declares a scalar. When checking for a bare array read inside `faq`, the
+    caller also needs labels for known anonymous arrays.
+    """
+    axes: dict[str, tuple[str, ...]] = {}
+    for table in (flat.state_variables, flat.observed_variables, flat.parameters):
+        for name, var in table.items():
+            shape = getattr(var, "shape", None)
+            if shape is not None:
+                axes[name] = (
+                    tuple(str(axis) for axis in shape)
+                    if include_anonymous
+                    else declared_axes(shape) or ()
+                )
+    definitions = {
+        eq.lhs: eq.rhs for eq in flat.equations if isinstance(eq.lhs, str) and eq.lhs not in axes
+    }
+    order = TopologicalSorter(
+        {
+            name: {ref for ref in _elementwise_names(rhs) if ref in definitions}
+            for name, rhs in definitions.items()
+        }
+    )
+    try:
+        order.prepare()
+    except CycleError:
+        # The observed-graph builder diagnoses cycles. Infer the frames of
+        # independent definitions here even if another part of the graph cycles.
+        pass
+    while order.is_active():
+        ready = order.get_ready()
+        for name in ready:
+            rhs = definitions[name]
+            axes[name] = _producer_axes(rhs, name, include_anonymous) or _expression_axes(rhs, axes)
+        order.done(*ready)
+    return {name: shape for name, shape in axes.items() if shape}
 
 
 def _faq_field(node: Any, name: str) -> Any:
@@ -361,34 +437,53 @@ def align_expression(
     """Rewrite ``expr`` so every named element-wise operand sits in
     ``target_axes``.
 
-    A no-op — returning ``expr`` itself, not a copy — when there is nothing to
-    do: no target frame, a target axis of unknown extent, or every operand
-    already declared in the result's own order. Operands that cannot be aligned
-    are left alone here; ``validate()`` owns that diagnostic
+    If no frame is given, use the named union of the elementwise operands.
+    Operands that cannot be aligned are left alone here; ``validate()`` owns that diagnostic
     (:func:`unalignable_axes`), and leaving them untouched keeps this rewrite
     total.
     """
-    if not target_axes or not var_axes:
-        return expr
-    if any(t not in sizes for t in target_axes):
+    if not var_axes:
         return expr
 
-    def rewrite(node: Any) -> Any:
+    def rewrite(node: Any, frame: tuple[str, ...] | None) -> Any:
         if isinstance(node, str):
             axes = var_axes.get(node)
-            if not axes or axes == target_axes:
+            if not frame or not axes or axes == frame:
                 return node
-            if unalignable_axes(axes, target_axes) or any(a not in sizes for a in axes):
+            if unalignable_axes(axes, frame) or any(a not in sizes for a in frame):
                 return node
-            return _align_leaf(node, axes, target_axes, sizes)
+            return _align_leaf(node, axes, frame, sizes)
         op, args = _op_and_args(node)
-        if op is None or op not in ELEMENTWISE_OPS or not args:
+        if not args:
             return node
-        new_args = [rewrite(a) for a in args]
+        if op in ELEMENTWISE_OPS:
+            # An enclosing elementwise result supplies the frame. A whole-array
+            # consumer gives its operands each their own frame instead.
+            frame = frame or _expression_axes(node, var_axes)
+        else:
+            frame = None
+        new_args = [rewrite(a, frame) for a in args]
+        if (
+            frame
+            and all(axis in sizes for axis in frame)
+            and op in _BROADCAST_FNS
+            and len(args) > 1
+        ):
+            # Named operands already have the frame's rank. An anonymous array
+            # alongside them must left-align too. The explicit broadcast node
+            # applies that positional rule and the same scalar operator.
+            operand_axes = [_expression_axes(arg, var_axes) for arg in args]
+            if any(operand_axes) and any(
+                not axes and isinstance(arg, (str, ExprNode, dict))
+                for arg, axes in zip(args, operand_axes)
+            ):
+                if isinstance(node, ExprNode):
+                    return replace(node, op="broadcast", fn=op, args=new_args)
+                return {**node, "op": "broadcast", "fn": op, "args": new_args}
         if all(new is old for new, old in zip(new_args, args)):
             return node
         if isinstance(node, ExprNode):
             return replace(node, args=new_args)
         return {**node, "args": new_args}
 
-    return rewrite(expr)
+    return rewrite(expr, target_axes)

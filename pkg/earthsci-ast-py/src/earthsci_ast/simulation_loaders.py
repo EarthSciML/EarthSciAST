@@ -351,7 +351,7 @@ def _seed_first_segment(
         # `t` and the data refreshed above at t0 (esm-spec §11.4.2).
         start_time=t0,
     )
-    exercise_every_evaluation(flat, build, t0, loader_arrays=loader_arrays)
+    exercise_every_evaluation(flat, build, t0)
     return SegmentedSeed(
         loader_arrays=loader_arrays,
         refresh_fn=refresh_fn,

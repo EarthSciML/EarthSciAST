@@ -156,13 +156,16 @@ partial def astOf (j : Json) : Except String Ast := do
             match t with
               | .arr a => return Ranges.cons k (← a.toList.mapM astOf) acc
               | _ =>
-                if let .ok o := t.getObj? then
-                  for (f, _) in o.toArray.toList do
-                    unless f == "from" do
-                      throw s!"faq range {k}: field {f} (a ragged range) is outside the modelled slice"
-                match t.getObjValAs? String "from" with
-                | .ok set => return Ranges.fromSet k set acc
-                | .error _ => throw s!"faq range {k}: neither a tuple nor a from-set") Ranges.nil
+                let o ← t.getObj?
+                for (f, _) in o.toArray do
+                  unless f == "from" || f == "of" do throw s!"faq range {k}: unknown field {f}"
+                let set ← t.getObjValAs? String "from"
+                match t.getObjVal? "of" with
+                | .error _ => return Ranges.fromSet k set acc
+                | .ok field =>
+                  let parents ← (← field.getArr?).toList.mapM (·.getStr?)
+                  if parents.isEmpty then throw s!"faq range {k}: `of` must name a parent"
+                  return Ranges.fromRagged k set parents acc) Ranges.nil
         | _ => pure Ranges.nil
       match j.getObjVal? "filter" with
       | .ok p => return .faqWhere out red ranges (← astOf p) (← astOf (← j.getObjVal? "expr")) args
@@ -174,6 +177,17 @@ partial def astOf (j : Json) : Except String Ast := do
 def templateOf (j : Json) : Except String Template := do
   let params ← (← j.getObjVal? "params").getArr?
   return { params := (← params.toList.mapM (·.getStr?)), body := ← astOf (← j.getObjVal? "body") }
+
+/-- Translate the ragged entries in a document registry to evaluator metadata. -/
+def raggedSetBindings (sets : Json) : Except String (Env Float) := do
+  if sets.isNull then return []
+  let entries := (← sets.getObj?).toArray.toList
+  entries.filterMapM fun (name, decl) => do
+    unless (decl.getObjValAs? String "kind").toOption == some "ragged" do return none
+    let rank := (← (← decl.getObjVal? "of").getArr?).size
+    let offsets ← decl.getObjValAs? String "offsets"
+    let values ← decl.getObjValAs? String "values"
+    return some (raggedSetKey name, .raggedSet rank offsets values)
 
 def errorString : ApplyError → String
   | .expand (.missingBinding p) => s!"apply_operator: no binding for {p}"
@@ -428,8 +442,9 @@ def main (args : List String) : IO UInt32 := do
       let sets := match doc.getObjVal? "index_sets" with
         | .ok j => j
         | .error _ => m.getObjValD "index_sets"
-      -- every interval set's declared size, for the `{"from": set}` ranges the
-      -- evaluator visits (`Esm.Expr.setKey`); a derived or ragged set has none
+      -- A ragged set resolves its length only after its parent is bound.
+      env := (← liftExcept (raggedSetBindings sets)) ++ env
+      -- Every interval set's declared size, for the `{"from": set}` ranges.
       if let .ok so := sets.getObj? then
         for (name, sj) in so.toArray.toList do
           if (sj.getObjValAs? String "kind").toOption == some "interval" then

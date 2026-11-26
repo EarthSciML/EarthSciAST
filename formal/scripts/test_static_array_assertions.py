@@ -101,6 +101,13 @@ class StaticArrayAssertions(unittest.TestCase):
             "unary_broadcast": node("broadcast", "p", fn="-"),
             "implicit": node("+", "matrix", 2),
             "gather": node("index", "implicit", 2, 2),
+            "cube": node("reshape", "linear", shape=[2, 1, 3]),
+            "trailing_slice": node("index", "cube", 2),
+            "literal_slice": node("index", node("const", value=[[[1, 2]], [[3, 4]]]), 2),
+            "slice_or_scalar": node(
+                "ifelse", 0, node("index", node("reshape", "linear", shape=[2, 1, 3]), 2), 7
+            ),
+            "index_scalar": node("index", 9),
             "bound": "p",
             "from_default_array": "q",
             "named_broadcast": node("broadcast", "q", "c", fn="+"),
@@ -174,6 +181,10 @@ class StaticArrayAssertions(unittest.TestCase):
                                 assertion("explicit[2,3]", 8),
                                 assertion("unary_broadcast[2]", -2),
                                 assertion("gather", 6),
+                                assertion("trailing_slice[1,3]", 6),
+                                assertion("literal_slice[1,2]", 4),
+                                assertion("slice_or_scalar[1,3]", 7),
+                                assertion("index_scalar", 9),
                                 assertion("bound[2]", 2),
                                 assertion("from_default_array[2]", 8),
                                 assertion("named_broadcast[3,2]", 28),
@@ -322,6 +333,7 @@ class StaticArrayAssertions(unittest.TestCase):
             "implicit_guarded": faq(
                 [], node("index", "faulting_observed", "j"), filter=node("<", "j", 1)
             ),
+            "fuel_position": faq(["i"], "i", ranges={"i": {"from": "fuels"}}),
         }
         assertions = [
             ("two_contracts", 1),
@@ -334,14 +346,19 @@ class StaticArrayAssertions(unittest.TestCase):
             ("strided[3]", 5),
             ("implicit_filtered", 0),
             ("implicit_guarded", 0),
+            ("fuel_position[3]", 3),
         ]
         doc = {
-            "index_sets": {"x": {"kind": "interval", "size": 4}},
+            "index_sets": {
+                "x": {"kind": "interval", "size": 4},
+                "fuels": {"kind": "categorical", "members": ["gas", "diesel", "coal"]},
+            },
             "models": {
                 "M": {
                     "variables": {
                         **{name: {"type": "unknown"} for name in expressions},
                         "faulting_observed": {"type": "unknown", "shape": ["x"]},
+                        "fuel_position": {"type": "unknown", "shape": ["fuels"]},
                     },
                     "equations": [{"lhs": name, "rhs": rhs} for name, rhs in expressions.items()],
                     "tests": [

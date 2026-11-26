@@ -1,0 +1,291 @@
+{
+ "category": "static_array_semantics",
+ "runner": "inline_tests",
+ "version": "1.0",
+ "reference_binding": "julia",
+ "reference_compiler": "interpreter",
+ "bindings_required": [
+  "julia",
+  "python",
+  "rust"
+ ],
+ "scope_excluded": {
+  "go": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). This is an exclusion from the CATEGORY, not from the rule.",
+  "typescript": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). This is an exclusion from the CATEGORY, not from the rule."
+ },
+ "integrators": {
+  "julia": {
+   "algorithm": "Tsit5",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  },
+  "python": {
+   "method": "LSODA",
+   "rtol": 1e-12,
+   "atol": 1e-14
+  },
+  "rust": {
+   "solver": "Erk",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  }
+ },
+ "tolerances": {
+  "golden_rtol": 1e-12,
+  "golden_atol": 1e-12,
+  "detail": "Compare each state-free observation with its reference actual."
+ },
+ "description": "State-free counterparts and existing static native fixtures for the shaped parameter, elementwise observed gather, and simulate_faq tiers.",
+ "fixtures": [
+  {
+   "id": "shaped_parameter_defaults",
+   "path": "fixtures/shaped_parameter_defaults.esm",
+   "model": "ShapedParameterDefaults",
+   "golden": "golden/shaped_parameter_defaults.json",
+   "tags": [
+    "static",
+    "array"
+   ],
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "elementwise_observed_gather",
+   "path": "fixtures/elementwise_observed_gather.esm",
+   "model": "StaticElementwiseObservedGather",
+   "golden": "golden/elementwise_observed_gather.json",
+   "tags": [
+    "static",
+    "array"
+   ],
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "makearray_prefix_scan_static",
+   "path": "conformance/native_model_shapes/fixtures/makearray_prefix_scan_static.esm",
+   "model": "MakearrayPrefixScan",
+   "golden": "../native_model_shapes/golden/makearray_prefix_scan_static.json",
+   "tags": [
+    "makearray",
+    "prefix-scan",
+    "faq",
+    "static"
+   ],
+   "note": "Authored here for issue #533 (EarthSciDiscretizations integral_column_* cases); see README.md.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "nested_window_reduction_static",
+   "path": "conformance/native_model_shapes/fixtures/nested_window_reduction_static.esm",
+   "model": "NestedWindowReduction",
+   "golden": "../native_model_shapes/golden/nested_window_reduction_static.json",
+   "tags": [
+    "faq",
+    "nested",
+    "rank-0",
+    "fold-order",
+    "static"
+   ],
+   "note": "Authored here (the coordinator's ruling on nested windows, esm-spec §4.3.1): a nested rank-0 window is not a reverse scan and folds ascending.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "ragged_contraction_static",
+   "path": "conformance/native_model_shapes/fixtures/ragged_contraction_static.esm",
+   "model": "RaggedContraction",
+   "golden": "../native_model_shapes/golden/ragged_contraction_static.json",
+   "tags": [
+    "faq",
+    "ragged",
+    "offsets",
+    "static"
+   ],
+   "note": "Authored here for issue #534 (EarthSciDiscretizations divergence_mpas / laplacian_mpas cases); see README.md.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "const_subscript_maps_static",
+   "path": "conformance/native_model_shapes/fixtures/const_subscript_maps_static.esm",
+   "model": "ConstSubscriptMaps",
+   "golden": "../native_model_shapes/golden/const_subscript_maps_static.json",
+   "tags": [
+    "index",
+    "const-array",
+    "reversed",
+    "offset",
+    "clamp",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "data_dependent_gather_static",
+   "path": "conformance/native_model_shapes/fixtures/data_dependent_gather_static.esm",
+   "model": "DataDependentGather",
+   "golden": "../native_model_shapes/golden/data_dependent_gather_static.json",
+   "tags": [
+    "index",
+    "gather",
+    "index-array",
+    "const-array",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "mod_floor_unflatten_static",
+   "path": "conformance/native_model_shapes/fixtures/mod_floor_unflatten_static.esm",
+   "model": "ModFloorUnflatten",
+   "golden": "../native_model_shapes/golden/mod_floor_unflatten_static.json",
+   "tags": [
+    "index",
+    "mod-floor",
+    "unflatten",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "nested_scalar_reduction_static",
+   "path": "conformance/native_model_shapes/fixtures/nested_scalar_reduction_static.esm",
+   "model": "NestedScalarReduction",
+   "golden": "../native_model_shapes/golden/nested_scalar_reduction_static.json",
+   "tags": [
+    "faq",
+    "nested",
+    "rank-0",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  }
+ ]
+}

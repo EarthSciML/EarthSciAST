@@ -33,6 +33,7 @@ import numpy as np
 import pytest
 
 from earthsci_ast.esm_types import ExprNode
+from earthsci_ast.inline_tests import run_inline_tests
 from earthsci_ast.numpy_interpreter import EvalContext, NumpyInterpreterError, eval_expr
 from earthsci_ast.parse import load_string
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
@@ -794,3 +795,77 @@ def test_alignment_declines_on_a_derived_index_set() -> None:
     assert "cells" not in sizes
     expr = {"op": "*", "args": ["w1", "x"]}
     assert align_expression(expr, ("cells", "lat"), {"w1": ("lat",)}, sizes) is expr
+
+
+@pytest.mark.parametrize("with_state", [False, True])
+def test_native_named_parameter_axes_at_output(with_state: bool) -> None:
+    """Named parameters align in both output paths, including inferred observations."""
+    variables = {
+        "q": {"type": "parameter", "shape": ["lat"], "default": [5, 8]},
+        "c": {"type": "parameter", "shape": ["lon"], "default": [3, 10, 20]},
+        "singleton": {"type": "parameter", "shape": ["one"], "default": 4},
+        "reordered": {"type": "unknown", "shape": ["lon", "lat"], "defined_by": "product"},
+        "product": {"type": "unknown", "defined_by": {"op": "*", "args": ["q", "c"]}},
+        "explicit": {
+            "type": "unknown",
+            "shape": ["lon", "lat"],
+            "defined_by": {"op": "broadcast", "fn": "+", "args": ["q", "c"]},
+        },
+        "gather": {
+            "type": "unknown",
+            "defined_by": {"op": "index", "args": [{"op": "+", "args": ["q", "c"]}, 2, 3]},
+        },
+        "mixed": {
+            "type": "unknown",
+            "shape": ["lon", "lat"],
+            "defined_by": {"op": "+", "args": ["q", _const([100, 200, 300])]},
+        },
+        "subset": {"type": "unknown", "shape": ["lon", "lat"], "defined_by": "q"},
+        "sampled": {
+            "type": "unknown",
+            "defined_by": {
+                "op": "+",
+                "args": [
+                    "q",
+                    {"op": "index", "args": ["singleton", 1]},
+                    "clock" if with_state else "t",
+                ],
+            },
+        },
+    }
+    equations = []
+    if with_state:
+        variables["clock"] = {"type": "unknown", "default": 0}
+        equations.append({"lhs": {"op": "D", "args": ["clock"], "wrt": "t"}, "rhs": 1})
+    doc = json.loads(_doc(variables, equations, {**GRID, "one": {"kind": "interval", "size": 1}}))
+    doc["models"]["M"]["tests"] = [
+        {
+            "id": "outputs",
+            "time_span": {"start": 0, "end": 1},
+            "assertions": [
+                {"variable": "explicit", "coords": {"lat": 2, "lon": 3}, "time": 0, "expected": 28},
+                {"variable": "product[2,3]", "time": 0, "expected": 160},
+                {"variable": "reordered[3,2]", "time": 0, "expected": 160},
+                {"variable": "gather", "time": 0, "expected": 28},
+                {"variable": "mixed[3,2]", "time": 0, "expected": 308},
+                {"variable": "subset[3,2]", "time": 0, "expected": 8},
+                {"variable": "sampled[2]", "time": 1, "expected": 13},
+            ],
+        }
+    ]
+    results = run_inline_tests(load_string(json.dumps(doc)), compiler="native")
+    assert len(results) == 7
+    assert all(result.passed for result in results), results
+
+
+def test_promoted_axes_handles_reverse_definition_chain() -> None:
+    """The inferred frame cannot depend on Python's call stack or equation order."""
+    from earthsci_ast.flatten import FlattenedEquation, flatten
+    from earthsci_ast.index_alignment import promoted_axes
+
+    flat = flatten(
+        load_string(_doc({"q": {"type": "parameter", "shape": ["lat"], "default": 1}}, []))
+    )
+    flat.equations = [FlattenedEquation(f"M.alias{i}", f"M.alias{i + 1}", "M") for i in range(1500)]
+    flat.equations.append(FlattenedEquation("M.alias1500", "M.q", "M"))
+    assert promoted_axes(flat)["M.alias0"] == ("lat",)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seeded differential tests for static ESM scalar expressions."""
+"""Seeded differential tests for static ESM expressions."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from hypothesis import given, seed, settings, strategies as st
+from shaped_cases import KINDS, fixture as shaped_fixture
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL = "Probe"
@@ -144,7 +145,7 @@ def adapter(command: list[str]):
                 proc.wait()
 
 
-def ask(proc: subprocess.Popen, request: dict, timeout: float) -> int:
+def ask(proc: subprocess.Popen, request: dict, timeout: float) -> tuple[int, ...]:
     assert proc.stdin is not None and proc.stdout is not None
     pending = memoryview((dumps(request) + "\n").encode("utf-8"))
     deadline = time.monotonic() + timeout
@@ -154,7 +155,7 @@ def ask(proc: subprocess.Popen, request: dict, timeout: float) -> int:
         while True:
             ready = selector.select(max(0, deadline - time.monotonic()))
             if not ready or time.monotonic() >= deadline:
-                raise RuntimeError(f"{proc.args[0]} timed out waiting for a scalar result")
+                raise RuntimeError(f"{proc.args[0]} timed out waiting for a result")
             try:
                 if pending:
                     pending = pending[os.write(proc.stdin.fileno(), pending) :]
@@ -165,18 +166,23 @@ def ask(proc: subprocess.Popen, request: dict, timeout: float) -> int:
                     chunk = os.read(proc.stdout.fileno(), 65536)
                     if not chunk:
                         raise RuntimeError(
-                            f"{proc.args[0]} exited before returning a complete scalar result"
+                            f"{proc.args[0]} exited before returning a complete result"
                         )
                     line.extend(chunk)
                     if b"\n" in chunk:
                         break
             except BlockingIOError:
                 continue
-    response = json.loads(line)
+    try:
+        response = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{proc.args[0]} returned an invalid JSON reply") from exc
     if "error" in response:
         raise AdapterRejection(response["error"])
-    (bits,) = response["values"]
-    return parse_bits(bits)
+    values = response["values"]
+    if not isinstance(values, list) or len(values) != len(request["requests"]):
+        raise ValueError(f"{proc.args[0]} returned the wrong number of assertion values")
+    return tuple(map(parse_bits, values))
 
 
 def agree(reference: int, result: int) -> bool:
@@ -190,7 +196,10 @@ def agree(reference: int, result: int) -> bool:
 def walk(expr: Any) -> Iterator[Any]:
     yield expr
     if isinstance(expr, dict):
-        for arg in expr["args"]:
+        for arg in expr.values():
+            yield from walk(arg)
+    elif isinstance(expr, list):
+        for arg in expr:
             yield from walk(arg)
 
 
@@ -214,8 +223,17 @@ class Mismatch(Exception):
         self.fixture = fixture
 
 
-def compare(fixture: dict, participants: dict[str, subprocess.Popen], timeout: float) -> float:
-    request = {"document": fixture, "requests": [REQUEST]}
+def compare(
+    fixture: dict, participants: dict[str, subprocess.Popen], timeout: float
+) -> tuple[float, ...]:
+    requests = [
+        {"test_id": test["id"], "assertion_idx": index}
+        for test in fixture["models"][MODEL]["tests"]
+        for index in range(1, len(test["assertions"]) + 1)
+    ]
+    if not requests:
+        raise ValueError("differential fixture requires at least one inline assertion")
+    request = {"document": fixture, "requests": requests}
     responses = {}
     errors = {}
     for name, proc in participants.items():
@@ -223,12 +241,25 @@ def compare(fixture: dict, participants: dict[str, subprocess.Popen], timeout: f
             responses[name] = ask(proc, request, timeout)
         except AdapterRejection as exc:
             errors[name] = f"error: {exc}"
-    if errors or any(not agree(responses["lean"], value) for value in responses.values()):
+    reference = () if "lean" in errors else responses["lean"]
+    difference = next(
+        (
+            index
+            for index, bits in enumerate(reference)
+            if any(not agree(bits, values[index]) for values in responses.values())
+        ),
+        None,
+    )
+    if errors or difference is not None:
+        index = difference if difference is not None else 0
         outcomes = {
-            name: f"{bits_to_float(bits)!r} (0x{bits:016x})" for name, bits in responses.items()
+            name: f"{bits_to_float(values[index])!r} (0x{values[index]:016x})"
+            for name, values in responses.items()
         }
-        raise Mismatch(fixture, outcomes | errors)
-    return bits_to_float(responses["lean"])
+        selected = requests[index]
+        assertion = f"{selected['test_id']}/{selected['assertion_idx']}"
+        raise Mismatch(fixture, {"assertion": assertion} | outcomes | errors)
+    return tuple(map(bits_to_float, reference))
 
 
 def run(commands: dict[str, list[str]], args: argparse.Namespace) -> None:
@@ -238,6 +269,15 @@ def run(commands: dict[str, list[str]], args: argparse.Namespace) -> None:
     disagreements = 0
     shrinking = not args.observer
     runner_error: Exception | None = None
+    if args.shaped:
+        families = [shaped_fixture(MODEL, REQUEST["test_id"], kind) for kind in KINDS]
+    else:
+        expr = st.recursive(
+            st.one_of(st.sampled_from(PARAMETERS), st.just(node("-", "zero"))),
+            extend,
+            max_leaves=12,
+        )
+        families = [st.builds(document, expr, st.tuples(VALUES, VALUES, VALUES))]
     with ExitStack() as stack:
         participants = {name: stack.enter_context(adapter(cmd)) for name, cmd in commands.items()}
         if args.fixture is not None:
@@ -246,27 +286,17 @@ def run(commands: dict[str, list[str]], args: argparse.Namespace) -> None:
             print(f"{args.fixture} passed for {', '.join(commands)}")
             return
 
-        @seed(args.seed)
-        @settings(max_examples=args.cases, deadline=None, database=None, report_multiple_bugs=False)
-        @given(
-            st.recursive(
-                st.one_of(st.sampled_from(PARAMETERS), st.just(node("-", "zero"))),
-                extend,
-                max_leaves=12,
-            ),
-            st.tuples(VALUES, VALUES, VALUES),
-        )
-        def check(expr: Any, values: tuple[float, ...]) -> None:
+        def check(fixture: dict) -> None:
             nonlocal cases, disagreements, runner_error
             if runner_error is not None:
                 return
             try:
-                result = compare(document(expr, values), participants, args.timeout)
+                result = compare(fixture, participants, args.timeout)
             except Mismatch:
                 if shrinking:
                     raise
                 disagreements += 1
-                result = None
+                result = ()
             except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
                 # A broken stream can leave a late reply in flight. Do not
                 # reuse it to shrink an adapter startup or protocol failure.
@@ -275,23 +305,39 @@ def run(commands: dict[str, list[str]], args: argparse.Namespace) -> None:
             if shrinking and args.observer:
                 return
             cases += 1
-            terms = list(walk(expr))
-            op_counts.update({term["op"] for term in terms if isinstance(term, dict)})
-            observed = [value for name, value in input_values(values) if name in terms]
-            if result is not None:
-                observed.append(result)
+            model = fixture["models"][MODEL]
+            op_counts.update(
+                {
+                    term["op"]
+                    for term in walk(model["equations"])
+                    if isinstance(term, dict) and "op" in term
+                }
+            )
+            observed = [var["default"] for var in model["variables"].values() if "default" in var]
+            observed.extend(result)
             edge_counts.update({kind for value in observed if (kind := edge(value)) is not None})
 
         def sweep() -> None:
+            cases_per_family, remainder = divmod(args.cases, len(families))
             try:
-                check()
+                for index, family in enumerate(families):
+                    count = cases_per_family + (index < remainder)
+                    if count == 0:
+                        break
+                    test = settings(
+                        max_examples=count, deadline=None, database=None, report_multiple_bugs=False
+                    )(given(family)(check))
+                    seed(args.seed)(test)()
+                    if runner_error is not None:
+                        break
             finally:
                 if runner_error is not None:
                     raise runner_error
 
         sweep()
+        kind = "shaped" if args.shaped else "scalar"
         print(
-            f"{cases} scalar cases for {', '.join(commands)} "
+            f"{cases} {kind} cases for {', '.join(commands)} "
             f"(seed {args.seed}, {disagreements} disagreements)",
             flush=True,
         )
@@ -311,16 +357,18 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=20261026)
     parser.add_argument("--cases", type=int, default=200)
     parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--shaped", action="store_true", help="generate static array expressions")
     parser.add_argument("--fixture", type=Path, help="replay one differential fixture")
     parser.add_argument(
         "--observer", action="store_true", help="report disagreements without failing"
     )
-    parser.add_argument(
-        "--reproducer", type=Path, default=ROOT / "conformance-results/scalar-difftest.esm"
-    )
+    parser.add_argument("--reproducer", type=Path)
     args = parser.parse_args()
     if args.cases < 1 or not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--cases and --timeout must be positive")
+    if args.reproducer is None:
+        kind = "shaped" if args.shaped else "scalar"
+        args.reproducer = ROOT / "conformance-results" / f"{kind}-difftest.esm"
     commands = {
         "lean": [str(args.lean.resolve()), "static-assertions-jsonl", MODEL],
         "python": [sys.executable, str(Path(__file__).with_name("scalar_python.py"))],
@@ -343,7 +391,7 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 0 if args.observer else 1
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
-        print(f"Scalar differential runner failed: {exc}", file=sys.stderr)
+        print(f"Differential runner failed: {exc}", file=sys.stderr)
         return 2
     return 0
 

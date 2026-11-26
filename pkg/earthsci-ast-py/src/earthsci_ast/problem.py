@@ -54,9 +54,9 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ._show import show_equation
 from . import op_registry
 from . import strip as _strip
+from ._show import show_equation
 from .classification import is_implicit_lhs
 from .compiler import (
     CompilerPolicy,
@@ -70,7 +70,6 @@ from .compiler import (
 from .elementwise_lift import lift_elementwise_applications
 from .error_handling import CALLBACK_UNREGISTERED, FLOAT32_UNSUPPORTED
 from .errors import MissingDataError
-from .json_walk import decode_document
 from .esm_types import CouplingType, EsmFile, ExprNode, is_aggregate_op
 from .expr_walk import iter_children
 from .expression import DataSourceUnboundError, UnsupportedConstructError, free_variables
@@ -81,6 +80,7 @@ from .flatten import (
     flatten,
     infer_variable_shapes,
 )
+from .json_walk import decode_document
 from .numpy_interpreter import (
     _EVALUABLE_CORE_OPS,
     UnevaluableOperatorError,
@@ -1089,7 +1089,7 @@ def _esm_problem_under(
     # hoist and the static observeds ran inside `_build_numpy_rhs` above, which
     # is where the census found six sevenths of this binding's per-cell landings.
     if build is not None:
-        exercise_every_evaluation(flat, build, t0, loader_arrays=merged)
+        exercise_every_evaluation(flat, build, t0)
     elif engine in ("loaders", "discrete_providers"):
         # esm-libraries-spec §2.5.10 lists "the per-segment seed" among the
         # evaluations the compiler covers. A segmented engine compiles nothing at
@@ -1502,7 +1502,6 @@ def exercise_every_evaluation(
     flat: FlattenedSystem,
     build: _NumpyRhsBuild,
     t0: float,
-    loader_arrays: dict[str, Any] | None = None,
 ) -> None:
     """Run, at construction, the two evaluations the build itself does not.
 
@@ -1529,7 +1528,7 @@ def exercise_every_evaluation(
     except Exception:  # noqa: BLE001 — a non-refusal failure stays a run failure
         pass
     try:
-        probe_output_time_observeds(flat, build, float(t0), loader_arrays=loader_arrays)
+        probe_output_time_observeds(flat, build, float(t0))
     except CompilerRefusedRuleError:
         raise
     except Exception:  # noqa: BLE001 — see above
@@ -1674,16 +1673,17 @@ def _refuse_faq_bare_array_operands(flat: FlattenedSystem) -> None:
     ``expr`` or ``filter`` reads a shaped variable by bare name. ``validate``
     reports it on the authored document from declared shapes; this is the same
     check on the flattened one, after template expansion, at the one front door,
-    over declared AND inferred shapes (:func:`_promoted_axes`), as Julia's build
+    over declared AND inferred shapes (:func:`index_alignment.promoted_axes`), as Julia's build
     reads the shapes ``promote_downstream_shapes`` settled."""
     from .error_handling import FAQ_BARE_ARRAY_OPERAND
     from .index_alignment import (
         faq_bare_array_operand_message,
         faq_bare_array_operands,
         faq_bare_exempt_names,
+        promoted_axes,
     )
 
-    var_axes = _promoted_axes(flat)
+    var_axes = promoted_axes(flat, include_anonymous=True)
     if not var_axes:
         return
     for eq in flat.equations:
@@ -1701,94 +1701,6 @@ def _refuse_faq_bare_array_operands(flat: FlattenedSystem) -> None:
                 f"`{show_equation(eq.lhs, eq.rhs)}`: "
                 + faq_bare_array_operand_message(field_name, name, axes)
             )
-
-
-#: The ops whose result is an array over their own ``output_idx`` — Julia's
-#: ``_ARRAY_PRODUCER_OPS`` (``shape_promotion.jl``).
-_ARRAY_PRODUCER_OPS = frozenset({"faq", "makearray"})
-
-
-def _promoted_axes(flat: FlattenedSystem) -> dict[str, tuple[str, ...]]:
-    """Every variable's index-set axes: its declared ``shape`` or, for a variable
-    declared without one, the shape its defining (bare-LHS) equation infers.
-
-    The inference is Julia's ``promote_downstream_shapes`` (``shape_promotion.jl``):
-    a ``faq`` / ``makearray`` over named ranges has its output axes' index sets;
-    one over inline ``[1, n]`` ranges has anonymous axes; an ``index`` gather is
-    scalar; every other op broadcasts its operands' axes
-    by name, the superset winning. Iterated to a fixed point over the defining
-    equations. A variable declared ``shape: []`` is a scalar and never
-    promoted."""
-    axes: dict[str, tuple[str, ...]] = {}
-    declared_scalar: set[str] = set()
-    for registry in (flat.state_variables, flat.parameters, flat.observed_variables):
-        for name, var in registry.items():
-            shape = getattr(var, "shape", None)
-            if shape is not None and len(shape) == 0:
-                declared_scalar.add(name)
-            axes[name] = tuple(str(a) for a in shape) if shape else ()
-    defs = {eq.lhs: eq.rhs for eq in flat.equations if isinstance(eq.lhs, str)}
-    open_names = [n for n in defs if not axes.get(n) and n not in declared_scalar]
-
-    for name in open_names:
-        inline = _inline_producer_axes(defs[name], name)
-        if inline:
-            axes[name] = inline
-    changed = True
-    while changed:
-        changed = False
-        for name in open_names:
-            if axes.get(name):
-                continue
-            inferred = _infer_expr_axes(defs[name], axes)
-            if inferred:
-                axes[name] = inferred
-                changed = True
-    return {n: a for n, a in axes.items() if a}
-
-
-def _inline_producer_axes(rhs: Any, name: str) -> tuple[str, ...]:
-    """The anonymous axes of a ``faq`` / ``makearray`` whose every output index
-    ranges over an inline ``[1, n]`` interval, else ``()``."""
-    if not isinstance(rhs, ExprNode) or rhs.op not in _ARRAY_PRODUCER_OPS:
-        return ()
-    if not rhs.output_idx or not rhs.ranges:
-        return ()
-    out = []
-    for sym in rhs.output_idx:
-        r = rhs.ranges.get(sym) if isinstance(sym, str) else None
-        if not (isinstance(r, list) and len(r) == 2 and r[0] == 1):
-            return ()
-        out.append(f"{name}__{sym}")
-    return tuple(out)
-
-
-def _infer_expr_axes(expr: Any, axes: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
-    """Julia's ``_infer_expr_shape``: the index-set axes ``expr`` evaluates over."""
-    if isinstance(expr, str):
-        return axes.get(expr, ())
-    if not isinstance(expr, ExprNode):
-        return ()
-    if expr.op == "index":
-        return ()
-    if expr.op in _ARRAY_PRODUCER_OPS:
-        if expr.output_idx is None:
-            return ()
-        names = []
-        for sym in expr.output_idx:
-            r = (expr.ranges or {}).get(sym) if isinstance(sym, str) else None
-            if not (isinstance(r, dict) and isinstance(r.get("from"), str)):
-                return ()
-            names.append(r["from"])
-        return tuple(names)
-    result: tuple[str, ...] = ()
-    for arg in expr.args or []:
-        a = _infer_expr_axes(arg, axes)
-        if not a or set(a) <= set(result):
-            continue
-        if not result or set(result) <= set(a):
-            result = a
-    return result
 
 
 def _assert_no_doubly_defined_state(flat: FlattenedSystem) -> None:
@@ -2649,9 +2561,7 @@ def remake(
                     prob.sample_time,
                 ),
             )
-            exercise_every_evaluation(
-                prob.flat, build, prob.sample_time, loader_arrays=prob.const_arrays
-            )
+            exercise_every_evaluation(prob.flat, build, prob.sample_time)
         elif rebind and prob.engine == "scalar":
             scalar_build = _build_scalar_rhs(
                 prob.flat, new_p, new_u0, cse=prob.cse, t0=new_tspan[0]

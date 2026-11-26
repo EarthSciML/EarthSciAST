@@ -20,8 +20,8 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ._show import show_equation, show_expr
 from . import compiler as _compiler
+from ._show import show_equation, show_expr
 from .classification import _derivative_targets, is_implicit_lhs
 from .compiler import (
     CompilerPolicy,
@@ -44,7 +44,7 @@ from .flatten import (
     flatten,
     infer_variable_shapes,
 )
-from .index_alignment import align_expression, axis_sizes, declared_axes
+from .index_alignment import align_expression, axis_sizes, promoted_axes
 from .numpy_interpreter import (
     ConstArrayOutOfRangeError,
     EvalContext,
@@ -1185,7 +1185,15 @@ def _materialize_observeds(
         # on a scalar operand) must not be cast to a real here — see
         # `numpy_interpreter._require_real`.
         val = _require_real(val, f"observed '{name}'")
+        target_shape = ctx.state_shapes.get(name)
         if isinstance(val, np.ndarray) and val.ndim > 0:
+            if (
+                target_shape
+                and val.shape != target_shape
+                and val.ndim == len(target_shape)
+                and all(n in (1, target) for n, target in zip(val.shape, target_shape))
+            ):
+                val = np.broadcast_to(val, target_shape)
             ctx.derived_rings[name] = val
             ctx.observed_values.pop(name, None)
         else:
@@ -1195,7 +1203,6 @@ def _materialize_observeds(
             # scalar as written or evaluated to one (an `ifelse` whose predicate
             # is a constant takes its scalar branch). Readers that gather cells
             # find the full field; the scalar stays for the output row.
-            target_shape = ctx.state_shapes.get(name)
             if target_shape:
                 ctx.derived_rings[name] = np.full(target_shape, float(val))
 
@@ -1268,6 +1275,10 @@ class _NumpyRhsBuild:
     param_values: dict[str, float]
     ordered_observed: list[tuple[str, Expr]]
     elem_names: list[str]
+    # The same bound input arrays the RHS uses, including shaped parameters
+    # and setup factors. Output-time reads must preserve one-element axes too.
+    input_arrays: dict[str, np.ndarray] = field(default_factory=dict)
+    axis_valued_input_names: frozenset[str] = frozenset()
     # State-free observeds materialized ONCE at build (the const-geometry hoist):
     # ``static_observed`` scalars land in ``static_observed_values``, arrays in
     # ``static_derived_rings``; ``varying_observed`` is the (dependency-ordered)
@@ -2709,27 +2720,11 @@ def _element_types(flat: FlattenedSystem) -> dict[str, str]:
     return out
 
 
-def _declared_axes_map(flat: FlattenedSystem) -> dict[str, tuple[str, ...]]:
-    """``flattened variable name -> declared index-set axis names``.
-
-    Covers states and observeds — the two kinds that can carry a declared
-    ``shape`` and appear as an array-level operand. Variables with no usable
-    name frame (scalars, integer-extent shapes, repeated axis names) are absent,
-    which is what makes alignment decline for them.
-    """
-    out: dict[str, tuple[str, ...]] = {}
-    for table in (flat.state_variables, flat.observed_variables):
-        for name, var in table.items():
-            axes = declared_axes(getattr(var, "shape", None))
-            if axes:
-                out[name] = axes
-    return out
-
-
 def _align_named_operands(
     driver_equations: list[FlattenedEquation],
     ordered_observed: list[tuple[str, Expr]],
-    flat: FlattenedSystem,
+    var_axes: dict[str, tuple[str, ...]],
+    sizes: dict[str, int],
 ) -> tuple[list[FlattenedEquation], list[tuple[str, Expr]]]:
     """Put every named array-level operand into its result's index-set frame.
 
@@ -2745,18 +2740,14 @@ def _align_named_operands(
 
     * a whole-array state derivative ``D(var) = rhs``, whose frame is ``var``'s
       declared shape; and
-    * an observed assignment ``obs = body``, whose frame is ``obs``'s.
+    * an observed assignment ``obs = body``, whose frame is declared on
+      ``obs`` or inferred as the union of its named operands.
 
     An ``faq``-LHS equation is deliberately NOT rewritten: it already
-    states its own index frame explicitly via ``output_idx``/``ranges``, and it
-    is the oracle this alignment is defined to reproduce. Everything else —
-    scalar states, undeclared shapes, anonymous operands — is returned untouched
-    and keeps NumPy's positional behaviour.
+    states its own index frame explicitly via ``output_idx``/``ranges``.
     """
-    var_axes = _declared_axes_map(flat)
     if not var_axes:
         return driver_equations, ordered_observed
-    sizes = axis_sizes(flat.index_sets)
 
     aligned_observed = [
         (name, align_expression(rhs, var_axes.get(name), var_axes, sizes))
@@ -2774,7 +2765,7 @@ def _align_named_operands(
             and isinstance(lhs.args[0], str)
         ):
             target = var_axes.get(lhs.args[0])
-        new_rhs = align_expression(eq.rhs, target, var_axes, sizes)
+        new_rhs = align_expression(eq.rhs, target, var_axes, sizes) if target else eq.rhs
         aligned_equations.append(eq if new_rhs is eq.rhs else replace(eq, rhs=new_rhs))
     return aligned_equations, aligned_observed
 
@@ -2883,9 +2874,12 @@ def _build_numpy_rhs(
     # declared shape this pathway then honours. Parameters are excluded: a
     # shaped parameter is bound from its inline array data / loader slice
     # below, not laid out from `shapes`.
+    var_axes = promoted_axes(flat)
     for _varmap in (flat.state_variables, flat.observed_variables):
         for _name, _var in _varmap.items():
             _decl = getattr(_var, "shape", None)
+            if _decl is None and _name in flat.observed_variables:
+                _decl = var_axes.get(_name)
             if _decl:
                 _res = _resolve_index_set_shape(_decl, flat.index_sets)
                 if _res is not None:
@@ -3006,7 +3000,7 @@ def _build_numpy_rhs(
     # algebraic elimination and the compile below so the substituted/compiled
     # trees already carry the aligned operands.
     driver_equations, ordered_observed = _align_named_operands(
-        driver_equations, ordered_observed, flat
+        driver_equations, ordered_observed, var_axes, axis_sizes(flat.index_sets)
     )
 
     # Algebraic elimination: eliminate simple ``v[i] = <body>`` equations.
@@ -3446,6 +3440,8 @@ def _build_numpy_rhs(
         param_values=param_values,
         ordered_observed=ordered_observed,
         elem_names=elem_names,
+        input_arrays=loader_arrays,
+        axis_valued_input_names=axis_valued_names,
         varying_observed=varying_observed,
         static_observed_values=static_observed_values,
         static_derived_rings=static_derived_rings,
@@ -3558,6 +3554,8 @@ def observed_at_state(
             y=np.asarray(y, dtype=float),
             t=float(t),
             index_sets=flat.index_sets,
+            input_arrays=build.input_arrays,
+            axis_valued_input_names=build.axis_valued_input_names,
             derived_rings=dict(build.static_derived_rings),
             derived_extents=build.derived_extents,
             factor_scope=build.factor_scope,
@@ -3610,7 +3608,6 @@ def probe_output_time_observeds(
     flat: FlattenedSystem,
     build: _NumpyRhsBuild,
     t: float,
-    loader_arrays: dict[str, np.ndarray] | None = None,
 ) -> None:
     """Exercise the OUTPUT-TIME observed pass, for the rules nothing else did.
 
@@ -3669,7 +3666,8 @@ def probe_output_time_observeds(
         derived_rings={} if not varying else dict(build.static_derived_rings),
         # Bound exactly as `_simulate_with_numpy` binds it at an output node, so
         # the probe measures that pass rather than a differently-seeded twin.
-        input_arrays=loader_arrays if loader_arrays is not None else {},
+        input_arrays=build.input_arrays,
+        axis_valued_input_names=build.axis_valued_input_names,
         derived_extents=build.derived_extents,
         factor_scope=build.factor_scope,
         var_index_sets=build.var_index_sets,
@@ -3746,6 +3744,8 @@ def _simulate_observeds_only(
             y=y_empty,
             t=t,
             index_sets=flat.index_sets,
+            input_arrays=build.input_arrays,
+            axis_valued_input_names=build.axis_valued_input_names,
             derived_extents=build.derived_extents,
             factor_scope=build.factor_scope,
             var_index_sets=build.var_index_sets,
@@ -3914,7 +3914,8 @@ def _simulate_with_numpy(
                         # on a document whose right-hand side does not, which a
                         # strict `native` reads (correctly, given what it was
                         # handed) as a refusal.
-                        input_arrays=loader_arrays if loader_arrays is not None else {},
+                        input_arrays=build.input_arrays,
+                        axis_valued_input_names=build.axis_valued_input_names,
                         derived_extents=build.derived_extents,
                         factor_scope=build.factor_scope,
                         var_index_sets=build.var_index_sets,
@@ -3951,7 +3952,8 @@ def _simulate_with_numpy(
                             t=float(t_out[j]),
                             index_sets=flat.index_sets,
                             # See the note on the state-free branch above.
-                            input_arrays=loader_arrays if loader_arrays is not None else {},
+                            input_arrays=build.input_arrays,
+                            axis_valued_input_names=build.axis_valued_input_names,
                             derived_rings=dict(build.static_derived_rings),
                             derived_extents=build.derived_extents,
                             factor_scope=build.factor_scope,

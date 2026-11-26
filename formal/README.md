@@ -69,10 +69,12 @@ EARTHSCI_INLINE_TESTS_ADAPTER_LEAN="python3 scripts/run-lean-inline-tests.py" \
 ```
 
 The report lists integrated state assertions and out-of-scope fixtures as
-exclusions. The same command can score `faq_pointwise_filter` by selecting its
-manifest. Run `python3 formal/scripts/test_static_array_assertions.py` for
+exclusions. Select the `faq_pointwise_filter`, `array_expression_forms`,
+`broadcast_alignment`, or `static_array_semantics` manifest to score state-free
+array cases. Run `python3 formal/scripts/test_static_array_assertions.py` for
 constant-gather values and faults, indexed observations, and the static array
-operation checks.
+operation checks. Run `python3 formal/scripts/test_ragged_faq.py` for ragged
+parent tuples, empty reductions, and scoped backing factors.
 
 The `static-assertions` executable mode also accepts a JSON array
 of `{test_id, assertion_idx}` requests on stdin and returns binary64 bit
@@ -236,3 +238,9 @@ under their respective algebraic laws. The argument-list proofs cover
 flattening with normalized children and stable reordering with a retained
 identity. The binary64 model gives a counterexample to value preservation
 under reordering, also covered by `tests/differential/scalar/canonical_sum_order.esm`.
+
+The wire adapter uses the terminating tree traversal in
+`Esm/Expr/Canonical/Typed.lean`. For arbitrary nesting of field-free sums and
+products over typed numeric literals and references, the kernel checks exact
+value preservation and idempotence of the resulting expression tree. The
+shared byte fixtures cover JSON decoding, emission, and the other operators.

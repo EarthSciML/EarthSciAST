@@ -47,7 +47,8 @@ The evaluator covers the scalar operations and the array operations below:
   results and NaN counted as a nonzero admitted term.
 
 The model infers an omitted range from a bare subscript into a known array.
-Ragged bounds and join nodes are outside the modelled slice. Signed zeros are
+Ragged contractions visit each parent's positions in order. Join nodes are
+outside the modelled slice. Signed zeros are
 preserved at `Float`. The exact `Num` and `Bin64` types do not distinguish the
 zero signs.
 -/
@@ -218,6 +219,8 @@ inductive Ranges where
   /-- A range over a whole index set, `{"from": set}`. The set's extent
   is bound in the evaluation environment; its name is a substitution site. -/
   | fromSet (sym : String) (set : String) (rest : Ranges)
+  /-- A range over a ragged set at the current values of `parents`. -/
+  | fromRagged (sym : String) (set : String) (parents : List String) (rest : Ranges)
 
 /-- An `apply_operator` node's `bindings` object, in key order. -/
 inductive Binds where
@@ -225,6 +228,21 @@ inductive Binds where
   | cons (param : String) (value : Ast) (rest : Binds)
 
 end
+
+structure RaggedUse where
+  name : String
+  set : String
+  parents : List String
+
+def Ranges.raggedUses : Ranges → List RaggedUse
+  | .nil => []
+  | .cons _ _ rest | .fromSet _ _ rest => rest.raggedUses
+  | .fromRagged name set parents rest => ⟨name, set, parents⟩ :: rest.raggedUses
+
+/-- All symbols bound by the query's declared ranges. -/
+def Ranges.names : Ranges → List String
+  | .nil => []
+  | .cons name _ rest | .fromSet name _ rest | .fromRagged name _ _ rest => name :: rest.names
 
 /-! ## Values and errors -/
 
@@ -241,6 +259,16 @@ inductive Val (α : Type) where
   reduction (§4.3.1). Scalar extrema, multiplication, and Boolean FAQ terms
   consume it explicitly because the exact scalar types have no infinity. -/
   | inf (neg : Bool)
+  /-- Registry metadata stored under `raggedSetKey`. Numeric operands cannot
+  read this reserved environment key. -/
+  | raggedSet (parentRank : Nat) (offsets values : String)
+
+@[simp] def Val.rank {α : Type} : Val α → Nat
+  | .arr1 _ => 1
+  | .arr2 _ => 2
+  | .arr3 _ => 3
+  | .shaped dims _ => dims.length
+  | _ => 0
 
 /-- The rectangular arrays recognized by the evaluator, in output-axis order. -/
 def Val.arrayData {α : Type} : Val α → Option (List Nat × List (Val α))
@@ -306,6 +334,7 @@ def asInt (v : α) : Except EvalError Int :=
 
 /-- `index` (§4.3.3), 1-based, each index checked against its own dimension. -/
 def indexVal : Val α → List Int → Except EvalError α
+  | .num x, [] => .ok x
   | .arr1 xs, [i] =>
     if h : 1 ≤ i ∧ i ≤ xs.length then .ok (xs[(i - 1).toNat]'(by omega)) else .error .outOfRange
   | .arr2 rows, [i, j] =>
@@ -333,17 +362,35 @@ private def indexOffset (offset : Nat) : List Nat → List Int → Except EvalEr
     else .error .outOfRange
   | _, _ => .error (.typeError "index: operand rank and index count disagree")
 
-/-- Index either array representation while preserving a non-finite cell. -/
-def indexCell (value : Val α) (subscripts : List Int) : Except EvalError (Val α) :=
-  match value with
-  | .shaped dims cells => do
-    unless dims.length == subscripts.length do
-      throw (.typeError "index: operand rank and index count disagree")
-    let offset ← indexOffset 0 dims subscripts
-    match cells[offset]? with
+private def indexRect (data : ArrayData (Val α)) (subscripts : List Int) :
+    Except EvalError (Val α) := do
+  let n := subscripts.length
+  if n > data.dims.length then
+    throw (.typeError "index: operand rank and index count disagree")
+  let offset ← indexOffset 0 (data.dims.take n) subscripts
+  if n = data.dims.length then
+    match data.cells[offset]? with
     | some cell => return cell
     | none => throw (.typeError "index: inconsistent array extents")
-  | _ => .num <$> indexVal value subscripts
+  else
+    let slice := data.trailingSlice n offset
+    unless slice.cells.length == slice.dims.prod do
+      throw (.typeError "index: inconsistent array extents")
+    return .shaped slice.dims slice.cells
+
+/-- Fix leading indices. A complete gather returns a cell, and a partial
+gather keeps the trailing axes, including zero-length extents. -/
+def indexCell (value : Val α) (subscripts : List Int) : Except EvalError (Val α) :=
+  match value with
+  | .shaped dims cells => indexRect ⟨dims, cells⟩ subscripts
+  | .inf neg => if subscripts.isEmpty then pure (.inf neg) else
+      throw (.typeError "index: operand rank and index count disagree")
+  | _ =>
+    if subscripts.length < value.rank then do
+      let some (dims, cells) := value.arrayData
+        | throw (.typeError "index: expected a rectangular array")
+      indexRect ⟨dims, cells⟩ subscripts
+    else .num <$> indexVal value subscripts
 
 def constLeaf : Const → Except EvalError α
   | .leaf m e => .ok (Lits.ofDec m e)
@@ -535,6 +582,7 @@ private def mulWithInf : Val α → Val α → Except EvalError (Val α)
   | _, _ => .error (.typeError "expected a scalar")
 
 def strictWithInf : StrictOp → List (Val α) → Except EvalError (Val α)
+  | .index, [.inf neg] => pure (.inf neg)
   | .mul, v :: vs => vs.foldlM mulWithInf v
   | op, vs => infMinMax op vs
 
@@ -596,6 +644,81 @@ abbrev FaqRange (α : Type) := String × (Env α → Except EvalError (List Int)
 private def outputNames (output : List OutputIndex) : List String :=
   output.filterMap (fun axis => match axis with | .symbol name => some name | .singleton => none)
 
+/-- Reserved environment key for an index set's ragged backing factors. -/
+def raggedSetKey (name : String) : String := "\x00ragged_" ++ name
+
+private def raggedFactors (range : RaggedUse) (env : Env α) :
+    Except EvalError (String × String) := do
+  let some (.raggedSet parentRank offsets values) := env.lookup (raggedSetKey range.set)
+    | throw (.typeError s!"faq ragged index set {range.set} is not declared")
+  unless range.parents.length == parentRank && parentRank != 0 do
+    throw (.typeError s!"faq ragged index set {range.set}: parent rank mismatch")
+  return (offsets, values)
+
+/-- Read one parent's length, then bind the positions `1 .. length`. The
+member factors are gathered separately by the expression. -/
+def raggedPositions (lengths : Val α) (parents : List Int) : Except EvalError (List Int) := do
+  let n ← asInt (← asNum (← indexCell lengths parents))
+  if n < 0 then throw (.typeError "faq ragged range length must be non-negative")
+  return indices 1 n
+
+omit [Scalar α] [Elem α] in
+/-- Any parent whose offsets entry is `n` contributes exactly the ascending
+sequence of `n` positions, independently of the padded members. -/
+theorem raggedPositions_of_count (lengths : Val α) (parents : List Int) (entry : α) (n : Nat)
+    (located : indexCell lengths parents = .ok (.num entry))
+    (count : Lits.toInt? entry = some (n : Int)) :
+    raggedPositions lengths parents = .ok ((List.range n).map (fun i : Nat => 1 + (i : Int))) := by
+  have nonnegative : ¬ (n : Int) < 0 := by omega
+  simp [raggedPositions, located, asNum, asInt, count, bind, Except.bind, pure, Except.pure,
+    indices, nonnegative]
+
+mutual
+
+/-- Inspect a read for the ragged values constraint. An unexpanded application
+defers the check, as it may supply the gather after expansion. -/
+private def readsRaggedValues (values : String) (bound : List String) : Ast → Bool
+  | .var name => (name == values && (!bound.contains name || name.contains '.')) ||
+      name.endsWith ("." ++ values)
+  | .node _ args | .array _ args => readsRaggedValuesIn values bound args
+  | .faq out _ ranges body _ =>
+    readsRaggedValues values (outputNames out ++ ranges.names ++ bound) body
+  | .faqWhere out _ ranges filter body _ =>
+    let bound := outputNames out ++ ranges.names ++ bound
+    readsRaggedValues values bound filter || readsRaggedValues values bound body
+  | .apply _ _ => true
+  | .num _ _ | .const _ => false
+
+private def readsRaggedValuesIn (values : String) (bound : List String) : List Ast → Bool
+  | [] => false
+  | a :: rest => readsRaggedValues values bound a || readsRaggedValuesIn values bound rest
+
+end
+
+private def checkRaggedUses (out : List OutputIndex) (uses : List RaggedUse) (names : List String)
+    (body : Ast) (filter : Option Ast) (env : Env α) : Except EvalError Unit := do
+  let outputs := outputNames out
+  for range in uses do
+    if outputs.contains range.name then throw (.unsupported "faq ragged output index")
+    let (_, values) ← raggedFactors range env
+    unless range.parents.all (fun parent => names.contains parent) do
+      throw (.typeError s!"faq ragged index set {range.set}: parent is not a range symbol")
+    unless readsRaggedValues values names body || (filter.any (readsRaggedValues values names)) do
+      throw (.typeError "ragged_values_not_gathered")
+
+private def parentFirstRanges (uses : List RaggedUse) (ranges : List (FaqRange α)) :
+    Nat → Except EvalError (List (FaqRange α))
+  | 0 => if ranges.isEmpty then pure [] else throw (.typeError "cyclic faq ragged parents")
+  | fuel + 1 => do
+    if ranges.isEmpty then return []
+    let ready := fun (axis : FaqRange α) =>
+      match uses.find? (fun range => range.name == axis.1) with
+      | none => true
+      | some range => !range.parents.any (fun p => (ranges.lookup p).isSome)
+    let some axis := ranges.find? ready | throw (.typeError "cyclic faq ragged parents")
+    let tail ← parentFirstRanges uses (ranges.filter (fun r => r.1 != axis.1)) fuel
+    return axis :: tail
+
 /-- A shape-only binding cannot collide with an authored variable or index. -/
 def shapeKey (name : String) : String := "\x00shape_" ++ name
 
@@ -654,6 +777,13 @@ private def declareFaqRanges (output : List OutputIndex) (ranges : List (FaqRang
     let lengths ← candidates.mapM (fun n => n.mapError .unbound)
     return lengths.min?.map (fun size => (name, fun _ : Env α => .ok (indices 1 (size : Int))))
   return ranges ++ implicitRanges
+
+private def checkedFaqRanges (out : List OutputIndex) (ragged : List RaggedUse)
+    (ranges : List (FaqRange α)) (body : Ast) (filter : Option Ast) (env : Env α) :
+    Except EvalError (List (FaqRange α)) := do
+  let ranges ← declareFaqRanges out ranges body filter env
+  checkRaggedUses out ragged (ranges.map Prod.fst) body filter env
+  return ranges
 
 private def steppedIndices (lo step hi : Int) : Except EvalError (List Int) :=
   if step == 0 then throw (.typeError "faq range: step is zero")
@@ -761,10 +891,13 @@ its admitted contracted tuples using the same evaluator as the scalar case. -/
 private def evalFaq (output : List OutputIndex) (red : String) (ranges : List (FaqRange α))
     (isReverse : List String → List String → Bool)
     (passesFilter : Env α → Except EvalError Bool) (term : Env α → Except EvalError (Val α))
-    (env : Env α) (atCell : Option (List Nat) := none) : Except EvalError (Val α) := do
+    (env : Env α) (atCell : Option (List Nat) := none) (ragged : List RaggedUse := []) :
+    Except EvalError (Val α) := do
   let outputs := outputNames output
   let contracted := (ranges.filter (fun r => !outputs.contains r.1)).mergeSort
     (fun a b => decide (a.1 ≤ b.1))
+  let contracted ← if ragged.isEmpty then pure contracted
+    else parentFirstRanges ragged contracted contracted.length
   if red == "bool_and_or" then
     if output.isEmpty then
       let result ← foldBoolRanges (fun e => do
@@ -913,14 +1046,17 @@ def eval : Ast → Env α → Except EvalError (Val α)
         if o = .index then
           indexCell (.shaped dims cells) (← is.mapM (fun v => do asInt (← asNum v)))
         else broadcast
-      | _ =>
-        if vs.any (fun v => v.arrayData.isSome) && o != .index then broadcast
+      | base :: is =>
+        if is.length < base.rank && o == .index then
+          indexCell base (← is.mapM (fun v => do asInt (← asNum v)))
+        else if vs.any (fun v => v.arrayData.isSome) && o != .index then broadcast
         else if hasInf vs then strictWithInf o vs else return .num (← applyStrict o vs)
+      | [] => return .num (← applyStrict o [])
     | .other s => .error (.unsupported s)
   | .faq [] "bool_and_or" rs body _, env => do
-    let ranges ← faqRanges rs
-    let ranges ← declareFaqRanges [] ranges body none env
+    let ranges ← checkedFaqRanges [] rs.raggedUses (← faqRanges rs) body none env
     evalFaq [] "bool_and_or" ranges (fun _ _ => false) (fun _ => pure true) (eval body) env
+      (ragged := rs.raggedUses)
   | .faq [] "+" (.cons k [s, t] .nil) body _, env => do
     -- §4.3.1: a `+` reduction over one dense range, seeded at `+0.0`, in index order
     let a ← asInt (← asNum (← eval s env))
@@ -969,14 +1105,13 @@ def eval : Ast → Env α → Except EvalError (Val α)
       (fun j => do return truthy (← asNum (← eval p ((k, .num (Lits.ofDec j 0)) :: env))))
       (fun j => eval body ((k, .num (Lits.ofDec j 0)) :: env))
   | .faq out red rs body _, env => do
-    let ranges ← faqRanges rs
-    let ranges ← declareFaqRanges out ranges body none env
+    let ranges ← checkedFaqRanges out rs.raggedUses (← faqRanges rs) body none env
     evalFaq out red ranges (fun _ _ => false) (fun _ => pure true) (eval body) env
+      (ragged := rs.raggedUses)
   | .faqWhere out red rs p body _, env => do
-    let ranges ← faqRanges rs
-    let ranges ← declareFaqRanges out ranges body (some p) env
+    let ranges ← checkedFaqRanges out rs.raggedUses (← faqRanges rs) body (some p) env
     evalFaq out red ranges (fun outputs contracted => reverseFaqWindow outputs contracted (some p))
-      (fun e => do return truthy (← asNum (← eval p e))) (eval body) env
+      (fun e => do return truthy (← asNum (← eval p e))) (eval body) env (ragged := rs.raggedUses)
   | .apply n _, _ => .error (.unsupported s!"apply_operator {n}: not expanded")
 
 /-- Resolve declared bounds in the environment where the range is visited. -/
@@ -998,6 +1133,19 @@ def faqRanges : Ranges → Except EvalError (List (FaqRange α))
   | .fromSet k set rest => do
     let ranges ← faqRanges rest
     return (k, fun env => do return indices 1 (← setSize set env)) :: ranges
+  | .fromRagged k set parents rest => do
+    let ranges ← faqRanges rest
+    return (k, fun env => do
+      let (offsets, _) ← raggedFactors ⟨k, set, parents⟩ env
+      -- An index-set declaration names an array factor. Scoped scalar indices
+      -- can shadow expression reads without shadowing that registry reference.
+      let some lengths := env.findSome? (fun (name, value) =>
+        if name == offsets && value.rank != 0 then some value else none)
+        | throw (.unbound offsets)
+      let positions ← parents.mapM fun p => do
+        let some index := env.lookup p | throw (.unbound p)
+        asInt (← asNum index)
+      raggedPositions lengths positions) :: ranges
   | .cons _ _ _ => throw (.typeError "faq range: expected [start, stop] or [start, step, stop]")
 
 def evalList : List Ast → Env α → Except EvalError (List (Val α))
@@ -1012,6 +1160,8 @@ def expressionDims : Ast → Env α → Except EvalError (Option (List Nat))
   | .num _ _, _ => return some []
   | .var name, env => return variableDims env name
   | .const c, _ => return some (valueDims (← constVal (α := α) c))
+  | .node "index" (base :: subscripts), env => do
+    return (← expressionDims base env).map (·.drop subscripts.length)
   | .node op args, env =>
     if broadcastArity op args.length then do expressionBroadcastDims (← expressionDimsList args env)
     else return some []
@@ -1027,8 +1177,14 @@ def expressionDims : Ast → Env α → Except EvalError (Option (List Nat))
   | .array (.makearray regions) _, _ =>
     some <$> shapeResult ((ArrayData.regionBounds regions).map (List.map ArrayData.extent))
   | .faq [] _ _ _ _, _ | .faqWhere [] _ _ _ _ _, _ => return some []
-  | .faq out _ rs body _, env => do queryDims out (← faqRanges rs) body none env
-  | .faqWhere out _ rs p body _, env => do queryDims out (← faqRanges rs) body (some p) env
+  | .faq out _ rs body _, env => do
+    if rs.raggedUses.any (fun range => (outputNames out).contains range.name) then
+      throw (.unsupported "faq ragged output index")
+    queryDims out (← faqRanges rs) body none env
+  | .faqWhere out _ rs p body _, env => do
+    if rs.raggedUses.any (fun range => (outputNames out).contains range.name) then
+      throw (.unsupported "faq ragged output index")
+    queryDims out (← faqRanges rs) body (some p) env
   | _, _ => return none
 
 def expressionDimsList : List Ast → Env α → Except EvalError (List (Option (List Nat)))
@@ -1048,7 +1204,8 @@ def evalCell : Ast → Env α → List Nat → Except EvalError (Val α)
     | .ifelse => evalConditionalCell args env ix
     | .strict .index => do
       let a :: is ← evalList args env | throw (.typeError "operand count")
-      indexCell a (← is.mapM (fun v => do asInt (← asNum v)))
+      let value ← indexCell a (← is.mapM (fun v => do asInt (← asNum v)))
+      projectCell value ix
     | .strict o => do applyCell o (← evalCellList args env ix)
     | .other s => throw (.unsupported s)
   | .array (.broadcast fn) args, env, ix => do
@@ -1063,12 +1220,12 @@ def evalCell : Ast → Env α → List Nat → Except EvalError (Val α)
   | .array op args, env, ix => do
     projectCell (← evalShape op (← evalList args env) env) ix
   | .faq out red rs body _, env, ix => do
-    let ranges ← declareFaqRanges out (← faqRanges rs) body none env
-    evalFaq out red ranges (fun _ _ => false) (fun _ => pure true) (eval body) env (some ix)
+    let ranges ← checkedFaqRanges out rs.raggedUses (← faqRanges rs) body none env
+    evalFaq out red ranges (fun _ _ => false) (fun _ => pure true) (eval body) env (some ix) rs.raggedUses
   | .faqWhere out red rs p body _, env, ix => do
-    let ranges ← declareFaqRanges out (← faqRanges rs) body (some p) env
+    let ranges ← checkedFaqRanges out rs.raggedUses (← faqRanges rs) body (some p) env
     evalFaq out red ranges (fun outputs contracted => reverseFaqWindow outputs contracted (some p))
-      (fun e => do return truthy (← asNum (← eval p e))) (eval body) env (some ix)
+      (fun e => do return truthy (← asNum (← eval p e))) (eval body) env (some ix) rs.raggedUses
   | .apply n _, _, _ => .error (.unsupported s!"apply_operator {n}: not expanded")
 
 def evalCellList : List Ast → Env α → List Nat → Except EvalError (List (Val α))

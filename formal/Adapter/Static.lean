@@ -38,17 +38,22 @@ private partial def checkConstantUnits (location : String) : Json → Except Str
   | .arr items => items.forM (checkConstantUnits location)
   | _ => pure ()
 
-private def intervalSizes (sets : Json) : List (String × Nat) :=
+private def sizedAxes (sets : Json) : List (String × (Nat × Bool)) :=
   (sets.getObj?.toOption.map (·.toArray.toList)).getD [] |>.filterMap fun (name, decl) => do
-    unless (decl.getObjValAs? String "kind").toOption == some "interval" do none
-    let size ← (decl.getObjValAs? Nat "size").toOption
-    return (name, size)
+    match (decl.getObjValAs? String "kind").toOption with
+    | some "interval" =>
+      let size ← (decl.getObjValAs? Nat "size").toOption
+      return (name, size, true)
+    | some "categorical" =>
+      let members ← (decl.getObjValD "members").getArr?.toOption
+      return (name, members.size, false)
+    | _ => none
 
 private def dimensions (shape : List String) (sizes : List (String × Nat)) :
     Except String (List Nat) :=
   shape.mapM fun axis => match sizes.lookup axis with
     | some n => pure n
-    | none => unsupported s!"axis {axis} is not a sized interval"
+    | none => unsupported s!"axis {axis} has no static extent"
 
 private def evalResult {α : Type} (result : Except EvalError α) : Except String α :=
   match result with
@@ -81,12 +86,8 @@ private partial def namedOperands (shapes : Shapes) : Ast → List String
     if broadcastArity op args.length then args.flatMap (namedOperands shapes) else []
   | _ => []
 
-private def rangeNames : Ranges → List String
-  | .nil => []
-  | .cons name _ rest | .fromSet name _ rest => name :: rangeNames rest
-
 private def faqScope (shapes : Shapes) (out : List OutputIndex) (ranges : Ranges) : Shapes :=
-  let bound := out.filterMap (fun | .symbol name => some name | .singleton => none) ++ rangeNames ranges
+  let bound := out.filterMap (fun | .symbol name => some name | .singleton => none) ++ ranges.names
   shapes.filter fun (name, _) => !bound.contains name
 
 /-- Put named operands in result-axis order through the spec's equivalent
@@ -181,6 +182,8 @@ structure Model where
   name : String
   independent : String
   sizes : List (String × Nat)
+  intervalAxes : List String
+  indexBindings : Env Float
   shapes : Shapes
   parameters : List (String × Json)
   differentialStates : List String
@@ -196,8 +199,11 @@ def readModel (doc component : Json) (modelName : String) : Except String Model 
   let domain := doc.getObjValD "domain"
   checkPrecision "domain.element_type" domain
   let independent := (domain.getObjValAs? String "independent_variable").toOption.getD "t"
-  let sizes := intervalSizes ((doc.getObjVal? "index_sets").toOption.getD
-    (component.getObjValD "index_sets"))
+  let sets := (doc.getObjVal? "index_sets").toOption.getD (component.getObjValD "index_sets")
+  let axes := sizedAxes sets
+  let sizes := axes.map fun (name, size, _) => (name, size)
+  let intervalAxes := axes.filterMap fun (name, _, isInterval) => if isInterval then some name else none
+  let indexBindings ← Templates.raggedSetBindings sets
   let vars ← (← component.getObjVal? "variables").getObj?
   let mut parameters := []
   let mut shapes := []
@@ -227,6 +233,8 @@ def readModel (doc component : Json) (modelName : String) : Except String Model 
     name := modelName
     independent
     sizes
+    intervalAxes
+    indexBindings
     shapes
     parameters
     differentialStates
@@ -247,7 +255,7 @@ private def environment (model : Model) (atTime : Float) (overrides : Json) :
     if (resolved.lookup name).isSome then throw s!"duplicate parameter override for {name}"
     resolved := (name, value) :: resolved
   let mut env : Env Float := (model.independent, .num atTime) ::
-    model.sizes.map (fun (name, size) => (setKey name, .num (Float.ofNat size)))
+    model.indexBindings ++ model.sizes.map (fun (name, size) => (setKey name, .num (Float.ofNat size)))
   for (name, defaultValue) in model.parameters do
     let value := (resolved.lookup name).getD defaultValue
     unless value.isNull do
@@ -284,7 +292,8 @@ private partial def resolve (model : Model) (visiting : List String) (env : Env 
   let result := Esm.Expr.eval (← rhs) env
   match result with
   | .error (.unbound dep) =>
-    if (model.equations.lookup dep).isSome || model.differentialStates.contains dep then
+    if (env.lookup dep).isNone &&
+        ((model.equations.lookup dep).isSome || model.differentialStates.contains dep) then
       let (_, extended) ← resolve model (name :: visiting) env dep
       resolve model visiting extended name
     else
@@ -324,6 +333,8 @@ private def coordinateSubscripts (model : Model) (name : String) (coords : Json)
     Except String (List Int) := do
   let shape := model.shape name
   if shape.isEmpty then throw s!"assertion_rank_mismatch: {name} is not shaped"
+  unless shape.all model.intervalAxes.contains do
+    unsupported s!"coordinate sampling for {name} requires interval axes"
   let coords ← coords.getObj?
   for (axis, _) in coords.toArray do
     unless shape.contains axis do throw s!"unknown coordinate axis {axis} for {name}"

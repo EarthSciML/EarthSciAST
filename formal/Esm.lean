@@ -8,6 +8,7 @@ import Esm.Closed.Interp.Template
 import Esm.Expr.Core
 import Esm.Expr.ArrayProofs
 import Esm.Expr.Canonical
+import Esm.Expr.Canonical.Typed
 import Esm.Expr.Template
 import Esm.Lib.Interp
 import Esm.Closed.Interp.TemplateAst

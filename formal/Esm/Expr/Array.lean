@@ -38,6 +38,13 @@ def offset (dims ix : List Nat) : Nat :=
 def at? (data : ArrayData β) (ix : List Nat) : Option β :=
   if within data.dims ix then data.cells[offset data.dims ix]? else none
 
+/-- Read a contiguous trailing slice at an already checked leading offset.
+Both the offset and the size are measured in row-major blocks. -/
+def trailingSlice (data : ArrayData β) (prefixRank prefixOffset : Nat) : ArrayData β :=
+  let dims := data.dims.drop prefixRank
+  let width := dims.prod
+  ⟨dims, (data.cells.drop (prefixOffset * width)).take width⟩
+
 private def coordsFromColumnOffset : List Nat → Nat → List Nat
   | [], _ => []
   | n :: ns, pos => pos % n :: coordsFromColumnOffset ns (pos / n)

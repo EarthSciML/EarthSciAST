@@ -63,7 +63,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "bare_mixed_rank_product",
@@ -91,7 +100,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "bare_axis_permuted_operand",
@@ -119,7 +137,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "broadcast_node_mixed_rank",
@@ -147,7 +174,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "anonymous_shape_positional",
@@ -175,7 +211,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "unary_broadcast_fn",
@@ -204,7 +249,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "observed_expression_aligned",
@@ -218,6 +272,40 @@
         "issue-100"
       ],
       "note": "Authored here. Migrated from the Python `test_observed_expression_is_aligned_too` and the Rust `array_shaped_observed_broadcasts_by_name`.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
+    },
+    {
+      "id": "static_named_broadcast",
+      "path": "fixtures/static_named_broadcast.esm",
+      "model": "StaticNamedBroadcast",
+      "golden": "golden/static_named_broadcast.json",
+      "tags": [
+        "static",
+        "array"
+      ],
       "required": {
         "julia": [
           "interpreter",

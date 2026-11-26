@@ -7,6 +7,38 @@
       "lean_statement": "∀ {β ε : Type} (apply : β → Except ε β) (err : ε) (data : Esm.Expr.ArrayData β), Esm.Expr.ArrayData.broadcast (fun | [x] => apply x | _ => throw err) err [data] = (do let cells ← (Esm.Expr.ArrayData.coords data.dims).mapM (fun ix => match data.broadcastAt ix with | some x => apply x | none => throw err); return ⟨data.dims, cells⟩)",
       "status": "proven",
       "theorem": "Esm.Expr.ArrayData.broadcast_unary"
+    },
+    {
+      "id": "P-partial-index-keeps-trailing-extents",
+      "defined_by": "formal/Esm/Expr/Array.lean",
+      "statement": "The leading-index slice keeps the trailing extents, including zero-length axes.",
+      "lean_statement": "∀ {β : Type} (data : Esm.Expr.ArrayData β) (prefixRank prefixOffset : Nat), (data.trailingSlice prefixRank prefixOffset).dims = data.dims.drop prefixRank",
+      "status": "proven",
+      "theorem": "Esm.Expr.ArrayData.trailingSlice_dims"
+    },
+    {
+      "id": "P-partial-index-keeps-complete-cell-block",
+      "defined_by": "formal/Esm/Expr/Array.lean",
+      "statement": "A slice whose leading offset fits the storage contains one full trailing block.",
+      "lean_statement": "∀ {β : Type} (data : Esm.Expr.ArrayData β) (prefixRank prefixOffset : Nat), (prefixOffset + 1) * (data.dims.drop prefixRank).prod ≤ data.cells.length → (data.trailingSlice prefixRank prefixOffset).cells.length = (data.dims.drop prefixRank).prod",
+      "status": "proven",
+      "theorem": "Esm.Expr.ArrayData.trailingSlice_cells_length"
+    },
+    {
+      "id": "P-partial-index-reads-source-cell",
+      "defined_by": "formal/Esm/Expr/Array.lean",
+      "statement": "A valid position in a trailing slice reads the corresponding cell of the source block.",
+      "lean_statement": "∀ {β : Type} (data : Esm.Expr.ArrayData β) (prefixRank prefixOffset position : Nat), position < (data.dims.drop prefixRank).prod → (data.trailingSlice prefixRank prefixOffset).cells[position]? = data.cells[prefixOffset * (data.dims.drop prefixRank).prod + position]?",
+      "status": "proven",
+      "theorem": "Esm.Expr.ArrayData.trailingSlice_entry"
+    },
+    {
+      "id": "P-partial-index-then-full-index",
+      "defined_by": "formal/Esm/Expr/Array.lean",
+      "statement": "Reading trailing coordinates from a leading-index slice selects the same cell as indexing all coordinates together.",
+      "lean_statement": "∀ {β : Type} (data : Esm.Expr.ArrayData β) (leading trailing leadingIndex trailingIndex : List Nat), data.dims = leading ++ trailing → leading.length = leadingIndex.length → trailing.length = trailingIndex.length → Esm.Expr.ArrayData.offset trailing trailingIndex < trailing.prod → (data.trailingSlice leading.length (Esm.Expr.ArrayData.offset leading leadingIndex)).cells[Esm.Expr.ArrayData.offset trailing trailingIndex]? = data.cells[Esm.Expr.ArrayData.offset data.dims (leadingIndex ++ trailingIndex)]?",
+      "status": "proven",
+      "theorem": "Esm.Expr.ArrayData.trailingSlice_full_read"
     }
   ]
 }
