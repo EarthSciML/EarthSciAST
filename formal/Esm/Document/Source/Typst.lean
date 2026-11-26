@@ -105,21 +105,27 @@ Typst string, `#description("…")`, which typesets as plain text. So a descript
 written for Typst (backticks for code, a `-` list) keeps its markup, and one written as
 plain text with `a * b` or `$5` in it still compiles. "Safe" is a syntactic test that
 every description of the corpus it holds for compiles (decided 2026-11-25): none of
-`#`, `$`, `@`, `\`, `<`, `*`, no `//` or `/*`, every `_` between two ASCII letters or
-digits, balanced brackets, and an even number of backticks.
+`#`, `$`, `@`, `\`, `<`, `*`, `~`, none of `//`, `/*` (a comment) or `--`, `-?`, `...`
+(shorthands that typeset differently from the text), every `_` between two ASCII
+letters or digits, balanced brackets outside backtick raw spans and none inside one,
+and every raw span closed.
 
-The reader reads a content block as Typst does: a backslash escapes the character after
-it, and brackets nest. So an earlier document, which wrote every description with its
-markup characters escaped (`First\-order`), reads as it did. -/
+The reader reads a content block as Typst does: inside a backtick raw span every
+character is literal; outside one a backslash escapes the character after it
+(`\u{…}` is a code point) and brackets nest. So an earlier document, which wrote every
+description with its markup characters escaped (`First\-order`), reads as it did. -/
 
 /-- An ASCII letter or digit. -/
 def alnumA (c : Char) : Bool := c.isAlphanum && c.toNat < 128
 
-/-- No `//` or `/*` (a Typst comment). -/
-def noComment : List Char → Bool
+/-- No `//` or `/*` (a Typst comment), and none of the shorthands `--`, `-?` and `...`. -/
+def noSeq : List Char → Bool
   | '/' :: '/' :: _ => false
   | '/' :: '*' :: _ => false
-  | _ :: r => noComment r
+  | '-' :: '-' :: _ => false
+  | '-' :: '?' :: _ => false
+  | '.' :: '.' :: '.' :: _ => false
+  | _ :: r => noSeq r
   | [] => true
 
 /-- Every `_` between two ASCII letters or digits (`p`: the character before). -/
@@ -128,51 +134,86 @@ def usOK : Option Char → List Char → Bool
   | p, '_' :: r => p.any alnumA && r.head?.any alnumA && usOK (some '_') r
   | _, c :: r => usOK (some c) r
 
-/-- The brackets balance, from depth `d`. -/
-def bal : Nat → List Char → Bool
-  | d, [] => d == 0
-  | 0, ']' :: _ => false
-  | d + 1, ']' :: r => bal d r
-  | d, '[' :: r => bal (d + 1) r
-  | d, _ :: r => bal d r
+/-- The brackets balance outside backtick raw spans, from depth `d` (`raw`: inside a raw
+span, which every backtick opens or closes); no bracket is inside a raw span, and the
+last raw span closes. -/
+def bal : Nat → Bool → List Char → Bool
+  | d, raw, [] => d == 0 && !raw
+  | d, raw, '`' :: r => bal d (!raw) r
+  | _, true, '[' :: _ => false
+  | _, true, ']' :: _ => false
+  | d, true, _ :: r => bal d true r
+  | 0, false, ']' :: _ => false
+  | d + 1, false, ']' :: r => bal d false r
+  | d, false, '[' :: r => bal (d + 1) false r
+  | d, false, _ :: r => bal d false r
 
 /-- Whether a description is written verbatim (above). -/
 def verbOK (s : List Char) : Bool :=
-  s.all (fun c => !(['#', '$', '@', '\\', '<', '*'].contains c)) && noComment s &&
-    usOK none s && bal 0 s && s.count '`' % 2 == 0
+  s.all (fun c => !(['#', '$', '@', '\\', '<', '*', '~'].contains c)) && noSeq s &&
+    usOK none s && bal 0 false s
 
-/-- The text of a content block from depth `d` up to the `]` that closes it, with each
+mutual
+/-- The text of a content block from depth `d` (`raw`: inside a backtick raw span) up to
+the `]` that closes it: a raw span's characters as they are, and outside one each
 backslash escape read as the character it escapes. -/
-def readVerb : Nat → List Char → Option (List Char × List Char)
-  | _, [] => none
-  | 0, ']' :: r => some ([], r)
-  | d + 1, ']' :: r => (readVerb d r).map (fun p => (']' :: p.1, p.2))
-  | d, '[' :: r => (readVerb (d + 1) r).map (fun p => ('[' :: p.1, p.2))
-  | d, '\\' :: c :: r => (readVerb d r).map (fun p => (c :: p.1, p.2))
-  | d, c :: r => (readVerb d r).map (fun p => (c :: p.1, p.2))
+def readVerb : Nat → Bool → List Char → Option (List Char × List Char)
+  | _, _, [] => none
+  | d, raw, '`' :: r => (readVerb d (!raw) r).map (fun p => ('`' :: p.1, p.2))
+  | d, true, c :: r => (readVerb d true r).map (fun p => (c :: p.1, p.2))
+  | 0, false, ']' :: r => some ([], r)
+  | d + 1, false, ']' :: r => (readVerb d false r).map (fun p => (']' :: p.1, p.2))
+  | d, false, '[' :: r => (readVerb (d + 1) false r).map (fun p => ('[' :: p.1, p.2))
+  | d, false, '\\' :: 'u' :: '{' :: r => readUni d none r
+  | d, false, '\\' :: c :: r => (readVerb d false r).map (fun p => (c :: p.1, p.2))
+  | _, false, ['\\'] => none
+  | d, false, c :: r => (readVerb d false r).map (fun p => (c :: p.1, p.2))
 
-theorem readVerb_bal (r : List Char) : ∀ (s : List Char) (d : Nat),
-    s.all (· != '\\') = true → bal d s = true → readVerb d (s ++ ']' :: r) = some (s, r)
-  | [], d, _, hb => by
-    simp only [bal, beq_iff_eq] at hb; subst hb; simp [readVerb]
-  | c :: s, d, hs, hb => by
+/-- A content block after `\u{` (`n`: the value of the hex digits so far): one or more
+hex digits, then `}`, a Unicode scalar value. -/
+def readUni : Nat → Option Nat → List Char → Option (List Char × List Char)
+  | _, _, [] => none
+  | d, some n, '}' :: r =>
+    if n.isValidChar then (readVerb d false r).map (fun p => (Char.ofNat n :: p.1, p.2))
+    else none
+  | d, n, c :: r => (hexVal c).bind (fun v => readUni d (some (16 * n.getD 0 + v)) r)
+end
+
+theorem readVerb_bal (r : List Char) : ∀ (s : List Char) (d : Nat) (raw : Bool),
+    s.all (· != '\\') = true → bal d raw s = true → readVerb d raw (s ++ ']' :: r) = some (s, r)
+  | [], d, raw, _, hb => by
+    simp only [bal, Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at hb
+    obtain ⟨rfl, rfl⟩ := hb; simp [readVerb]
+  | c :: s, d, raw, hs, hb => by
     simp only [List.all_cons, Bool.and_eq_true, bne_iff_ne, ne_eq] at hs
     have hs' : s.all (· != '\\') = true := by simpa using hs.2
-    by_cases h1 : c = ']'
-    · subst h1
-      cases d with
-      | zero => simp [bal] at hb
-      | succ d =>
-        simp only [bal] at hb
-        simp [readVerb, readVerb_bal r s d hs' hb]
-    · by_cases h2 : c = '['
-      · subst h2
-        simp only [bal] at hb
-        simp [readVerb, readVerb_bal r s (d + 1) hs' hb]
-      · have hb' : bal d s = true := by
-          cases d <;> (rw [bal] at hb <;> simp_all)
-        have ih := readVerb_bal r s d hs' hb'
-        rw [List.cons_append, readVerb] <;> simp_all
+    by_cases h0 : c = '`'
+    · subst h0
+      simp only [bal] at hb
+      simp [readVerb, readVerb_bal r s d (!raw) hs' hb]
+    cases raw with
+    | true =>
+      have h1 : c ≠ ']' := by rintro rfl; simp [bal] at hb
+      have h2 : c ≠ '[' := by rintro rfl; simp [bal] at hb
+      have hb' : bal d true s = true := by rw [bal] at hb <;> simp_all
+      have ih := readVerb_bal r s d true hs' hb'
+      rw [List.cons_append, readVerb] <;> simp_all
+    | false =>
+      by_cases h1 : c = ']'
+      · subst h1
+        cases d with
+        | zero => simp [bal] at hb
+        | succ d =>
+          simp only [bal] at hb
+          simp [readVerb, readVerb_bal r s d false hs' hb]
+      · by_cases h2 : c = '['
+        · subst h2
+          simp only [bal] at hb
+          simp [readVerb, readVerb_bal r s (d + 1) false hs' hb]
+        · have hb' : bal d false s = true := by
+            cases d <;> (rw [bal] at hb <;> simp_all)
+          have ih := readVerb_bal r s d false hs' hb'
+          rw [List.cons_append, readVerb] <;> simp_all
 
 /-! ## Named arguments -/
 
@@ -417,8 +458,12 @@ def labelOK (sl : List Char) : Bool :=
 
 /-! ## The lexer -/
 
+/-- A description opener, `#description[` or `#description(` (a line such as
+`#description-note[…]` is prose). -/
+def descOpen (s : List Char) : Bool := pre (oDesc ++ ['[']) s || pre (oDesc ++ ['(']) s
+
 def blockOpen (s : List Char) : Bool :=
-  pre oDesc s || pre oBlock s || pre oModel s || pre oRs s || pre oEq s || pre oCe s || pre oRxn s ||
+  descOpen s || pre oBlock s || pre oModel s || pre oRs s || pre oEq s || pre oCe s || pre oRxn s ||
     pre oInit s || pre oCons s || pre oPlot s || pre oSub s || pre oTmpl s || pre oRule s
 
 def declOpen (s : List Char) : Bool := pre oVar s || pre oParam s || pre oSpecies s
@@ -426,7 +471,7 @@ def declOpen (s : List Char) : Bool := pre oVar s || pre oParam s || pre oSpecie
 
 /-- A description after `#description`: a content block, or a string in parentheses. -/
 def descAt : List Char → Option (RItem × List Char)
-  | '[' :: u => (readVerb 0 u).bind (fun p => (lineEnd p.2).map (fun r => (.desc (String.ofList p.1), r)))
+  | '[' :: u => (readVerb 0 false u).bind (fun p => (lineEnd p.2).map (fun r => (.desc (String.ofList p.1), r)))
   | '(' :: u =>
     match parseQuoted true u with
     | some (s, ')' :: r) => (lineEnd r).map (fun r' => (.desc s, r'))
@@ -827,23 +872,34 @@ theorem descAt_body (s : String) (t : List Char) :
   · rename_i hv
     simp only [verbOK, Bool.and_eq_true] at hv
     have hs : s.toList.all (· != '\\') = true := by
-      have h1 := hv.1.1.1.1
+      have h1 := hv.1.1.1
       rw [List.all_eq_true] at h1 ⊢
       intro c hc
       have := h1 c hc
       revert this
       by_cases h : c = '\\' <;> simp [h]
     simp only [List.cons_append, List.append_assoc, List.nil_append, descAt,
-      readVerb_bal ('\n' :: t) s.toList 0 hs hv.1.2, Option.bind_some, lineEnd_nl,
+      readVerb_bal ('\n' :: t) s.toList 0 false hs hv.2, Option.bind_some, lineEnd_nl,
       String.ofList_toList, Option.map_some]
   · simp only [List.cons_append, List.append_assoc, List.nil_append, descAt, parseQuoted_quote,
       lineEnd_nl, Option.map_some]
+
+theorem descOpen_body (s : String) (t : List Char) :
+    descOpen (oDesc ++ descBody s ++ t) = true := by
+  unfold descBody descOpen
+  split
+  · have h := pre_append (oDesc ++ ['[']) (s.toList ++ ']' :: '\n' :: t)
+    simp only [List.append_assoc, List.cons_append, List.nil_append] at h ⊢
+    simp [h]
+  · have h := pre_append (oDesc ++ ['(']) (quote true s ++ ')' :: '\n' :: t)
+    simp only [List.append_assoc, List.cons_append, List.nil_append] at h ⊢
+    simp [h]
 
 theorem lex_desc (s : String) (bol : Bool) (hbol : bol = true) (t : List Char) (g : Nat) :
     lex (g + 1) bol (itemT (.desc s) ++ t) = (lex g true t).map (.desc s :: ·) := by
   apply lex_block_step g bol _ t _ (by simp [itemT, oDesc]) _ hbol
   · simp only [itemT, List.append_assoc, blockAt, pre_append, ite_true, List.drop_left, descAt_body]
-  · simp [itemT, blockOpen, pre_append]
+  · simp only [itemT, blockOpen, descOpen_body, Bool.true_or]
 
 theorem lex_block (k : String) (v : Json) (hv : itemOK (.block k v) = true) (bol : Bool)
     (hbol : bol = true) (t : List Char) (g : Nat)
@@ -899,7 +955,7 @@ theorem lex_eqnL (raw : String) (l : List Char) (hr : itemOK (.eqn raw) = true)
     rw [show raw.toList ++ ' ' :: '$' :: (l ++ '\n' :: t) =
       (raw.toList ++ [' ']) ++ '$' :: (l ++ '\n' :: t) by simp, List.drop_left]
     simp [splitLine_line l t hln, hl, dispItem, htm]
-  · simp [eqnLabeled, blockOpen, oDesc, oBlock, oModel, oRs, oEq, pre]
+  · simp [eqnLabeled, blockOpen, descOpen, oDesc, oBlock, oModel, oRs, oEq, pre]
 
 theorem lex_decl (d : Decl) (hk : d.kind ≠ .sub) (hd : itemOK (.decl d) = true) (bol : Bool)
     (t : List Char) (g : Nat) (hg : (itemT (.decl d)).length + t.length < g + 1) :
@@ -920,7 +976,7 @@ theorem lex_decl (d : Decl) (hk : d.kind ≠ .sub) (hd : itemOK (.decl d) = true
   have eP : oParam = ['#', 'p', 'a', 'r', 'a', 'm', '('] := rfl
   have eS : oSpecies = ['#', 's', 'p', 'e', 'c', 'i', 'e', 's', '('] := rfl
   apply lex_decl_step g bol _ t _ (by cases k <;> simp [declT, dkw, oVar, oParam, oSpecies, oSub_l])
-  · cases k <;> simp [declT, dkw, blockOpen, oVar, oParam, oSpecies, oDesc, oBlock, oModel,
+  · cases k <;> simp [declT, dkw, blockOpen, descOpen, oVar, oParam, oSpecies, oDesc, oBlock, oModel,
       oRs, oEq, oCe_l, oRxn_l, oInit_l, oCons_l, oPlot_l, oSub_l, oTmpl_l, oRule_l, pre] at hk ⊢
   · cases k <;> simp [declT, dkw, declOpen, oVar, oParam, oSpecies, pre] at hk ⊢
   · cases k
@@ -1083,7 +1139,7 @@ theorem lex_tm (t : Tm String) (ht : itemOK (.tm t) = true) (bol : Bool) (hbol :
             (tmRawT ⟨n, ps, none, b, []⟩ ++ [' ']) ++ '$' :: '\n' :: rest := by simp
         rw [e, takeWhile_noDollar _ _ (by simpa using hd'), List.drop_left]
         simp [splitLine, labelOK, dispItem, hlex]
-      · simp [blockOpen, oDesc, oBlock, oModel, oRs, oEq, pre]
+      · simp [blockOpen, descOpen, oDesc, oBlock, oModel, oRs, oEq, pre]
     | cons a as' =>
       obtain ⟨hlen, hsz⟩ := argsFirstT_bounds (a :: as')
       simp only [itemT] at hg ⊢

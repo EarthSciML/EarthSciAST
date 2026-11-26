@@ -88,9 +88,13 @@ HEADER = '#import "@preview/esm:0.1.0": *\n#show: esm-document.with('
 # A description is written verbatim as Typst markup, ``#description[...]``, when
 # ``verb_ok`` says that markup is safe to typeset, and as a Typst string,
 # ``#description("...")``, otherwise (``Typ.itemT``). The reader reads a content
-# block as Typst does: a backslash escapes the next character and brackets nest.
+# block as Typst does: outside a raw span a backslash escapes the next character
+# (``\\u{...}`` names a code point) and brackets nest; inside a raw span, between
+# backticks, every character is literal.
 
-_VERB_BANNED = frozenset("#$@\\<*")
+_VERB_BANNED = frozenset("#$@\\<*~")
+_VERB_SEQS = ("//", "/*", "--", "-?", "...")
+_HEX = frozenset("0123456789abcdefABCDEF")
 
 
 def _alnum_a(c: str) -> bool:
@@ -99,46 +103,76 @@ def _alnum_a(c: str) -> bool:
 
 
 def _bal(s: str) -> bool:
-    """``Typ.bal 0``: the brackets balance."""
+    """``Typ.bal``: the brackets outside raw spans balance, no raw span
+    holds a bracket, and every raw span is closed."""
     d = 0
+    raw = False
     for c in s:
-        if c == "[":
+        if c == "`":
+            raw = not raw
+        elif raw:
+            if c == "[" or c == "]":
+                return False
+        elif c == "[":
             d += 1
         elif c == "]":
             if d == 0:
                 return False
             d -= 1
-    return d == 0
+    return d == 0 and not raw
 
 
 def verb_ok(s: str) -> bool:
     """``Typ.verbOK``: whether a description is written verbatim: none of
-    ``# $ @ \\ < *``, no ``//`` or ``/*``, every ``_`` between two ASCII letters or
-    digits, balanced brackets and an even number of backticks."""
-    if any(c in _VERB_BANNED for c in s) or "//" in s or "/*" in s:
+    ``# $ @ \\ < * ~``, none of ``//``, ``/*``, ``--``, ``-?`` or ``...``, every
+    ``_`` between two ASCII letters or digits, balanced brackets outside raw
+    spans, no bracket inside one, and every raw span closed."""
+    if any(c in _VERB_BANNED for c in s) or any(q in s for q in _VERB_SEQS):
         return False
     n = len(s)
     for i, c in enumerate(s):
         if c == "_" and not (0 < i < n - 1 and _alnum_a(s[i - 1]) and _alnum_a(s[i + 1])):
             return False
-    return _bal(s) and s.count("`") % 2 == 0
+    return _bal(s)
 
 
 def _read_verb(s: str, i: int):
-    """``Typ.readVerb 0``: the text of a content block up to the ``]`` that closes
-    it, each backslash escape read as the character it escapes."""
+    """``Typ.readVerb``: the text of a content block up to the ``]`` that
+    closes it. Outside a raw span each backslash escape is read as the character
+    it escapes (``\\u{h+}`` as that code point); inside one every character is
+    literal."""
     out: list = []
     n = len(s)
     d = 0
+    raw = False
     while i < n:
         c = s[i]
-        if c == "]":
+        if raw:
+            if c == "`":
+                raw = False
+        elif c == "]":
             if d == 0:
                 return "".join(out), i + 1
             d -= 1
         elif c == "[":
             d += 1
-        elif c == "\\" and i + 1 < n:
+        elif c == "`":
+            raw = True
+        elif c == "\\":
+            if i + 1 >= n:
+                return None
+            if s[i + 1] == "u" and s.startswith("{", i + 2):
+                j = i + 3
+                while j < n and s[j] in _HEX:
+                    j += 1
+                if j == i + 3 or j >= n or s[j] != "}":
+                    return None
+                cp = int(s[i + 3 : j], 16)
+                if cp > 0x10FFFF or 0xD800 <= cp <= 0xDFFF:
+                    return None
+                out.append(chr(cp))
+                i = j + 1
+                continue
             out.append(s[i + 1])
             i += 2
             continue
@@ -447,7 +481,7 @@ def _label_ok(sl: str) -> bool:
 # ## The lexer
 
 _BLOCK_OPENS = (
-    O_DESC, O_BLOCK, O_MODEL, O_RS, O_EQ, O_CE, O_RXN, O_INIT, O_CONS, O_PLOT, O_SUB, O_TMPL,
+    O_DESC + "[", O_DESC + "(", O_BLOCK, O_MODEL, O_RS, O_EQ, O_CE, O_RXN, O_INIT, O_CONS, O_PLOT, O_SUB, O_TMPL,
     O_RULE,
 )  # fmt: skip
 

@@ -45,6 +45,32 @@
       "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description(\"First-order *loss* [x]\")\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n"
     },
     {
+      "id": "description_string_shorthand",
+      "kind": "print",
+      "description": "A description with a Typst shorthand (here ~, -- and ...) or a bracket inside a code span is written in Typst as a string: as markup it would typeset differently from the text, or not compile.",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"Box": {"description": "Valid for ~10--20 km... see index [`]`].", "equations": [{"lhs": {"args": ["c"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["u", "c"], "op": "*"}], "op": "-"}}], "variables": {"c": {"default": 0, "type": "unknown", "units": "kg/m^3"}, "u": {"default": 1, "type": "parameter", "units": "m/s"}}}}},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[Box]\n\n```esm:description\nValid for ~10--20 km... see index [`]`].\n```\n\n:var[$c$]{default=0 units=\"kg/m^3\"}\n\n:param[$u$]{default=1 units=\"m/s\"}\n\n$$\n\\frac{\\mathrm{d} c}{\\mathrm{d} t} = -u c\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description(\"Valid for ~10--20 km... see index [`]`].\")\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n"
+    },
+    {
+      "id": "description_raw_span",
+      "kind": "variant",
+      "description": "In a hand-written Typst description, a code span's characters are literal (a backslash or bracket inside one is kept as written), and outside one \\u{...} is a code point.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description[Use `\\n` or `]` here, caf\\u{e9}.]\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"Box": {"description": "Use `\\n` or `]` here, café.", "equations": [{"lhs": {"args": ["c"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["u", "c"], "op": "*"}], "op": "-"}}], "variables": {"c": {"default": 0, "type": "unknown", "units": "kg/m^3"}, "u": {"default": 1, "type": "parameter", "units": "m/s"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description(\"Use `\\\\n` or `]` here, café.\")\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n"
+    },
+    {
+      "id": "description_like_prose",
+      "kind": "variant",
+      "description": "A line that only starts like a description opener (here #description-note[...]) is prose, which the reader skips.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description-note[An aside.]\n\n#description[The box model.]\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"Box": {"description": "The box model.", "equations": [{"lhs": {"args": ["c"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["u", "c"], "op": "*"}], "op": "-"}}], "variables": {"c": {"default": 0, "type": "unknown", "units": "kg/m^3"}, "u": {"default": 1, "type": "parameter", "units": "m/s"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description[The box model.]\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n"
+    },
+    {
       "id": "declarations",
       "kind": "print",
       "description": "Variables and parameters are :var and :param directives (Typst #var, #param), the other fields attributes; a list-valued field is a quoted flow collection.",

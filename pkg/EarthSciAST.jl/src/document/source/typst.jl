@@ -52,27 +52,34 @@ const HEADER = "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with("
 # A description is written verbatim as Typst markup, `#description[…]`, when
 # `verb_ok` says that markup is safe to typeset, and as a Typst string,
 # `#description("…")`, otherwise (`Typ.itemT`). The reader reads a content
-# block as Typst does: a backslash escapes the next character and brackets nest.
+# block as Typst does: a backslash escapes the next character and brackets nest,
+# except inside a backtick raw span, where every character is literal.
 
 """`Typ.alnumA`: an ASCII letter or digit."""
 alnum_a(c) = c isa Char && isascii(c) && (isletter(c) || isdigit(c))
 
 """`Typ.verbOK`: whether a description is written verbatim: none of
-`# \$ @ \\ < *`, no `//` or `/*`, every `_` between two ASCII letters or digits,
-balanced brackets and an even number of backticks."""
+`# \$ @ \\ < * ~`, none of the sequences `//`, `/*`, `--`, `-?`, `...` (a
+comment, or a Typst shorthand that would typeset differently from the text),
+every `_` between two ASCII letters or digits, balanced brackets outside
+backtick raw spans, none inside one, and every raw span closed."""
 function verb_ok(cs::AbstractVector{Char})
     depth = 0
-    ticks = 0
+    raw = false
     n = length(cs)
     for i in 1:n
         c = cs[i]
-        c in ('#', '\$', '@', '\\', '<', '*') && return false
+        c in ('#', '\$', '@', '\\', '<', '*', '~') && return false
         nxt = i < n ? cs[i + 1] : nothing
         c == '/' && (nxt == '/' || nxt == '*') && return false
+        c == '-' && (nxt == '-' || nxt == '?') && return false
+        c == '.' && nxt == '.' && i + 2 <= n && cs[i + 2] == '.' && return false
         if c == '_'
             (i > 1 && alnum_a(cs[i - 1]) && alnum_a(nxt)) || return false
         elseif c == '`'
-            ticks += 1
+            raw = !raw
+        elseif raw
+            (c == '[' || c == ']') && return false
         elseif c == '['
             depth += 1
         elseif c == ']'
@@ -80,31 +87,61 @@ function verb_ok(cs::AbstractVector{Char})
             depth -= 1
         end
     end
-    return depth == 0 && iseven(ticks)
+    return depth == 0 && !raw
 end
 
-"""`Typ.readVerb 0`: the text of a content block up to the `]` that closes it,
-each backslash escape read as the character it escapes."""
+"""`Typ.readVerb 0 false`: the text of a content block up to the `]` that
+closes it, as Typst reads it: outside a backtick raw span a backslash escapes
+the next character (`\\u{…}` is a code point) and brackets nest; inside one
+every character is literal."""
 function read_verb(s::Chars)
     out = Char[]
     depth = 0
+    raw = false
     while true
         c = at(s)
         c == EOFC && return nothing
-        if c == ']'
+        if raw
+            c == '`' && (raw = false)
+        elseif c == ']'
             depth == 0 && return out, drop(s)
             depth -= 1
         elseif c == '['
             depth += 1
-        elseif c == '\\' && length(s) >= 2
-            push!(out, s[2])
-            s = drop(s, 2)
+        elseif c == '`'
+            raw = true
+        elseif c == '\\'
+            length(s) >= 2 || return nothing
+            if length(s) >= 3 && s[2] == 'u' && s[3] == '{'
+                x = unicode_esc(drop(s, 3))
+                x === nothing && return nothing
+                push!(out, x[1])
+                s = x[2]
+            else
+                push!(out, s[2])
+                s = drop(s, 2)
+            end
             continue
         end
         push!(out, c)
         s = drop(s)
     end
     return nothing
+end
+
+"""`Typ.readUni`: the rest of a `\\u{…}` escape after `\\u{`: one or more hex
+digits, then `}`, a Unicode scalar value."""
+function unicode_esc(s::Chars)
+    v = 0
+    n = 0
+    while n < length(s) && isxdigit(s[n + 1])
+        # Past 0x10FFFF the code point is refused; the cap keeps `v` from overflowing.
+        v = min(16v + parse(Int, s[n + 1]; base = 16), 0x00110000)
+        n += 1
+    end
+    (n == 0 || n == length(s) || s[n + 1] != '}') && return nothing
+    (v > 0x0010FFFF || 0xD800 <= v <= 0xDFFF) && return nothing
+    return Char(v), drop(s, n + 1)
 end
 
 """`Typ.argT`: `key: value`."""
@@ -500,11 +537,15 @@ end
 # ## The lexer
 
 const BLOCK_OPENERS = (
-    O_DESC, O_BLOCK, O_MODEL, O_RS, O_EQ, O_CE, O_RXN, O_INIT, O_CONS, O_PLOT, O_SUB, O_TMPL, O_RULE,
+    O_BLOCK, O_MODEL, O_RS, O_EQ, O_CE, O_RXN, O_INIT, O_CONS, O_PLOT, O_SUB, O_TMPL, O_RULE,
 )
 
+"""`Typ.descOpen`: a description opener, `#description[` or `#description(`
+(a line such as `#description-note[…]` is prose)."""
+desc_open(s::Chars) = pre_s(O_DESC * "[", s) || pre_s(O_DESC * "(", s)
+
 """`Typ.blockOpen`."""
-block_open(s::Chars) = any(o -> pre_s(o, s), BLOCK_OPENERS)
+block_open(s::Chars) = desc_open(s) || any(o -> pre_s(o, s), BLOCK_OPENERS)
 
 """`Typ.declOpen`."""
 decl_open(s::Chars) = pre_s(O_VAR, s) || pre_s(O_PARAM, s) || pre_s(O_SPECIES, s)

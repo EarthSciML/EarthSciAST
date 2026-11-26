@@ -53,49 +53,102 @@ const EMPTY_SYM: Sym = { names: [], templates: [] }
 // `#description("…")`, otherwise (`Typ.itemT`). The reader reads a content
 // block as Typst does: a backslash escapes the next character and brackets nest.
 
-const VERB_BANNED = new Set(['#', '$', '@', '\\', '<', '*'])
+const VERB_BANNED = new Set(['#', '$', '@', '\\', '<', '*', '~'])
 
 /** `Typ.alnumA`: an ASCII letter or digit. */
 const alnumA = (c: string | undefined): boolean => c !== undefined && /^[A-Za-z0-9]$/.test(c)
 
+/** The Typst comment openers and shorthands a verbatim description avoids. */
+const VERB_SEQS = ['//', '/*', '--', '-?', '...']
+
 /**
  * `Typ.verbOK`: whether a description is written verbatim: none of
- * `# $ @ \ < *`, no `//` or `/*`, every `_` between two ASCII letters or
- * digits, balanced brackets and an even number of backticks.
+ * `# $ @ \ < * ~`, none of `//`, `/*`, `--`, `-?` or `...`, every `_` between
+ * two ASCII letters or digits, and brackets balanced outside raw spans with no
+ * bracket inside one and every raw span closed.
  */
 export function verbOk(s: string): boolean {
+  if (VERB_SEQS.some((q) => s.includes(q))) return false
   const cs = chars(s)
   let depth = 0
-  let ticks = 0
+  let raw = false
   for (let i = 0; i < cs.length; i++) {
     const c = cs[i]
     if (VERB_BANNED.has(c)) return false
-    if (c === '/' && (cs[i + 1] === '/' || cs[i + 1] === '*')) return false
     if (c === '_' && !(alnumA(cs[i - 1]) && alnumA(cs[i + 1]))) return false
-    if (c === '`') ticks++
-    if (c === '[') depth++
-    if (c === ']' && --depth < 0) return false
+    if (c === '`') raw = !raw
+    else if (c === '[' || c === ']') {
+      if (raw) return false
+      if (c === '[') depth++
+      else if (depth === 0) return false
+      else depth--
+    }
   }
-  return depth === 0 && ticks % 2 === 0
+  return depth === 0 && !raw
+}
+
+/** The value of a hex digit, or `undefined`. */
+const hexDigit = (c: string | undefined): number | undefined =>
+  c !== undefined && /^[0-9a-fA-F]$/.test(c) ? parseInt(c, 16) : undefined
+
+/**
+ * The hex digits and `}` of a `\u{…}` escape, read from just
+ * after the `{`, as the character with that code point; `undefined` if there
+ * are no digits, a non-digit comes before the `}`, the input ends first, or the
+ * code point is not a Unicode scalar value.
+ */
+function readUni(cs: Chars, i: number): Read<string> {
+  let n = 0
+  let digits = 0
+  for (;;) {
+    const c = cs[i]
+    if (c === undefined) return undefined
+    if (c === '}') {
+      if (digits === 0 || n > 0x10ffff || (n >= 0xd800 && n <= 0xdfff)) return undefined
+      return [String.fromCodePoint(n), i + 1]
+    }
+    const d = hexDigit(c)
+    if (d === undefined) return undefined
+    // Saturate past the largest code point so long digit runs cannot overflow.
+    n = Math.min(n * 16 + d, 0x110000)
+    digits++
+    i++
+  }
 }
 
 /**
- * `Typ.readVerb 0`: the text of a content block up to the `]` that closes it,
- * each backslash escape read as the character it escapes.
+ * `Typ.readVerb 0`: the text of a content block up to the `]` that closes it.
+ * Outside a raw span a backslash escapes the next character (`\u{h+}` is the
+ * character with that code point) and brackets nest; inside a raw span (between
+ * backticks) every character is literal.
  */
 function readVerb(cs: Chars, i: number): Read<string> {
   let out = ''
   let depth = 0
+  let raw = false
   for (;;) {
     const c = cs[i]
     if (c === undefined) return undefined
-    if (c === ']') {
+    if (raw) {
+      if (c === '`') raw = false
+    } else if (c === ']') {
       if (depth === 0) return [out, i + 1]
       depth--
     } else if (c === '[') {
       depth++
-    } else if (c === '\\' && i + 1 < cs.length) {
-      out += cs[i + 1]
+    } else if (c === '`') {
+      raw = true
+    } else if (c === '\\') {
+      const e = cs[i + 1]
+      if (e === undefined) return undefined
+      if (e === 'u' && cs[i + 2] === '{') {
+        const u = readUni(cs, i + 3)
+        if (u === undefined) return undefined
+        out += u[0]
+        i = u[1]
+        continue
+      }
+      out += e
       i += 2
       continue
     }
@@ -376,7 +429,8 @@ function labelOk(sl: string): boolean {
 // ## The lexer
 
 const BLOCK_OPENS = [
-  O_DESC,
+  `${O_DESC}[`,
+  `${O_DESC}(`,
   O_BLOCK,
   O_MODEL,
   O_RS,
@@ -391,7 +445,10 @@ const BLOCK_OPENS = [
   O_RULE,
 ]
 
-/** `Typ.blockOpen`. */
+/**
+ * `Typ.blockOpen`: a description opens a block only as `#description[` or
+ * `#description(`, so `#description-note[…]` stays prose.
+ */
 function blockOpen(cs: Chars, i: number): boolean {
   const c = cs[i]
   if (c !== '#' && c !== '$') return false

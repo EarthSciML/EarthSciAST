@@ -68,17 +68,23 @@ fn alnum_a(c: Option<&char>) -> bool {
 }
 
 /// `Typ.verbOK`: whether a description is written verbatim: none of
-/// `# $ @ \ < *`, no `//` or `/*`, every `_` between two ASCII letters or
-/// digits, balanced brackets and an even number of backticks.
+/// `# $ @ \ < * ~`, none of the sequences `//`, `/*`, `--`, `-?`, `...` (a
+/// comment, or a Typst shorthand that would typeset differently from the
+/// text), every `_` between two ASCII letters or digits, balanced brackets
+/// outside backtick raw spans, none inside one, and every raw span closed.
 pub fn verb_ok(cs: &[char]) -> bool {
     let mut depth = 0usize;
-    let mut ticks = 0usize;
+    let mut raw = false;
     for (i, &c) in cs.iter().enumerate() {
+        let next = cs.get(i + 1).copied();
         match c {
-            '#' | '$' | '@' | '\\' | '<' | '*' => return false,
-            '/' if matches!(cs.get(i + 1), Some('/' | '*')) => return false,
+            '#' | '$' | '@' | '\\' | '<' | '*' | '~' => return false,
+            '/' if matches!(next, Some('/' | '*')) => return false,
+            '-' if matches!(next, Some('-' | '?')) => return false,
+            '.' if next == Some('.') && cs.get(i + 2) == Some(&'.') => return false,
             '_' if !(i > 0 && alnum_a(cs.get(i - 1)) && alnum_a(cs.get(i + 1))) => return false,
-            '`' => ticks += 1,
+            '`' => raw = !raw,
+            '[' | ']' if raw => return false,
             '[' => depth += 1,
             ']' => match depth.checked_sub(1) {
                 Some(d) => depth = d,
@@ -87,18 +93,35 @@ pub fn verb_ok(cs: &[char]) -> bool {
             _ => {}
         }
     }
-    depth == 0 && ticks % 2 == 0
+    depth == 0 && !raw
 }
 
-/// `Typ.readVerb 0`: the text of a content block up to the `]` that closes
-/// it, each backslash escape read as the character it escapes.
+/// `Typ.readVerb 0 false`: the text of a content block up to the `]` that
+/// closes it, as Typst reads it: outside a backtick raw span a backslash
+/// escapes the next character (`\u{…}` is a code point) and brackets nest;
+/// inside one every character is literal.
 pub fn read_verb(mut s: &[char]) -> Option<(Vec<char>, &[char])> {
     let mut out = Vec::new();
     let mut depth = 0usize;
+    let mut raw = false;
     loop {
         match s {
             [] => return None,
+            ['`', r @ ..] => {
+                out.push('`');
+                raw = !raw;
+                s = r;
+            }
+            [c, r @ ..] if raw => {
+                out.push(*c);
+                s = r;
+            }
             [']', r @ ..] if depth == 0 => return Some((out, r)),
+            ['\\', 'u', '{', r @ ..] => {
+                let (c, r) = unicode_esc(r)?;
+                out.push(c);
+                s = r;
+            }
             ['\\', c, r @ ..] => {
                 out.push(*c);
                 s = r;
@@ -114,6 +137,17 @@ pub fn read_verb(mut s: &[char]) -> Option<(Vec<char>, &[char])> {
             }
         }
     }
+}
+
+/// `Typ.readVerb`'s `\u{…}`: one or more hex digits then `}`, a Unicode
+/// scalar value.
+fn unicode_esc(s: &[char]) -> Option<(char, &[char])> {
+    let n = s.iter().take_while(|c| c.is_ascii_hexdigit()).count();
+    if n == 0 || s.get(n) != Some(&'}') {
+        return None;
+    }
+    let v = u32::from_str_radix(&string(&s[..n]), 16).ok()?;
+    char::from_u32(v).map(|c| (c, &s[n + 1..]))
 }
 
 /// `Typ.argT`: `key: value`.
@@ -550,14 +584,21 @@ pub fn label_ok(sl: &[char]) -> bool {
 
 // ## The lexer
 
+/// `Typ.descOpen`: a description opener, `#description[` or `#description(`
+/// (a line such as `#description-note[…]` is prose).
+pub fn desc_open(s: &[char]) -> bool {
+    pre_s(O_DESC, s) && matches!(s.get(O_DESC.len()), Some('[' | '('))
+}
+
 /// `Typ.blockOpen`.
 pub fn block_open(s: &[char]) -> bool {
-    [
-        O_DESC, O_BLOCK, O_MODEL, O_RS, O_EQ, O_CE, O_RXN, O_INIT, O_CONS, O_PLOT, O_SUB, O_TMPL,
-        O_RULE,
-    ]
-    .iter()
-    .any(|o| pre_s(o, s))
+    desc_open(s)
+        || [
+            O_BLOCK, O_MODEL, O_RS, O_EQ, O_CE, O_RXN, O_INIT, O_CONS, O_PLOT, O_SUB, O_TMPL,
+            O_RULE,
+        ]
+        .iter()
+        .any(|o| pre_s(o, s))
 }
 
 /// `Typ.declOpen`.

@@ -54,7 +54,9 @@ const stypHeader = "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(
 // A description is written verbatim as Typst markup, `#description[…]`, when
 // stypVerbOK says that markup is safe to typeset, and as a Typst string,
 // `#description("…")`, otherwise (`Typ.itemT`). The reader reads a content
-// block as Typst does: a backslash escapes the next character and brackets nest.
+// block as Typst does: a backslash escapes the next character, `\u{…}` is a
+// code point, brackets nest, and inside a raw span (between backticks) every
+// character is literal.
 
 // stypAlnumA is `Typ.alnumA`: an ASCII letter or digit.
 func stypAlnumA(c rune) bool {
@@ -62,43 +64,106 @@ func stypAlnumA(c rune) bool {
 }
 
 // stypVerbOK is `Typ.verbOK`: whether a description is written verbatim: none
-// of `# $ @ \ < *`, no `//` or `/*`, every `_` between two ASCII letters or
-// digits, balanced brackets and an even number of backticks.
+// of `# $ @ \ < * ~`, none of the sequences `//` `/*` `--` `-?` `...`, every
+// `_` between two ASCII letters or digits, balanced brackets outside raw
+// spans, no bracket inside a raw span, and every raw span closed.
 func stypVerbOK(cs []rune) bool {
-	depth, ticks := 0, 0
+	at := func(i int) rune {
+		if i < len(cs) {
+			return cs[i]
+		}
+		return 0
+	}
+	depth, raw := 0, false
 	for i, c := range cs {
 		switch c {
-		case '#', '$', '@', '\\', '<', '*':
+		case '#', '$', '@', '\\', '<', '*', '~':
 			return false
 		case '/':
-			if i+1 < len(cs) && (cs[i+1] == '/' || cs[i+1] == '*') {
+			if n := at(i + 1); n == '/' || n == '*' {
+				return false
+			}
+		case '-':
+			if n := at(i + 1); n == '-' || n == '?' {
+				return false
+			}
+		case '.':
+			if at(i+1) == '.' && at(i+2) == '.' {
 				return false
 			}
 		case '_':
-			if i == 0 || i+1 >= len(cs) || !stypAlnumA(cs[i-1]) || !stypAlnumA(cs[i+1]) {
+			if i == 0 || !stypAlnumA(cs[i-1]) || !stypAlnumA(at(i+1)) {
 				return false
 			}
 		case '`':
-			ticks++
+			raw = !raw
 		case '[':
+			if raw {
+				return false
+			}
 			depth++
 		case ']':
-			if depth == 0 {
+			if raw || depth == 0 {
 				return false
 			}
 			depth--
 		}
 	}
-	return depth == 0 && ticks%2 == 0
+	return depth == 0 && !raw
+}
+
+// stypHexVal is the value of an ASCII hex digit, or -1.
+func stypHexVal(c rune) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	}
+	return -1
+}
+
+// stypReadUEsc reads the `h+}` of a `\u{h+}` escape: the code point, which must
+// be a Unicode scalar value, and the rest after the `}`.
+func stypReadUEsc(s []rune) (rune, []rune, bool) {
+	v, n := 0, 0
+	for len(s) > 0 && s[0] != '}' {
+		h := stypHexVal(s[0])
+		if h < 0 {
+			return 0, nil, false
+		}
+		if v <= 0x10FFFF {
+			v = v*16 + h
+		}
+		n++
+		s = s[1:]
+	}
+	if len(s) == 0 || n == 0 || v > 0x10FFFF || (v >= 0xD800 && v <= 0xDFFF) {
+		return 0, nil, false
+	}
+	return rune(v), s[1:], true
 }
 
 // stypReadVerb is `Typ.readVerb 0`: the text of a content block up to the `]`
-// that closes it, each backslash escape read as the character it escapes.
+// that closes it. Outside a raw span a backslash escape reads as the character
+// it escapes (`\u{h+}` as that code point) and brackets nest; inside a raw span
+// every character up to the closing backtick is literal.
 func stypReadVerb(s []rune) ([]rune, []rune, bool) {
 	var out []rune
-	depth := 0
+	depth, raw := 0, false
 	for len(s) > 0 {
-		switch s[0] {
+		c := s[0]
+		if raw {
+			if c == '`' {
+				raw = false
+			}
+			out = append(out, c)
+			s = s[1:]
+			continue
+		}
+		switch c {
 		case ']':
 			if depth == 0 {
 				return out, s[1:], true
@@ -106,14 +171,26 @@ func stypReadVerb(s []rune) ([]rune, []rune, bool) {
 			depth--
 		case '[':
 			depth++
+		case '`':
+			raw = true
 		case '\\':
-			if len(s) >= 2 {
-				out = append(out, s[1])
-				s = s[2:]
+			if len(s) < 2 {
+				return nil, nil, false
+			}
+			if s[1] == 'u' && len(s) >= 3 && s[2] == '{' {
+				r, rest, ok := stypReadUEsc(s[3:])
+				if !ok {
+					return nil, nil, false
+				}
+				out = append(out, r)
+				s = rest
 				continue
 			}
+			out = append(out, s[1])
+			s = s[2:]
+			continue
 		}
-		out = append(out, s[0])
+		out = append(out, c)
 		s = s[1:]
 	}
 	return nil, nil, false
@@ -628,11 +705,12 @@ func stypLabelOk(sl []rune) bool {
 // ## The lexer
 
 var stypBlockOpeners = []string{
-	stypODesc, stypOBlock, stypOModel, stypORs, stypOEq, stypOCe, stypORxn, stypOInit,
+	stypODesc + "[", stypODesc + "(", stypOBlock, stypOModel, stypORs, stypOEq, stypOCe, stypORxn, stypOInit,
 	stypOCons, stypOPlot, stypOSub, stypOTmpl, stypORule,
 }
 
-// stypBlockOpen is `Typ.blockOpen`.
+// stypBlockOpen is `Typ.blockOpen`. A description opens a block only as
+// `#description[` or `#description(`, so `#description-note[…]` stays prose.
 func stypBlockOpen(s []rune) bool {
 	if len(s) == 0 || (s[0] != '#' && s[0] != '$') {
 		return false
