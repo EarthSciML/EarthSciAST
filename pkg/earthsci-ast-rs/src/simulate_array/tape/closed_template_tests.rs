@@ -18,8 +18,8 @@
 use super::ir::Instr;
 use super::template_fixtures::{argmin_doc, calendar_doc, cells, overlap_doc, relational_doc};
 use super::test_support::{
-    apply, compile, count_where, d_lhs, document, faq, fast_dy, idx, ix, library, op, oracle_ab,
-    seeded_state,
+    ab_check_at_times, apply, compile, count_where, d_lhs, document, faq, fast_dy, idx, ix,
+    library, op, oracle_ab, seeded_state,
 };
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -146,19 +146,29 @@ fn successor_subscripts_bounded_by_their_condition() {
 /// The scaling family's conservative regrid with its overlap areas written
 /// as the planar template, `dx` the bin width.
 fn template_regrid(n: usize, dx: f64) -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../tests/conformance/scaling/fixtures/regrid/regrid_N{n}.esm"
-    ));
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/scaling/fixtures/regrid/regrid_N100.esm");
     let mut doc: Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture")).expect("parses");
+    for set in ["src_cells", "tgt_cells"] {
+        doc["index_sets"][set]["size"] = json!(n);
+    }
     let m = &mut doc["models"]["Regrid"];
     for eq in m["equations"].as_array_mut().expect("equations") {
-        if eq["lhs"] == json!("A_ij") {
-            eq["rhs"]["expr"] = apply(
-                "overlap_area_planar",
-                json!({"ring_a": "src_poly", "cell_a": "i", "nv_a": 4,
+        match eq["lhs"].as_str() {
+            Some("src_poly" | "tgt_poly") => {
+                let rings = eq["rhs"]["value"].as_array_mut().expect("polygon rings");
+                assert!(rings.len() >= n);
+                rings.truncate(n);
+            }
+            Some("A_ij") => {
+                eq["rhs"]["expr"] = apply(
+                    "overlap_area_planar",
+                    json!({"ring_a": "src_poly", "cell_a": "i", "nv_a": 4,
                        "ring_b": "tgt_poly", "cell_b": "j", "nv_b": 4}),
-            );
+                )
+            }
+            _ => {}
         }
     }
     m["variables"]["dx"]["default"] = json!(dx);
@@ -199,16 +209,23 @@ fn widest_own(prog: &super::ir::TapeProgram) -> usize {
 /// the whole box, as before, with the same agreement.
 #[test]
 fn gated_pointwise_faq_compacts_to_its_candidate_cells() {
-    let n = 100;
-    let sparse = super::test_support::ab_check(template_regrid(n, 2.0), 0.5, 2.0);
+    // The sparse join keeps 65 of 1089 pairs. Its 16 vertex pairs per admitted
+    // cell fit under n², so the width check still rules out a dense vertex loop.
+    // The prefix retains full and half overlaps. The RHS has no time input.
+    let sparse_n = 33;
+    let times = &[0.37];
+    let sparse = ab_check_at_times(template_regrid(sparse_n, 2.0), 0.5, 2.0, times);
     assert!(
-        widest(&sparse) <= n * n,
+        widest(&sparse) <= sparse_n * sparse_n,
         "the overlap body ran over a box of {} elements",
         widest(&sparse)
     );
-    let dense = super::test_support::ab_check(template_regrid(n, 1.0e6), 0.5, 2.0);
+
+    // A single bin admits every pair, even on the smaller dense fixture.
+    let dense_n = 17;
+    let dense = ab_check_at_times(template_regrid(dense_n, 1.0e6), 0.5, 2.0, times);
     assert!(
-        widest(&dense) >= n * n * 4,
+        widest(&dense) >= dense_n * dense_n * 4,
         "a gate keeping every cell is not compacted"
     );
 }

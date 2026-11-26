@@ -112,11 +112,11 @@ end
         @test !haskey(tiers, :percell_build)
     end
 
+    # Both regrid cases use the same native and interpreter builds.
+    regrid = _act_agree(_act_fixture("tests/conformance/scaling/fixtures/regrid/regrid_N100.esm"))
+
     @testset "a materialized observed over a join-gated producer" begin
-        # The scaling tier's regrid: F_rg[j] = Σ_i W[i,j]·F_src[i] over the
-        # bin-join candidates, with F_src a state, read by D(F_tgt).
-        path = _act_fixture("tests/conformance/scaling/fixtures/regrid/regrid_N100.esm")
-        same, tally, tiers, (pn, u), (pi_, ui) = _act_agree(path)
+        same, tally, tiers, (pn, u), (pi_, ui) = regrid
         @test same
         @test get(tally, :percell_acc, 0) == 0
         @test !haskey(tiers, :percell_build)
@@ -141,9 +141,7 @@ end
         # which reads only a build constant and a parameter: the nest folds the
         # entries the gate admits at the current `p`, and D(F_tgt) is computed
         # in the same pass from the value it stores.
-        path = _act_fixture("tests/conformance/scaling/fixtures/regrid/regrid_N100.esm")
-        same, tally, _, (pn, u), (pi_, ui) = _act_agree(path)
-        @test same
+        _, tally, _, (pn, u), (pi_, ui) = regrid
         @test get(tally, :array_contraction_consumer, 0) == 1
         f = pn.f!
         # The observed fill stages the right-hand side runs before its state stage.
