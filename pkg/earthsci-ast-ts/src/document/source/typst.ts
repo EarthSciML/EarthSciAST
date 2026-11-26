@@ -20,7 +20,7 @@ import { afterS, blank, hasSub, preS, splitLine, str, takeWhile } from './text.j
 
 // ## Spellings
 
-const O_DESC = '#description['
+const O_DESC = '#description'
 const O_BLOCK = '#esm-block('
 const O_MODEL = '#model('
 const O_RS = '#reaction-system('
@@ -47,45 +47,58 @@ export const HEADER = '#import "@preview/esm:0.1.0": *\n#show: esm-document.with
 const EMPTY_SYM: Sym = { names: [], templates: [] }
 
 // ## Description text
+//
+// A description is written verbatim as Typst markup, `#description[…]`, when
+// `verbOk` says that markup is safe to typeset, and as a Typst string,
+// `#description("…")`, otherwise (`Typ.itemT`). The reader reads a content
+// block as Typst does: a backslash escapes the next character and brackets nest.
 
-const ALWAYS_ESC = new Set(['\\', '[', ']', '#', '$', '*', '_', '`', '<', '>', '@', '~'])
+const VERB_BANNED = new Set(['#', '$', '@', '\\', '<', '*'])
 
-/** `Typ.mustEsc`: whether a character of a description is written escaped. */
-function mustEsc(bol: boolean, c: string, next: string | undefined): boolean {
-  return (
-    ALWAYS_ESC.has(c) ||
-    (bol && (c === '=' || c === '-' || c === '+')) ||
-    (c === '/' && (next === '/' || next === '*'))
-  )
-}
+/** `Typ.alnumA`: an ASCII letter or digit. */
+const alnumA = (c: string | undefined): boolean => c !== undefined && /^[A-Za-z0-9]$/.test(c)
 
-/** `Typ.escT`: a description's text in a content block. */
-function escDesc(bol: boolean, s: string): string {
+/**
+ * `Typ.verbOK`: whether a description is written verbatim: none of
+ * `# $ @ \ < *`, no `//` or `/*`, every `_` between two ASCII letters or
+ * digits, balanced brackets and an even number of backticks.
+ */
+export function verbOk(s: string): boolean {
   const cs = chars(s)
-  let out = ''
-  let b = bol
+  let depth = 0
+  let ticks = 0
   for (let i = 0; i < cs.length; i++) {
     const c = cs[i]
-    if (mustEsc(b, c, cs[i + 1])) out += '\\'
-    out += c
-    b = c === '\n'
+    if (VERB_BANNED.has(c)) return false
+    if (c === '/' && (cs[i + 1] === '/' || cs[i + 1] === '*')) return false
+    if (c === '_' && !(alnumA(cs[i - 1]) && alnumA(cs[i + 1]))) return false
+    if (c === '`') ticks++
+    if (c === '[') depth++
+    if (c === ']' && --depth < 0) return false
   }
-  return out
+  return depth === 0 && ticks % 2 === 0
 }
 
-/** `Typ.readEsc`: the text of a content block up to its unescaped `]`. */
-function readEsc(cs: Chars, i: number): Read<string> {
+/**
+ * `Typ.readVerb 0`: the text of a content block up to the `]` that closes it,
+ * each backslash escape read as the character it escapes.
+ */
+function readVerb(cs: Chars, i: number): Read<string> {
   let out = ''
+  let depth = 0
   for (;;) {
     const c = cs[i]
     if (c === undefined) return undefined
-    if (c === ']') return [out, i + 1]
-    if (c === '\\' && i + 1 < cs.length) {
+    if (c === ']') {
+      if (depth === 0) return [out, i + 1]
+      depth--
+    } else if (c === '[') {
+      depth++
+    } else if (c === '\\' && i + 1 < cs.length) {
       out += cs[i + 1]
       i += 2
       continue
     }
-    if (c === '[') return undefined
     out += c
     i++
   }
@@ -323,7 +336,7 @@ export function tmLexT(raw: string): [string, string[], string] | undefined {
 export function itemT(it: RItem): string {
   switch (it.i) {
     case 'desc':
-      return `${O_DESC}${escDesc(true, it.s)}]\n`
+      return verbOk(it.s) ? `${O_DESC}[${it.s}]\n` : `${O_DESC}(${quote(true, it.s)})\n`
     case 'block':
       return `${O_BLOCK}${quote(true, it.k)}, ${typstDict.encode(it.v)})\n`
     case 'comp':
@@ -389,9 +402,15 @@ function blockOpen(cs: Chars, i: number): boolean {
 const declOpen = (cs: Chars, i: number): boolean =>
   cs[i] === '#' && (preS(O_VAR, cs, i) || preS(O_PARAM, cs, i) || preS(O_SPECIES, cs, i))
 
-/** `Typ.descAt`. */
+/** `Typ.descAt`: a description after `#description`: a content block, or a string in parentheses. */
 function descAt(cs: Chars, i: number): Read<RItem> {
-  const t = readEsc(cs, i)
+  let t: Read<string>
+  if (cs[i] === '[') t = readVerb(cs, i + 1)
+  else if (cs[i] === '(') {
+    const q = parseQuoted(true, cs, i + 1)
+    if (q === undefined || cs[q[1]] !== ')') return undefined
+    t = [q[0], q[1] + 1]
+  } else return undefined
   if (t === undefined) return undefined
   const r = lineEnd(cs, t[1])
   return r === undefined ? undefined : [{ i: 'desc', s: t[0] }, r]

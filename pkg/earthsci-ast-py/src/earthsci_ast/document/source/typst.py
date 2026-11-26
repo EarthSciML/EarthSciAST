@@ -60,7 +60,7 @@ from .text import blank, decode_text, split_line, take_while
 
 # ## Spellings
 
-O_DESC = "#description["
+O_DESC = "#description"
 O_BLOCK = "#esm-block("
 O_MODEL = "#model("
 O_RS = "#reaction-system("
@@ -84,43 +84,67 @@ DKW = {VAR: O_VAR, PARAM: O_PARAM, SPECIES: O_SPECIES, SUB: O_SUB}
 HEADER = '#import "@preview/esm:0.1.0": *\n#show: esm-document.with('
 
 # ## Description text
+#
+# A description is written verbatim as Typst markup, ``#description[...]``, when
+# ``verb_ok`` says that markup is safe to typeset, and as a Typst string,
+# ``#description("...")``, otherwise (``Typ.itemT``). The reader reads a content
+# block as Typst does: a backslash escapes the next character and brackets nest.
 
-_ALWAYS_ESC = frozenset("\\[]#$*_`<>@~")
+_VERB_BANNED = frozenset("#$@\\<*")
 
 
-def esc_t(bol: bool, s: str) -> str:
-    """``Typ.escT``: a description's text in a content block (``Typ.mustEsc``
-    decides which characters are escaped)."""
-    out = []
-    b = bol
+def _alnum_a(c: str) -> bool:
+    """``Typ.alnumA``: an ASCII letter or digit."""
+    return c.isascii() and c.isalnum()
+
+
+def _bal(s: str) -> bool:
+    """``Typ.bal 0``: the brackets balance."""
+    d = 0
+    for c in s:
+        if c == "[":
+            d += 1
+        elif c == "]":
+            if d == 0:
+                return False
+            d -= 1
+    return d == 0
+
+
+def verb_ok(s: str) -> bool:
+    """``Typ.verbOK``: whether a description is written verbatim: none of
+    ``# $ @ \\ < *``, no ``//`` or ``/*``, every ``_`` between two ASCII letters or
+    digits, balanced brackets and an even number of backticks."""
+    if any(c in _VERB_BANNED for c in s) or "//" in s or "/*" in s:
+        return False
     n = len(s)
     for i, c in enumerate(s):
-        nxt = s[i + 1] if i + 1 < n else ""
-        if c in _ALWAYS_ESC or (b and c in "=-+") or (c == "/" and nxt in ("/", "*") and nxt):
-            out.append("\\")
-        out.append(c)
-        b = c == "\n"
-    return "".join(out)
+        if c == "_" and not (0 < i < n - 1 and _alnum_a(s[i - 1]) and _alnum_a(s[i + 1])):
+            return False
+    return _bal(s) and s.count("`") % 2 == 0
 
 
-def _read_esc(s: str, i: int):
-    """``Typ.readEsc``: the text of a content block up to its unescaped ``]``."""
+def _read_verb(s: str, i: int):
+    """``Typ.readVerb 0``: the text of a content block up to the ``]`` that closes
+    it, each backslash escape read as the character it escapes."""
     out: list = []
     n = len(s)
-    while True:
-        if i >= n:
-            return None
+    d = 0
+    while i < n:
         c = s[i]
         if c == "]":
-            return "".join(out), i + 1
-        if c == "\\" and i + 1 < n:
+            if d == 0:
+                return "".join(out), i + 1
+            d -= 1
+        elif c == "[":
+            d += 1
+        elif c == "\\" and i + 1 < n:
             out.append(s[i + 1])
             i += 2
-        elif c == "[":
-            return None
-        else:
-            out.append(c)
-            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return None
 
 
 def arg_t(a: tuple) -> str:
@@ -378,7 +402,9 @@ def item_t(it: tuple) -> str:
     """``Typ.itemT``: the text of a construct."""
     tag = it[0]
     if tag == "desc":
-        return O_DESC + esc_t(True, it[1]) + "]\n"
+        if verb_ok(it[1]):
+            return O_DESC + "[" + it[1] + "]\n"
+        return O_DESC + "(" + quote(True, it[1]) + ")\n"
     if tag == "block":
         return O_BLOCK + quote(True, it[1]) + ", " + typst_dict.encode(it[2]) + ")\n"
     if tag == "comp":
@@ -427,7 +453,17 @@ _BLOCK_OPENS = (
 
 
 def _desc_at(s: str, i: int):
-    r = _read_esc(s, i)
+    """``Typ.descAt``: a description after ``#description``: a content block, or
+    a string in parentheses."""
+    if s.startswith("[", i):
+        r = _read_verb(s, i + 1)
+    elif s.startswith("(", i):
+        r = parse_quoted(True, s, i + 1)
+        if r is None or not s.startswith(")", r[1]):
+            return None
+        r = (r[0], r[1] + 1)
+    else:
+        return None
     if r is None:
         return None
     e = _line_end(s, r[1])

@@ -10,7 +10,7 @@ An ESM document in Typst is markup plus the functions of an `esm` Typst package:
 #import "@preview/esm:0.1.0": *
 #show: esm-document.with(esm: "2.4.0", name: "Decay")
 
-#description[First\-order radioactive decay.]
+#description[First-order radioactive decay.]
 
 #model("Decay")
 
@@ -24,8 +24,9 @@ The constructs (`Esm.Document.Source.RItem`), and where they may appear:
 * the header: the `#import` line, then `#show: esm-document.with(…)` with the
   front-matter entries as named arguments (values in the Typst value syntax,
   `Esm.Document.TypstDict`);
-* at the start of a line: `#description[…]` (the text with Typst's markup characters
-  escaped by a backslash), `#esm-block("key", value)` (a path block), `#model("Name")`
+* at the start of a line: `#description[…]` (the text verbatim, as Typst markup, when
+  that is safe to typeset, `verbOK`) or `#description("…")` (the text as a Typst string),
+  `#esm-block("key", value)` (a path block), `#model("Name")`
   or `#reaction-system("Name")`, and a display equation `$ … $` (optionally followed by
   a label `<eq-x>`, which is discarded);
 * at the start of a line: a reaction, `#ce[…] <id>` on one line, in typsium
@@ -62,7 +63,7 @@ open Esm.Document Esm.Document.Math Esm.Document.Source Esm.Document.Strings
 
 /-! ## Spellings -/
 
-def oDesc : List Char := "#description[".toList
+def oDesc : List Char := "#description".toList
 def oBlock : List Char := "#esm-block(".toList
 def oModel : List Char := "#model(".toList
 def oRs : List Char := "#reaction-system(".toList
@@ -96,42 +97,82 @@ def oRole : Role → List Char
 /-- The header's first line and the start of its second. -/
 def header : List Char := "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(".toList
 
-/-! ## Description text -/
+/-! ## Description text
 
-/-- Whether a character of a description is written escaped: Typst's markup characters
-always; `=`, `-` and `+` at the start of a line (a heading or a list item); `/` before
-`/` or `*` (a comment). -/
-def mustEsc (bol : Bool) (c : Char) (next : Option Char) : Bool :=
-  ['\\', '[', ']', '#', '$', '*', '_', '`', '<', '>', '@', '~'].contains c ||
-  (bol && ['=', '-', '+'].contains c) ||
-  (c == '/' && (next == some '/' || next == some '*'))
+A description is written verbatim, as Typst markup in a content block
+(`#description[…]`), when that markup is safe to typeset (`verbOK`); otherwise it is a
+Typst string, `#description("…")`, which typesets as plain text. So a description
+written for Typst (backticks for code, a `-` list) keeps its markup, and one written as
+plain text with `a * b` or `$5` in it still compiles. "Safe" is a syntactic test that
+every description of the corpus it holds for compiles (decided 2026-11-25): none of
+`#`, `$`, `@`, `\`, `<`, `*`, no `//` or `/*`, every `_` between two ASCII letters or
+digits, balanced brackets, and an even number of backticks.
 
-/-- A description's text in a content block. -/
-def escT : Bool → List Char → List Char
-  | _, [] => []
-  | bol, c :: r => (if mustEsc bol c r.head? then ['\\', c] else [c]) ++ escT (c == '\n') r
+The reader reads a content block as Typst does: a backslash escapes the character after
+it, and brackets nest. So an earlier document, which wrote every description with its
+markup characters escaped (`First\-order`), reads as it did. -/
 
-/-- The text of a content block up to its unescaped `]`. -/
-def readEsc : List Char → Option (List Char × List Char)
-  | [] => none
-  | ']' :: r => some ([], r)
-  | '\\' :: c :: r => (readEsc r).map (fun p => (c :: p.1, p.2))
-  | '[' :: _ => none
-  | c :: r => (readEsc r).map (fun p => (c :: p.1, p.2))
+/-- An ASCII letter or digit. -/
+def alnumA (c : Char) : Bool := c.isAlphanum && c.toNat < 128
 
-theorem readEsc_escT (r : List Char) : ∀ (bol : Bool) (s : List Char),
-    readEsc (escT bol s ++ ']' :: r) = some (s, r)
-  | _, [] => rfl
-  | bol, c :: s => by
-    have ih := readEsc_escT r (c == '\n') s
-    simp only [escT, List.append_assoc]
-    by_cases h : mustEsc bol c s.head? = true
-    · simp only [h, ite_true, List.cons_append, List.nil_append, readEsc, ih, Option.map_some]
-    · simp only [h, Bool.false_eq_true, ite_false, List.cons_append, List.nil_append]
-      have h1 : c ≠ ']' := fun e => h (by subst e; simp [mustEsc])
-      have h2 : c ≠ '\\' := fun e => h (by subst e; simp [mustEsc])
-      have h3 : c ≠ '[' := fun e => h (by subst e; simp [mustEsc])
-      rw [readEsc] <;> simp_all
+/-- No `//` or `/*` (a Typst comment). -/
+def noComment : List Char → Bool
+  | '/' :: '/' :: _ => false
+  | '/' :: '*' :: _ => false
+  | _ :: r => noComment r
+  | [] => true
+
+/-- Every `_` between two ASCII letters or digits (`p`: the character before). -/
+def usOK : Option Char → List Char → Bool
+  | _, [] => true
+  | p, '_' :: r => p.any alnumA && r.head?.any alnumA && usOK (some '_') r
+  | _, c :: r => usOK (some c) r
+
+/-- The brackets balance, from depth `d`. -/
+def bal : Nat → List Char → Bool
+  | d, [] => d == 0
+  | 0, ']' :: _ => false
+  | d + 1, ']' :: r => bal d r
+  | d, '[' :: r => bal (d + 1) r
+  | d, _ :: r => bal d r
+
+/-- Whether a description is written verbatim (above). -/
+def verbOK (s : List Char) : Bool :=
+  s.all (fun c => !(['#', '$', '@', '\\', '<', '*'].contains c)) && noComment s &&
+    usOK none s && bal 0 s && s.count '`' % 2 == 0
+
+/-- The text of a content block from depth `d` up to the `]` that closes it, with each
+backslash escape read as the character it escapes. -/
+def readVerb : Nat → List Char → Option (List Char × List Char)
+  | _, [] => none
+  | 0, ']' :: r => some ([], r)
+  | d + 1, ']' :: r => (readVerb d r).map (fun p => (']' :: p.1, p.2))
+  | d, '[' :: r => (readVerb (d + 1) r).map (fun p => ('[' :: p.1, p.2))
+  | d, '\\' :: c :: r => (readVerb d r).map (fun p => (c :: p.1, p.2))
+  | d, c :: r => (readVerb d r).map (fun p => (c :: p.1, p.2))
+
+theorem readVerb_bal (r : List Char) : ∀ (s : List Char) (d : Nat),
+    s.all (· != '\\') = true → bal d s = true → readVerb d (s ++ ']' :: r) = some (s, r)
+  | [], d, _, hb => by
+    simp only [bal, beq_iff_eq] at hb; subst hb; simp [readVerb]
+  | c :: s, d, hs, hb => by
+    simp only [List.all_cons, Bool.and_eq_true, bne_iff_ne, ne_eq] at hs
+    have hs' : s.all (· != '\\') = true := by simpa using hs.2
+    by_cases h1 : c = ']'
+    · subst h1
+      cases d with
+      | zero => simp [bal] at hb
+      | succ d =>
+        simp only [bal] at hb
+        simp [readVerb, readVerb_bal r s d hs' hb]
+    · by_cases h2 : c = '['
+      · subst h2
+        simp only [bal] at hb
+        simp [readVerb, readVerb_bal r s (d + 1) hs' hb]
+      · have hb' : bal d s = true := by
+          cases d <;> (rw [bal] at hb <;> simp_all)
+        have ih := readVerb_bal r s d hs' hb'
+        rw [List.cons_append, readVerb] <;> simp_all
 
 /-! ## Named arguments -/
 
@@ -336,9 +377,15 @@ def tmLexT (raw : List Char) : Option (String × List String × List Char) :=
     | none => none
   | none => none
 
+/-- A description after `#description`: verbatim in a content block when `verbOK`,
+else a Typst string in parentheses. -/
+def descBody (s : String) : List Char :=
+  if verbOK s.toList then '[' :: (s.toList ++ [']', '\n'])
+  else '(' :: (quote true s ++ [')', '\n'])
+
 /-- The text of a construct. -/
 def itemT : RItem → List Char
-  | .desc s => oDesc ++ escT true s.toList ++ [']', '\n']
+  | .desc s => oDesc ++ descBody s
   | .block k v => oBlock ++ quote true k ++ ',' :: ' ' :: TypstDict.encode v ++ [')', '\n']
   | .comp .model n => oModel ++ quote true n ++ [')', '\n']
   | .comp .rs n => oRs ++ quote true n ++ [')', '\n']
@@ -377,8 +424,14 @@ def blockOpen (s : List Char) : Bool :=
 def declOpen (s : List Char) : Bool := pre oVar s || pre oParam s || pre oSpecies s
 
 
-def descAt (u : List Char) : Option (RItem × List Char) :=
-  (readEsc u).bind (fun p => (lineEnd p.2).map (fun r => (.desc (String.ofList p.1), r)))
+/-- A description after `#description`: a content block, or a string in parentheses. -/
+def descAt : List Char → Option (RItem × List Char)
+  | '[' :: u => (readVerb 0 u).bind (fun p => (lineEnd p.2).map (fun r => (.desc (String.ofList p.1), r)))
+  | '(' :: u =>
+    match parseQuoted true u with
+    | some (s, ')' :: r) => (lineEnd r).map (fun r' => (.desc s, r'))
+    | _ => none
+  | _ => none
 
 def blockAtT (F : Nat) (u : List Char) : Option (RItem × List Char) :=
   match parseQuoted true u with
@@ -767,12 +820,29 @@ theorem pre_new_eq (X : List Char) :
 theorem pre_tm_eq (X : List Char) : pre oTmpl (oEq ++ X) = false ∧ pre oRule (oEq ++ X) = false := by
   simp [oTmpl_l, oRule_l, oEq, pre]
 
+theorem descAt_body (s : String) (t : List Char) :
+    descAt (descBody s ++ t) = some (.desc s, t) := by
+  unfold descBody
+  split
+  · rename_i hv
+    simp only [verbOK, Bool.and_eq_true] at hv
+    have hs : s.toList.all (· != '\\') = true := by
+      have h1 := hv.1.1.1.1
+      rw [List.all_eq_true] at h1 ⊢
+      intro c hc
+      have := h1 c hc
+      revert this
+      by_cases h : c = '\\' <;> simp [h]
+    simp only [List.cons_append, List.append_assoc, List.nil_append, descAt,
+      readVerb_bal ('\n' :: t) s.toList 0 hs hv.1.2, Option.bind_some, lineEnd_nl,
+      String.ofList_toList, Option.map_some]
+  · simp only [List.cons_append, List.append_assoc, List.nil_append, descAt, parseQuoted_quote,
+      lineEnd_nl, Option.map_some]
+
 theorem lex_desc (s : String) (bol : Bool) (hbol : bol = true) (t : List Char) (g : Nat) :
     lex (g + 1) bol (itemT (.desc s) ++ t) = (lex g true t).map (.desc s :: ·) := by
   apply lex_block_step g bol _ t _ (by simp [itemT, oDesc]) _ hbol
-  · simp only [itemT, List.append_assoc, blockAt, pre_append, ite_true, List.drop_left,
-      List.cons_append, List.nil_append]
-    simp [descAt, readEsc_escT, lineEnd_nl]
+  · simp only [itemT, List.append_assoc, blockAt, pre_append, ite_true, List.drop_left, descAt_body]
   · simp [itemT, blockOpen, pre_append]
 
 theorem lex_block (k : String) (v : Json) (hv : itemOK (.block k v) = true) (bol : Bool)

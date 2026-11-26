@@ -165,6 +165,9 @@
 
 /// A component's description, set ragged-right: descriptions name files and
 /// paths that cannot break, which justification would stretch lines around.
+/// The body is Typst markup (`#description[…]`) or, for a description that
+/// is not safe to typeset as markup, a string shown as it is
+/// (`#description("…")`).
 #let description(body) = block(
   width: 100%,
   inset: (left: 0.9em, y: 0.2em),
