@@ -2058,6 +2058,11 @@ Julia's `operator_ir(prob; unspecified_eltype = Float32)` requests binary32
 for the selected StableHLO evaluation group. `emit_fragment` uses the IR's
 resolved element type. A supplied `eltype` must agree with the IR. The native
 `rhs_program` refuses this choice with `float32_unsupported`.
+`emit_fragment(ir; calls = :functions)`, the default, emits the operator once
+per trace as a private function, and each template instance it references
+once per argument shape, with a `func.call` at every use; template references
+stay references in the emitted module. `calls = :inline` places each body at
+its use.
 
 ### 5.9 Reference resolution
 
