@@ -56,6 +56,13 @@ binding like the others, in the divergence comparison included. Unconfigured, it
 is a named, unrequired exclusion (``summary.optional_exclusions``) that
 ``--require-all-bindings`` does not count.
 
+To check one explicit participant against the original source, pass
+``--bindings <name> --fail-on-source-mismatch``. Add
+``--check-number-spelling`` to compare the original JSON number tokens.
+For the built Lean model,
+set ``EARTHSCI_PROPERTY_CORPUS_ADAPTER_LEAN`` to
+``formal/.lake/build/bin/esm-lean expressions``.
+
 Usage::
 
     python3 scripts/run-property-corpus-conformance.py [--corpus <dir>] \\
@@ -222,7 +229,26 @@ def detect_bindings() -> List[Binding]:
     return bindings
 
 
-def run_binding(binding: Binding, fixtures: List[Path]) -> Dict[str, dict]:
+@dataclass(frozen=True)
+class NumberToken:
+    text: str
+
+
+def parse_wire(text: str, check_number_spelling: bool):
+    if not check_number_spelling:
+        return json.loads(text)
+
+    def reject_constant(token: str):
+        raise ValueError(f"invalid JSON number {token}")
+
+    return json.loads(
+        text, parse_int=NumberToken, parse_float=NumberToken, parse_constant=reject_constant
+    )
+
+
+def run_binding(
+    binding: Binding, fixtures: List[Path], check_number_spelling: bool = False
+) -> Dict[str, dict]:
     """Invoke the binding driver with the fixture paths and parse its JSON output."""
     cmd = binding.cmd + [str(p) for p in fixtures]
     proc = subprocess.run(
@@ -242,8 +268,8 @@ def run_binding(binding: Binding, fixtures: List[Path]) -> Dict[str, dict]:
     lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
     for candidate in reversed(lines):
         try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
+            return parse_wire(candidate, check_number_spelling)
+        except ValueError:
             continue
     raise RuntimeError(
         f"binding {binding.name} did not emit parseable JSON\n"
@@ -253,7 +279,17 @@ def run_binding(binding: Binding, fixtures: List[Path]) -> Dict[str, dict]:
 
 def canonicalize(value) -> str:
     """Stable stringification for cross-binding comparison."""
-    return json.dumps(value, sort_keys=True)
+    if isinstance(value, NumberToken):
+        return value.text
+    if isinstance(value, list):
+        return "[" + ", ".join(map(canonicalize, value)) + "]"
+    if isinstance(value, dict):
+        return (
+            "{"
+            + ", ".join(f"{json.dumps(key)}: {canonicalize(value[key])}" for key in sorted(value))
+            + "}"
+        )
+    return json.dumps(value)
 
 
 # The name under which the SOURCE fixture enters the comparison. Upper-case so
@@ -271,7 +307,7 @@ def source_path(fixture: Path) -> Path:
     return expected if expected.is_file() else fixture
 
 
-def read_sources(fixtures: List[Path]) -> Dict[str, dict]:
+def read_sources(fixtures: List[Path], check_number_spelling: bool = False) -> Dict[str, dict]:
     """The corpus fixtures themselves, shaped like a binding driver's output.
 
     THE SOURCE IS A PARTICIPANT. Without it this stage was cross-binding-
@@ -296,7 +332,10 @@ def read_sources(fixtures: List[Path]) -> Dict[str, dict]:
     out: Dict[str, dict] = {}
     for path in fixtures:
         try:
-            out[path.name] = {"ok": True, "value": json.loads(source_path(path).read_text())}
+            out[path.name] = {
+                "ok": True,
+                "value": parse_wire(source_path(path).read_text(), check_number_spelling),
+            }
         except Exception as exc:  # pragma: no cover — a corrupt corpus file
             out[path.name] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     return out
@@ -376,6 +415,11 @@ def summarize(report: List[dict], bindings: List[str]) -> dict:
     }
 
 
+def printable_result(entry: dict) -> str:
+    """Render both a serialized value and a per-fixture driver error."""
+    return entry["canonical"] if entry["ok"] else f"error: {entry['error']}"
+
+
 def self_test() -> int:
     """No live binding: assert the comparison's two signals and the optional-
     participant contract on synthetic driver outputs."""
@@ -411,6 +455,16 @@ def self_test() -> int:
     )
     r = run(a=src, b=dropped)
     check(r["diverged"], "single-drop-is-a-divergence", str(r))
+    r = run(lean=dropped)
+    check(r["source_mismatch"], "single-binding-drop-is-a-source-mismatch", str(r))
+    r = compare(
+        {SOURCE_PARTICIPANT: out(src), "lean": {"expr_0.json": {"ok": False, "error": "bad arg"}}}
+    )[0]
+    check(
+        r["source_mismatch"] and printable_result(r["bindings"]["lean"]) == "error: bad arg",
+        "single-binding-rejection-is-a-source-mismatch",
+        str(r),
+    )
     r = run(a=src, b={"args": [1, "x"], "op": "+", "units": "m"})
     check(r["diverged"], "argument-order-is-not-free", str(r))
     r = run(a={"units": "m", "args": ["x", 1], "op": "+"}, b=src)
@@ -419,6 +473,13 @@ def self_test() -> int:
         "object-key-order-is-free",
         str(r),
     )
+    r = compare(
+        {
+            SOURCE_PARTICIPANT: out(parse_wire('{"args":[1.0e-9,"1e-9"], "op":"+"}', True)),
+            "lean": out(parse_wire('{"op":"+","args":[1e-9,"1e-9"]}', True)),
+        }
+    )[0]
+    check(r["source_mismatch"], "number-token-spelling-is-checked", str(r))
 
     # The non-canonical fixture is judged against its authored canonical form,
     # and that form differs from the source in spelling only.
@@ -474,16 +535,20 @@ def main() -> int:
     ap.add_argument(
         "--fail-on-source-mismatch",
         action="store_true",
-        help="Exit 1 when every binding AGREES and they all differ from the authored "
-        "fixture. A separate question from --fail-on-divergence and never folded into "
-        "it: this one asks whether the agreed answer is RIGHT. Mismatches are printed "
-        "either way; the flag only decides whether they stop the build.",
+        help="Exit 1 when the agreeing bindings differ from the authored fixture. "
+        "Use with --bindings NAME to check a single required participant against SOURCE. "
+        "Mismatches are printed even without this flag.",
     )
     ap.add_argument(
         "--require-all-bindings",
         action="store_true",
         help="Exit 1 if any binding's driver is unavailable (a binding that did not run "
         "has not been checked).",
+    )
+    ap.add_argument(
+        "--check-number-spelling",
+        action="store_true",
+        help="Compare exact JSON number tokens while allowing whitespace and object-key order.",
     )
     ap.add_argument(
         "--require-divergence",
@@ -501,6 +566,7 @@ def main() -> int:
     args = ap.parse_args()
     if args.self_test:
         return self_test()
+    single_source_check = args.fail_on_source_mismatch and len(args.bindings or []) == 1
 
     # Resolve: the go and rust drivers run with `cwd` set to their own package
     # directory, so a corpus spelled relatively would reach them as a path that
@@ -536,14 +602,17 @@ def main() -> int:
             continue
         print(f"[run ] {binding.name}: {len(fixtures)} fixtures", file=sys.stderr)
         try:
-            outputs[binding.name] = run_binding(binding, fixtures)
+            outputs[binding.name] = run_binding(binding, fixtures, args.check_number_spelling)
         except RuntimeError as exc:
             print(f"[fail] {binding.name}: {exc}", file=sys.stderr)
             return 1
 
-    # Optional participants (`lean`) do not count toward the minimum: one binding
-    # checked against the Lean model alone is not a cross-binding comparison.
-    if len([b for b in outputs if b not in OPTIONAL_BINDINGS]) < 2:
+    # The cross-binding mode still requires two regular bindings. An explicit
+    # single-participant check instead needs that participant and the source.
+    if single_source_check and not outputs:
+        print(f"error: requested participant {args.bindings[0]} did not run", file=sys.stderr)
+        return 1
+    if not single_source_check and len([b for b in outputs if b not in OPTIONAL_BINDINGS]) < 2:
         print(
             f"error: need at least 2 available bindings, optional participants not "
             f"counted (got {list(outputs)}); skipped: {skipped}",
@@ -559,10 +628,7 @@ def main() -> int:
         )
         return 1
 
-    # Add the SOURCE fixture as a participant — AFTER the binding-count and
-    # required-binding gates above, which count real bindings: the source is an
-    # oracle, not a stand-in for a binding that did not run.
-    outputs[SOURCE_PARTICIPANT] = read_sources(fixtures)
+    outputs[SOURCE_PARTICIPANT] = read_sources(fixtures, args.check_number_spelling)
 
     report = compare(outputs)
     summary = summarize(report, sorted(outputs.keys()))
@@ -598,16 +664,17 @@ def main() -> int:
             if not entry.get("source_mismatch"):
                 continue
             got = next(
-                r["canonical"]
+                printable_result(r)
                 for n, r in sorted(entry["bindings"].items())
-                if n != SOURCE_PARTICIPANT and r["ok"]
+                if n != SOURCE_PARTICIPANT
             )
             print(f"  {entry['fixture']}", file=sys.stderr)
             print(
                 f"    SOURCE   {entry['bindings'][SOURCE_PARTICIPANT]['canonical']}",
                 file=sys.stderr,
             )
-            print(f"    bindings {got}", file=sys.stderr)
+            label = args.bindings[0] if single_source_check else "bindings"
+            print(f"    {label:<8} {got}", file=sys.stderr)
 
     if args.require_divergence and summary["diverged_count"] == 0:
         print(
@@ -654,6 +721,16 @@ def main() -> int:
             "(listed above)",
             file=sys.stderr,
         )
+        return 1
+
+    if single_source_check and summary["any_parse_failure_count"]:
+        for entry in report:
+            result = entry["bindings"][SOURCE_PARTICIPANT]
+            if not result["ok"]:
+                print(
+                    f"error: cannot read SOURCE for {entry['fixture']}: {result['error']}",
+                    file=sys.stderr,
+                )
         return 1
 
     return 0

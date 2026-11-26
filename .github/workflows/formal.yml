@@ -3,7 +3,7 @@ name: Formal model (Lean)
 # Builds the Lean model of the spec in `formal/` and runs its audit gate
 # (`scripts/formal-audit.py`), then scores the model's adapter on the tiers
 # it covers: the standard-library template tiers (interp, datetime, relational,
-# geometry). A mismatch there fails the job (formal/README.md). Every .esm under
+# geometry) and static scalar assertions. A mismatch fails the job. Every .esm under
 # tests/ also goes through the document source formats: printed as Markdown and
 # Typst and read back, the Typst compiled with the repository's `esm` Typst
 # package, and the Markdown's math rendered with KaTeX.
@@ -28,19 +28,29 @@ on:
       - 'scripts/run-closed-functions-lean.py'
       - 'scripts/test_run_closed_functions_lean.py'
       - 'scripts/run-inline-tests-conformance.py'
+      - 'scripts/run-lean-inline-tests.py'
+      - 'scripts/difftest/**'
+      - 'pkg/earthsci-ast-py/**'
+      - 'tests/conformance/scalar_operator_semantics/**'
       - 'scripts/conformance_lib.py'
       - 'tests/closed_functions/**'
       - 'tests/conformance/interp_templates/**'
       - 'tests/conformance/datetime_templates/**'
       - 'tests/conformance/relational_templates/**'
+      - 'tests/conformance/determinism/**'
+      - 'scripts/run-determinism-conformance.py'
       - 'tests/conformance/geometry_templates/**'
       - 'tests/conformance/document_format/**'
+      - 'tests/property_corpus/**'
+      - 'scripts/run-property-corpus-conformance.py'
       - 'scripts/gen-document-format-fixtures.py'
       - 'tests/**/*.esm'
       - 'typst/packages/**'
+      - 'docs/content/rfcs/discretization.md'
+      - 'scripts/run-canonical-lean.py'
+      - 'tests/conformance/canonical/**'
       - '.github/workflows/formal.yml'
   pull_request:
-    branches: [ main ]
     paths:
       - 'formal/**'
       - 'lib/interp.esm'
@@ -53,16 +63,27 @@ on:
       - 'scripts/run-closed-functions-lean.py'
       - 'scripts/test_run_closed_functions_lean.py'
       - 'scripts/run-inline-tests-conformance.py'
+      - 'scripts/run-lean-inline-tests.py'
+      - 'scripts/difftest/**'
+      - 'pkg/earthsci-ast-py/**'
+      - 'tests/conformance/scalar_operator_semantics/**'
       - 'scripts/conformance_lib.py'
       - 'tests/closed_functions/**'
       - 'tests/conformance/interp_templates/**'
       - 'tests/conformance/datetime_templates/**'
       - 'tests/conformance/relational_templates/**'
+      - 'tests/conformance/determinism/**'
+      - 'scripts/run-determinism-conformance.py'
       - 'tests/conformance/geometry_templates/**'
       - 'tests/conformance/document_format/**'
+      - 'tests/property_corpus/**'
+      - 'scripts/run-property-corpus-conformance.py'
       - 'scripts/gen-document-format-fixtures.py'
       - 'tests/**/*.esm'
       - 'typst/packages/**'
+      - 'docs/content/rfcs/discretization.md'
+      - 'scripts/run-canonical-lean.py'
+      - 'tests/conformance/canonical/**'
       - '.github/workflows/formal.yml'
   workflow_dispatch:
 
@@ -95,10 +116,11 @@ jobs:
       run: python3 formal/scripts/gen-lib-templates.py --check
 
     # The generator's and the scorer's own tests: pure Python, and instant.
-    - name: Test the generator and the scorer
+    - name: Test the generator and the scorers
       run: |
         python3 formal/scripts/test_gen_lib_templates.py
         python3 scripts/test_run_closed_functions_lean.py
+        python3 scripts/run-property-corpus-conformance.py --self-test
 
     - name: Cache Lean toolchain
       uses: actions/cache@v6
@@ -135,17 +157,56 @@ jobs:
     - name: Audit registry against the build
       run: python3 scripts/formal-audit.py registry --lean
 
+    - name: Score the model on the determinism tier
+      env:
+        EARTHSCI_DETERMINISM_ADAPTER_LEAN: formal/.lake/build/bin/esm-lean determinism
+      run: python3 scripts/run-determinism-conformance.py --bindings lean
+
     # The model as a conformance participant: `esm-lean` on the
     # standard-library template tiers, bit for bit where the tolerance is zero.
     # `lake build` above already built the adapter.
     - name: Score the model on the template tiers
       run: python3 scripts/run-closed-functions-lean.py --no-build
 
+    - name: Score Lean on static scalar assertions
+      env:
+        EARTHSCI_INLINE_TESTS_ADAPTER_LEAN: python3 scripts/run-lean-inline-tests.py
+      run: |
+        python3 formal/scripts/test_static_assertions.py
+        python3 scripts/run-inline-tests-conformance.py \
+          --manifest tests/conformance/scalar_operator_semantics/manifest.json \
+          --bindings lean --compiler interpreter
+
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
+
+    - name: Set up scalar differential testing
+      run: python -m pip install ./pkg/earthsci-ast-py hypothesis==6.170.17
+
+    - name: Compare generated scalar cases in observer mode
+      run: |
+        python scripts/difftest/test_scalar.py
+        python scripts/difftest/scalar.py --observer
+
+    - uses: actions/upload-artifact@v7
+      if: always() && hashFiles('conformance-results/scalar-difftest.esm') != ''
+      with:
+        name: scalar-difftest-reproducer
+        path: conformance-results/scalar-difftest.esm
+
     # The document source format golden set is generated by `esm-lean`; a
     # printer or parser change that moves a pinned spelling fails here until
     # the fixtures are regenerated (scripts/gen-document-format-fixtures.py).
     - name: Check the document-format fixtures against the model
       run: python3 scripts/formal-audit.py fixtures
+
+    - name: Score the model against the expression property corpus
+      env:
+        EARTHSCI_PROPERTY_CORPUS_ADAPTER_LEAN: formal/.lake/build/bin/esm-lean expressions
+      run: >-
+        python3 scripts/run-property-corpus-conformance.py
+        --bindings lean --fail-on-source-mismatch --check-number-spelling
 
     # The document source formats on the whole corpus: every .esm under tests/
     # that is a JSON object round-trips through Markdown and Typst
@@ -164,3 +225,6 @@ jobs:
 
     - name: Document formats on the corpus
       run: python3 formal/scripts/doc-corpus.py --typst typst --katex
+
+    - name: Score the model on the canonical expression byte fixtures
+      run: python3 scripts/run-canonical-lean.py

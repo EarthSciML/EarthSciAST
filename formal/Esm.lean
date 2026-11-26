@@ -19,7 +19,9 @@ import Esm.Closed.Geometry.TemplateAst
 import Esm.Closed.Geometry.Padding
 import Esm.Closed.Relational.Keys
 import Esm.Closed.Relational.Count
+import Esm.Determinism
 import Esm.Closed.Enums
+import Esm.Semiring.Laws
 import Esm.Units.Identities
 import Esm.Units.GrammarLaws
 import Esm.Units.Exec
@@ -30,6 +32,7 @@ import Esm.Digits
 import Esm.Units.Canonical
 import Esm.Units.Typeset
 import Esm.Units.CanonicalExamples
+import Esm.Units.ScalarCheck
 import Esm.Document.Notation
 import Esm.Document.Json
 import Esm.Document.Number

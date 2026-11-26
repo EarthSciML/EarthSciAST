@@ -56,7 +56,9 @@ the run; configured, it is gated exactly like a REQUIRED binding (an adapter
 that crashes, times out or answers ``unavailable`` fails the run), and its
 per-fixture refusals are ledgered under ``named_exclusions`` like any other. A
 manifest cannot list it in ``bindings_required`` or in a fixture's ``required``
-ledger, and it never mints a golden.
+ledger, and it never mints a golden. The Lean interpreter can cover part of a
+fixture via ``lean_assertion_exclusions``, a variable-to-reason map. The report
+names the excluded assertions and every other assertion must have a result.
 
 Usage:
     python3 scripts/run-inline-tests-conformance.py \\
@@ -213,6 +215,14 @@ def load_manifest(path: Path) -> dict:
                 raise ManifestError(f"{path}: fixtures[{fid}].{key} must be a non-empty string")
         _validate_golden_field(path, fid, fx)
         _validate_ledgers(path, fid, fx, required)
+        scope = fx.get("lean_assertion_exclusions", {})
+        if not isinstance(scope, dict) or any(
+            not name or not isinstance(reason, str) or not reason.strip()
+            for name, reason in scope.items()
+        ):
+            raise ManifestError(
+                f"{path}: fixtures[{fid}].lean_assertion_exclusions must map variables to reasons"
+            )
     return manifest
 
 
@@ -472,7 +482,21 @@ def authored_assertions(manifest_path: Path, fx: dict) -> list[dict]:
             f"fixture {fx['id']}: model {fx['model']!r} in {path} declares no inline "
             f"assertions, so there is nothing for this tier to gate"
         )
+    scope = fx.get("lean_assertion_exclusions", {})
+    variables = {a["variable"] for a in out}
+    unknown = scope.keys() - variables
+    if unknown or variables <= scope.keys():
+        raise ManifestError(
+            f"fixture {fx['id']}: lean_assertion_exclusions leaves no assertions "
+            f"or names unknown variables {sorted(unknown)}"
+        )
     return out
+
+
+def lean_assertion_exclusions(fx: dict, binding: str, compiler: str) -> dict[str, str]:
+    if binding == "lean" and compiler == "interpreter":
+        return fx.get("lean_assertion_exclusions", {})
+    return {}
 
 
 def _resolve_bound(field: str, a_tol: dict, test_tol: dict, model_tol: dict) -> Any:
@@ -633,7 +657,18 @@ def compare_fixture(
             golden_by_key[_key(g)] = g
         else:
             problems.append(f"malformed golden entry {g!r}")
-    authored_by_key = {_key(a): a for a in authored}
+    scope = lean_assertion_exclusions(fx, binding, compiler)
+    excluded = [
+        {
+            "test_id": a["test_id"],
+            "assertion_idx": a["assertion_idx"],
+            "variable": a["variable"],
+            "reason": scope[a["variable"]],
+        }
+        for a in authored
+        if a["variable"] in scope
+    ]
+    authored_by_key = {_key(a): a for a in authored if a["variable"] not in scope}
 
     checked = 0
     for key, want in authored_by_key.items():
@@ -702,13 +737,16 @@ def compare_fixture(
     extra = sorted(set(by_key) - set(authored_by_key))
     if extra:
         problems.append(
-            f"the adapter reported {len(extra)} assertion(s) the document does not declare: "
+            f"the adapter reported {len(extra)} assertion(s) outside its expected coverage: "
             f"{extra[:4]}"
         )
 
+    record: dict[str, Any] = {"checked": checked}
+    if excluded:
+        record["assertion_exclusions"] = excluded
     if problems:
-        return {"status": "fail", "problems": problems, "checked": checked}
-    record: dict[str, Any] = {"status": "ok", "outcome": "ran", "checked": checked}
+        return {**record, "status": "fail", "problems": problems}
+    record.update({"status": "ok", "outcome": "ran"})
     if golden is None:
         record["no_golden"] = fx.get("golden_absent_reason")
     if ex is not None:
@@ -992,6 +1030,13 @@ def print_report(report: dict) -> None:
                 print(f"      NAMED EXCLUSION {fid}: {fr.get('code')} — {fr.get('reason')}")
             elif fr.get("stale_exclusion"):
                 print(f"      NOTE {fid}: {fr['stale_exclusion']}")
+            if "checked" in fr and b == "lean":
+                print(f"      {fid}: {fr['checked']} static assertion(s) checked")
+            for ex in fr.get("assertion_exclusions", []):
+                print(
+                    f"      ASSERTION EXCLUSION {fid}/{ex['test_id']}#{ex['assertion_idx']} "
+                    f"({ex['variable']}) — {ex['reason']}"
+                )
             if fr.get("status") != "ok":
                 for p in fr.get("problems") or [fr.get("status")]:
                     print(f"      FAIL {fid}: {p}")
@@ -1591,6 +1636,39 @@ def _optional_participant_controls(
             f"a configured lean whose adapter answered {status!r} with no fixtures "
             f"gated as {r['status']}",
         )
+    # Only Lean's interpreter may omit the manifest's named assertions.
+    variable = authored[0]["variable"]
+    scoped = {**fx, "lean_assertion_exclusions": {variable: "requires a trajectory"}}
+    entries = _stub_entry(authored, golden)["assertions"]
+    covered = {"assertions": [entry for entry in entries if entry["variable"] != variable]}
+    if covered["assertions"]:
+        scored = compare_fixture(
+            scoped, covered, golden, authored, rtol, atol, "lean", "interpreter"
+        )
+        check(
+            scored["status"] == "ok" and scored.get("assertion_exclusions"),
+            "optional/lean-reports-assertion-exclusions",
+            str(scored),
+        )
+        for binding, compiler in (("julia", "interpreter"), ("lean", "native")):
+            unscoped = compare_fixture(
+                scoped, covered, golden, authored, rtol, atol, binding, compiler
+            )
+            check(
+                unscoped["status"] == "fail",
+                f"optional/scoped-omission-rejected/{binding}/{compiler}",
+                str(unscoped),
+            )
+        missing = {"assertions": covered["assertions"][1:]}
+        check(
+            compare_fixture(scoped, missing, golden, authored, rtol, atol, "lean", "interpreter")[
+                "status"
+            ]
+            == "fail",
+            "optional/lean-missing-covered-assertion-rejected",
+            "Lean omitted an assertion in its coverage",
+        )
+
     import argparse
     import contextlib
     import io

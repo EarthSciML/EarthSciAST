@@ -133,6 +133,13 @@ with a pending question among its own clauses.
 - Problem: Does not say whether a document that does write an identity is invalid (rejected) or the field is ignored, so the verdict on such a document is unspecified.
 - Ruling: (pending)
 
+## Q-114 CONFORMANCE_SPEC.md §5.6.1: max_product carrier and domain policy
+- Clauses: `conf.5.6.identities-not-in-file`, `conf.5.6.3.empty-reduction-registry-identity`
+- Phase: 2
+- Found by: exact registry model (`Esm/Semiring/Laws.lean`).
+- Problem: The stated domain ℝ≥0 excludes −∞, the required empty reduction. Adjoining −∞ and making it absorb the abstract semiring product gives a closed algebra. The author writes multiplication as an ordinary numeric Expression (§4.8.3), where in binary64 multiplying an empty result of −∞ by zero gives NaN. The table also does not specify a validation or runtime verdict for a negative term. Ordinary multiplication over signed reals fails distributivity over max: with factors −1, 0 and 1, the two sides are −1 and 0.
+- Ruling: (pending) Clarify the distinction between the exact carrier and the executable empty result, and whether negative factors are rejected or only excluded from the algebraic guarantee.
+
 ## Q-18 CONFORMANCE_SPEC.md §7.1: unresolved order not unbound
 - Clauses: `conf.7.1.unresolved-order-not-unbound`
 - Phase: 2
@@ -160,6 +167,13 @@ with a pending question among its own clauses.
 - Found by: inventory
 - Problem: 'parse_expression is the inverse of to_ascii' cannot hold for all trees: §4.1.1 itself says a parser flattens `a + (b + c)` into one n-ary `+` (so a nested `+` tree does not round-trip), and a `-` before a numeric literal is read as part of the literal (so a unary-minus node on a literal does not round-trip); the class of trees on which it is an inverse is not stated.
 - Ruling: moot. The §4.1.1 text surface (`to_ascii` / `parse_expression`) was retired; an expression is written as text only as document math, whose round trip the Lean model proves (`Esm.Document.Math.*`).
+
+## Q-115 Discretization RFC §5.4.4: products with different zero literals
+- Clauses: `docs/content/rfcs/discretization.md` §5.4.4
+- Phase: 2
+- Found by: Lean expression canonicalizer
+- Problem: Zero annihilation preserves the type and sign of the zero. A product such as `{"op":"*","args":[0,-0.0]}` has two zero operands with different type and sign. The rule does not choose which representation to emit. The Lean adapter reports `E_CANONICAL_UNSUPPORTED_EXPRESSION` for this case.
+- Ruling: (pending)
 
 ## Q-24 esm-spec.md §4.2: structural d unary
 - Clauses: `spec.4.2.structural-d-unary`

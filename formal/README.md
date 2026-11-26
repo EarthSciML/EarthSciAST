@@ -21,6 +21,7 @@ It serves two purposes:
 | `Esm/Expr/` | The Expression AST, its evaluator and template expansion (the slice built so far is listed in `Core.lean`) |
 | `Esm/Lib/` | Standard-library templates as ASTs, generated from `lib/*.esm` by `scripts/gen-lib-templates.py` (`--check` runs in CI) |
 | `Esm/Closed/` | Reference definitions (interpolation, calendar, keys and ranks, planar overlap) and the theorems that each standard-library template, expanded and evaluated, computes its reference |
+| `Esm/Determinism.lean` | Ordered distinct keys, dense ranks, exact equality matches and exact additive group-by (CONFORMANCE §5.5). The determinism harness compares model output on the existing producer fixtures and their input variants. |
 | `Esm/Document/Source/` | ESM documents as Markdown and Typst sources: the skeleton with its path-keyed fallback, the math entries (equations, initialization equations, constraints, reactions, templates and rules), the two containers, and their round-trip and prose-independence theorems (`parseMd_printMd`, `parseTyp_printTyp`) |
 | `Adapter/Main.lean` | The `esm-lean` executable used by the conformance runners (also `print-md`, `parse-md`, `print-typ`, `parse-typ`, `canon`, which generate the golden set in `tests/conformance/document_format/` through `scripts/gen-document-format-fixtures.py`; `formal-audit.py fixtures` checks it is current) |
 | `inventory/*.json` | Every normative (`MUST`) clause of the two spec files, classified |
@@ -30,8 +31,18 @@ It serves two purposes:
 
 ## Building locally
 
-The toolchain and Mathlib cache are large. On the cluster, keep them on
-`/projects` or `/scratch` — never `/` or `/tmp`, which are RAM-backed:
+On the Illinois cluster, the pinned Lean and Mathlib install lives on project
+storage. Use it from an EarthSciAST checkout with matching dependency pins.
+
+```bash
+lean_bundle=/projects/illinois/eng/cee/ctessum/ctessum/libs/earthsci-lean/v4.35.0
+source "$lean_bundle/env.sh"
+"$lean_bundle/attach" formal
+(cd formal && lake build)
+```
+
+`attach` checks the toolchain and manifest before linking the shared package
+cache. A fresh installation needs a filesystem with room for several GB.
 
 ```bash
 export ELAN_HOME=/projects/illinois/eng/cee/ctessum/ctessum/libs/elan
@@ -41,6 +52,26 @@ lake exe cache get   # prebuilt Mathlib; never build Mathlib from source
 lake build
 python3 ../scripts/formal-audit.py all
 ```
+
+## Static scalar conformance
+
+The Lean adapter reads the original ESM documents and evaluates scalar
+observations at the authored times and parameter overrides. To score it against
+the current inline-test goldens, run the shared harness from the repository
+root after `lake build`.
+
+```bash
+EARTHSCI_INLINE_TESTS_ADAPTER_LEAN="python3 scripts/run-lean-inline-tests.py" \
+  python3 scripts/run-inline-tests-conformance.py \
+  --manifest tests/conformance/scalar_operator_semantics/manifest.json \
+  --bindings lean --compiler interpreter
+```
+
+The report lists integrated state assertions and out-of-scope fixtures as
+exclusions. The `static-assertions` executable mode also accepts a JSON array
+of `{test_id, assertion_idx}` requests on stdin and returns binary64 bit
+patterns in the same order. It reports unsupported precision or scaled angle
+units explicitly when a model declares Float32 or requires angle conversion.
 
 ## Rules
 
@@ -64,6 +95,24 @@ python3 ../scripts/formal-audit.py all
 - **Every batch of proofs gets a hollow-proof review** by someone who did not
   write it: a statement that assumes its conclusion, or holds vacuously because
   its hypotheses cannot all be true, passes every automated check.
+
+## Expression property corpus
+
+From the repository root after `lake build`, run the Lean expression
+parse/emit adapter against the shared source fixtures:
+
+```bash
+EARTHSCI_PROPERTY_CORPUS_ADAPTER_LEAN='formal/.lake/build/bin/esm-lean expressions' \
+  python3 scripts/run-property-corpus-conformance.py \
+    --bindings lean --fail-on-source-mismatch --check-number-spelling
+```
+
+The runner checks every `tests/property_corpus/expressions/expr_*.json` against
+`SOURCE`. A fixture with an authored normalization uses its matching
+`tests/property_corpus/expected/` file. This covers bare expression syntax and
+canonical numbers. Document loading and operator resolution require a document
+scope. Include `lean` alongside the other bindings in `--bindings` to score it
+in the full cross-binding run.
 
 ## The clause inventory (`inventory/*.json`)
 
@@ -155,3 +204,23 @@ names that defining file as `defined_by` instead of citing inventory clauses
 `QUESTIONS.md` anchor) or `question` (with `question`: a `QUESTIONS.md` anchor
 `Q-n`). For `proven`, the audit elaborates `example : <lean_statement> :=
 @<theorem>`; for `refuted`, `example : ¬ (<lean_statement>) := @<theorem>`.
+
+## Canonical expression bytes
+
+`esm-lean canonical-json <expression.json>` emits the structural expression
+format of discretization RFC §5.4. This format retains the integer/float token
+kind and signed zero. The `canon` mode applies CONFORMANCE §5.5.3.1's document
+number rules. The expression canonicalizer is an explicit serialization API.
+
+From the repository root after `lake build`, run `python3 scripts/run-canonical-lean.py`
+to check byte equality and fixture-level fixed points against the shared
+`tests/conformance/canonical/` manifest. The scorer also checks the diagnostic
+code of each rejected fixture and exercises signed zero, overflow and literal
+division by zero.
+
+The RFC specifies a product's zero-annihilation result by the zero operand's
+kind and sign. This adapter reports `E_CANONICAL_UNSUPPORTED_EXPRESSION` if a
+product has several zero operands with incompatible kinds or signs. It leaves
+the ordering of same-valued, same-kind literals stable, including opposite
+signs of floating zero. Value fields are literal payloads and non-expression
+fields follow the canonical fixture suite's whitelist.

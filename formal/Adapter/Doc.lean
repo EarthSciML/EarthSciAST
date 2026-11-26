@@ -1,4 +1,5 @@
 import Lean.Data.Json
+import Esm.Float64.Decimal
 import Esm.Document.Source.TypstDoc
 
 /-! `esm-lean canon|print-md|parse-md|print-typ|parse-typ <file>`: the document source formats.
@@ -19,7 +20,7 @@ document value type with numbers in the canonical form of CONFORMANCE §5.5.3.1.
 
 namespace Adapter.Doc
 
-open Esm.Document
+open Esm.Document Esm.F64.Decimal
 
 /-! ### Numbers
 
@@ -30,45 +31,15 @@ and in `Int64`, else its shortest round-trip decimal digits. All arithmetic is e
 natural-number fractions (`Float.ofScientific` truncates before it rounds, so it is not
 correctly rounded). Unproved adapter code, pinned by the golden files. -/
 
-/-- `n / d` rounded to a natural number, ties to even (`d > 0`). -/
-def roundHalfEven (n d : Nat) : Nat :=
-  let q := n / d
-  let r := n % d
-  if 2 * r > d then q + 1 else if 2 * r < d then q else if q % 2 = 0 then q else q + 1
-
-/-- The fraction `n / d` times `2^k`. -/
-def scale2 (n d : Nat) (k : Int) : Nat × Nat :=
-  if 0 ≤ k then (n * 2 ^ k.toNat, d) else (n, d * 2 ^ (-k).toNat)
+/-- Round a positive rational to binary64 for the JSON serializers. -/
+abbrev toBinary64 := Esm.F64.Decimal.toBinary64
 
 /-- The fraction `n / d` times `10^k`. -/
 def scale10 (n d : Nat) (k : Int) : Nat × Nat :=
   if 0 ≤ k then (n * 10 ^ k.toNat, d) else (n, d * 10 ^ (-k).toNat)
 
-/-- `⌊log_b (n / d)⌋` for `n, d > 0`: the first guess `g`, moved one step at a time
-(`fuel` bounds the steps). `le e` decides `b^e ≤ n / d`. -/
-def floorLog (le : Int → Bool) (g : Int) : Nat → Int
-  | 0 => g
-  | fuel + 1 =>
-    if !le g then floorLog le (g - 1) fuel
-    else if le (g + 1) then floorLog le (g + 1) fuel
-    else g
-
-/-- `2^e ≤ n / d`. -/
-def pow2Le (n d : Nat) (e : Int) : Bool := let (a, b) := scale2 d 1 e; decide (a ≤ n * b)
-
 /-- `10^e ≤ n / d`. -/
 def pow10Le (n d : Nat) (e : Int) : Bool := let (a, b) := scale10 d 1 e; decide (a ≤ n * b)
-
-/-- The positive fraction `n / d` rounded to binary64, ties to even: `(M, k)` with value
-`M × 2^k`, `M < 2^53`, and `2^52 ≤ M` unless `k = -1074` (a subnormal). `none` when it
-overflows. -/
-def toBinary64 (n d : Nat) : Option (Nat × Int) :=
-  let t := floorLog (pow2Le n d) ((Nat.log2 n : Int) - Nat.log2 d) 4
-  let k := max (t - 52) (-1074)
-  let (a, b) := scale2 n d (-k)
-  let m := roundHalfEven a b
-  let (m, k) := if m = 2 ^ 53 then (2 ^ 52, k + 1) else (m, k)
-  if k > 971 then none else some (m, k)
 
 /-- The digits of a positive natural number, most significant first. -/
 def natDigits (c : Nat) : List Nat := (Nat.toDigits 10 c).map (fun ch => ch.toNat - 48)
@@ -105,15 +76,15 @@ def shortest (m : Nat) (k : Int) : List Nat × Int :=
       | false, false => go fuel
   go 17
 
-/-- The canonical number a JSON number token `m × 10^-e` is. -/
-def toJNum (m : Int) (e : Nat) : JNum :=
-  if m = 0 then .int 0
-  else if e = 0 ∧ -(2 ^ 63 : Int) ≤ m ∧ m < 2 ^ 63 then .int m
+/-- The canonical number a JSON number token `m × 10^-e` is, if finite. -/
+def toJNum? (m : Int) (e : Nat) : Option JNum :=
+  if m = 0 then some (.int 0)
+  else if e = 0 ∧ -(2 ^ 63 : Int) ≤ m ∧ m < 2 ^ 63 then some (.int m)
   else
     let neg := decide (m < 0)
     match toBinary64 m.natAbs (10 ^ e) with
-    | none => Number.mkDec neg (natDigits m.natAbs) (((natDigits m.natAbs).length : Int) - 1 - e)
-    | some (bm, bk) =>
+    | none => none
+    | some (bm, bk) => some <|
       let z : Int := (if neg then -1 else 1) * (bm * 2 ^ bk.toNat : Nat)
       if 0 ≤ bk ∧ -(2 ^ 63 : Int) ≤ z ∧ z < 2 ^ 63 then .int z
       else if bk < 0 ∧ bm % 2 ^ (-bk).toNat = 0 then
@@ -124,14 +95,22 @@ def toJNum (m : Int) (e : Nat) : JNum :=
 
 instance : Inhabited Json := ⟨.null⟩
 
-/-- A parsed JSON value as a document value. -/
-partial def conv : Lean.Json → Json
-  | .null => .null
-  | .bool b => .bool b
-  | .num n => .num (toJNum n.mantissa n.exponent)
-  | .str s => .str s
-  | .arr a => .arr (a.toList.map conv)
-  | .obj o => .obj (o.toList.map fun (k, v) => (k, conv v))
+/-- A parsed JSON value as a document value. Strict readers reject overflow
+even inside fields that carry plain JSON rather than expressions. -/
+partial def conv (strictNumbers : Bool) : Lean.Json → Except String Json
+  | .null => pure .null
+  | .bool b => pure (.bool b)
+  | .num n =>
+    match toJNum? n.mantissa n.exponent with
+    | some value => pure (.num value)
+    | none =>
+      if strictNumbers then throw "number is outside the finite binary64 range"
+      else
+        let ds := natDigits n.mantissa.natAbs
+        pure (.num (Number.mkDec (decide (n.mantissa < 0)) ds ((ds.length : Int) - 1 - n.exponent)))
+  | .str s => pure (.str s)
+  | .arr a => .arr <$> a.toList.mapM (conv strictNumbers)
+  | .obj o => .obj <$> o.toList.mapM (fun (k, v) => do return (k, ← conv strictNumbers v))
 
 /-- Compact canonical JSON text. -/
 partial def render : Json → String
@@ -300,7 +279,7 @@ def spellRules (isMap : Bool) (j : Json) : Json :=
 `Lean.Json.parse` folds a positive exponent into the mantissa, so `1.999999999999999e16`
 and the integer token `19999999999999990` parse alike; padding the fraction with zeros past
 the exponent (`1.9999999999999990e16`) keeps the value and keeps a fraction digit, so
-`toJNum` reads it as the decimal token it is. Exponents above 400 are left alone (such a
+`toJNum?` reads it as the decimal token it is. Exponents above 400 are left alone (such a
 value is outside `Int64`, so it is rounded either way). -/
 def padExponent (t : List Char) : List Char :=
   match t.span (fun c => c != 'e' && c != 'E') with
@@ -329,12 +308,14 @@ partial def padExponents (cs : List Char) (inStr : Bool) (acc : Array Char) : Ar
       padExponents rest false (acc ++ (padExponent tok).toArray)
     else padExponents r false (acc.push c)
 
-def readDoc (path : String) : IO Json := do
+def readDoc (path : String) (strictNumbers : Bool := false) : IO Json := do
   let text ← IO.FS.readFile path
   let text := String.ofList (padExponents text.toList false #[]).toList
   match Lean.Json.parse text with
-  | .ok j => pure (conv j)
   | .error e => throw (IO.userError s!"{path}: not JSON: {e}")
+  | .ok j => match conv strictNumbers j with
+    | .ok doc => pure doc
+    | .error e => throw (IO.userError s!"{path}: {e}")
 
 def main (mode : String) (args : List String) : IO UInt32 := do
   let [path] := args | IO.eprintln s!"usage: esm-lean {mode} <file>"; return 2

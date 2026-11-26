@@ -20,7 +20,6 @@ fixture by hand rather than regenerating the whole corpus to fix one file.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -38,7 +37,7 @@ from test_property_expression import (  # noqa: E402
     _op_reshape,
     _op_transpose,
 )
-from earthsci_ast.serialize import _serialize_expression  # noqa: E402
+from earthsci_ast.serialize import _serialize_expression, canonical_json_value  # noqa: E402
 
 
 def _collect(strategy, count: int) -> list:
@@ -98,9 +97,7 @@ def write_corpus(out_dir: Path, payloads: list) -> None:
         existing.unlink()
     for i, payload in enumerate(payloads):
         path = out_dir / f"expr_{i:03d}.json"
-        with open(path, "w") as f:
-            json.dump(payload, f, indent=2, sort_keys=True)
-            f.write("\n")
+        path.write_text(canonical_json_value(payload) + "\n", encoding="utf-8")
 
 
 def main() -> None:
