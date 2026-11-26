@@ -61,6 +61,8 @@ function _de_subrange_raw(ctx::_DECtx, nd::_E._Node, cached::F) where {F}
     elseif k === _E._NK_LOOPVAR
         v = Float64(_de_counter(ctx, nd.payload::Base.RefValue{Int}))
         return (v, v)
+    elseif k === _E._NK_ARG
+        return _de_arg_range(ctx, nd)
     elseif k === _E._NK_CACHED
         c = cached(nd)
         return c === nothing ? nothing : _de_subrange(ctx, c, cached)

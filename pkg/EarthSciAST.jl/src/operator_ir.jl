@@ -381,15 +381,17 @@ function forcing_reach(ir::OperatorIR, origin = nothing)
 end
 
 """
-    emit_fragment(ir; eltype = ir.working_eltype, fold = :tree)
+    emit_fragment(ir; eltype = ir.working_eltype, fold = :tree, calls = :functions)
 
 With Reactant loaded, create a host callable that emits a StableHLO fragment
 into the caller's trace. Call it on traced arguments `(u, aux, p, t, forcing)`;
 tile classes also take `origin` and lane targets take `cells`. If an output
 kernel reads a time step, append `dt`. The fragment uses the IR's working
 precision, including when `eltype` is supplied explicitly. Binary32 operations
-and reductions accumulate in expression order. See the compiled backend
-guide for layouts and precision.
+and reductions accumulate in expression order. Under `calls = :functions` the
+operator, and each template instance it references, is emitted once as a
+private function and called at every use; `calls = :inline` places each body at
+its use. See the compiled backend guide for layouts and precision.
 """
 function emit_fragment end
 

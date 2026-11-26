@@ -70,6 +70,15 @@ program = Reactant.@compile donated_args = :none frag(u, aux, p, t, ())
   order. For Float64 fragments, `fold = :tree` emits balanced binary folds
   and evaluates constant subtrees on the host with the same grouping.
   `fold = :reduce` uses the legacy emitter's reduction policy.
+- `calls = :functions` (the default) emits the operator once per trace as a
+  private function and each fragment use as a `func.call`, so a leaf that
+  evaluates the right-hand side at four stages holds it once. Each template
+  instance the operator references is likewise one private function per
+  argument shape, called at every use; a template body that reads a state or
+  live-forcing array argument is placed at its use instead, and the emitter's
+  `call_inlined` tally counts those. `calls = :inline` places every body at its
+  use, the baseline for measurement. XLA may inline the calls while it
+  compiles; the emitted module keeps them.
 - `Tile(dec; owned, storage)` uses the native tile boxes. The output uses the
   tile storage layout, with zeros outside owned rows. `halo(ir)` reports the
   state reach of that tile. Pass compact column-major windows in

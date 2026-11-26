@@ -7,7 +7,8 @@
 """
     DirectEmitOptions(; read = :gather, gather_max_pieces = 8,
                       gather_base_max = nothing, gather_index_bits = 32,
-                      reduce_min = 32, locate = :auto, locate_ladder_max = 8)
+                      reduce_min = 32, locate = :auto, locate_ladder_max = 8,
+                      calls = :functions)
     DirectEmitOptions(env::AbstractDict)
 
 The direct emitter's tuning switches. None of them changes what the program
@@ -29,6 +30,11 @@ they exist as measurement levers and negative controls.
 - `locate`, `locate_ladder_max`: the comparison-count lowering under a trace
   (`:auto`, `:reduce`, `:ladder`, `:affine`) and the ladder/affine cut; see
   ext/reactant_knot_count.jl.
+- `calls`: how a template reference is emitted. `:functions` (the default)
+  emits each template instance once as a private `func.func` per argument
+  shape and a `func.call` at every use; `:inline` places the body at every use
+  (the measurement baseline). XLA's own pipeline may inline the calls while it
+  compiles; the emitted module keeps them.
 
 `DirectEmitOptions(env)` reads `ESM_DIRECT_EMIT_READ`,
 `ESM_DIRECT_GATHER_INDEX_BITS`, `ESS_RX_LOCATE` and `ESS_RX_LOCATE_LADDER_MAX`
@@ -44,9 +50,10 @@ Base.@kwdef struct DirectEmitOptions
     reduce_min::Int = 32
     locate::Symbol = :auto
     locate_ladder_max::Int = 8
+    calls::Symbol = :functions
     function DirectEmitOptions(
             read, gather_max_pieces, gather_base_max, gather_index_bits,
-            reduce_min, locate, locate_ladder_max
+            reduce_min, locate, locate_ladder_max, calls
         )
         read in (:gather, :runs, :always) || _de_bad_option(
             "read", read, "`:gather`, `:runs` or `:always`"
@@ -59,9 +66,12 @@ Base.@kwdef struct DirectEmitOptions
         locate in (:auto, :reduce, :ladder, :affine) || _de_bad_option(
             "locate", locate, "`:auto`, `:reduce`, `:ladder` or `:affine`"
         )
+        calls in (:functions, :inline) || _de_bad_option(
+            "calls", calls, "`:functions` or `:inline`"
+        )
         return new(
             read, gather_max_pieces, gather_base_max, gather_index_bits,
-            reduce_min, locate, locate_ladder_max
+            reduce_min, locate, locate_ladder_max, calls
         )
     end
 end

@@ -159,6 +159,45 @@ function fragment_rk4_program()
     return f, args, run
 end
 
+# A lane model whose right-hand side references the template `sq` twice, with
+# different arguments: `D(u[i]) = sq(u[i]) + sq(0.5 u[i] + data[i])`.
+function template_problem(; n = 6)
+    op(name, args...) = Dict{String, Any}("op" => name, "args" => Any[args...])
+    ix(name) = op("index", name, "i")
+    faq(expr) = merge(
+        op("faq"), Dict(
+            "output_idx" => ["i"], "ranges" => Dict("i" => Dict("from" => "cell")), "expr" => expr
+        )
+    )
+    sq(w) = Dict{String, Any}(
+        "op" => "apply_operator", "args" => Any[], "name" => "sq",
+        "bindings" => Dict{String, Any}("w" => w)
+    )
+    vars = Dict{String, Any}(
+        "u" => Dict{String, Any}("type" => "unknown", "default" => 1.0, "shape" => ["cell"]),
+        "data" => Dict{String, Any}("type" => "parameter", "default" => collect(1.0:n), "shape" => ["cell"]),
+    )
+    rhs = faq(op("+", sq(ix("u")), sq(op("+", op("*", 0.5, ix("u")), ix("data")))))
+    lhs = faq(merge(op("D", ix("u")), Dict("wrt" => "t")))
+    doc = Dict(
+        "esm" => "2.4.0", "metadata" => Dict("name" => "Template calls"),
+        "index_sets" => Dict("cell" => Dict("kind" => "interval", "size" => n)),
+        "models" => Dict(
+            "M" => Dict(
+                "variables" => vars, "equations" => [Dict("lhs" => lhs, "rhs" => rhs)],
+                "operators" => Dict(
+                    "sq" => Dict(
+                        "params" => ["w"],
+                        "body" => op("-", op("*", "w", "w"), op("*", 0.25, "w")),
+                    )
+                ),
+            )
+        ),
+    )
+    return esm_problem(doc, (0.0, 1.0))
+end
+one_call(fragment, u, aux, p, t) = fragment(u, aux, p, t, ())
+
 if get(ENV, "ESM_REACTANT_FRAGMENT_CHILD", "") == "1"
     f, args, run = fragment_rk4_program()
     println(join(reinterpret(UInt64, Array(run(f, args...))), ","))
@@ -175,6 +214,41 @@ end
         @test_throws ArgumentError KernelOutputs(spec; out_eltype = BigFloat)
         @test_throws ArgumentError KernelOutputs(spec; out_eltype = Int32)
         @test_throws ArgumentError KernelOutputs(spec, BigFloat)
+    end
+
+    @testset "template references are called functions" begin
+        prob = template_problem()
+        ir = operator_ir(prob)
+        f, g = emit_fragment(ir), emit_fragment(ir; calls = :inline)
+        u = ConcreteRArray(collect(range(-0.5, 1.5; length = 6)))
+        aux, p, t = ConcreteRArray(Float64[]), ConcreteRArray(Float64[]), ConcreteRNumber(0.0)
+        hf = repr(Reactant.@code_hlo optimize = false one_call(f, u, aux, p, t))
+        hg = repr(Reactant.@code_hlo optimize = false one_call(g, u, aux, p, t))
+        # One private function for `sq`, called at both uses; none inline.
+        @test count(r"func\.func private @[^(]*esm_tpl_sq", hf) == 1
+        @test count(r"call @[^(]*esm_tpl_sq", hf) == 2
+        @test !occursin("esm_tpl_", hg)
+        @test !occursin("func.call", hg)
+        uh = Array(u)
+        expected = (uh .* uh .- 0.25 .* uh) .+ (w -> w * w - 0.25 * w).(0.5 .* uh .+ (1.0:6.0))
+        rf = Reactant.@compile one_call(f, u, aux, p, t)
+        rg = Reactant.@compile one_call(g, u, aux, p, t)
+        @test Array(rf(f, u, aux, p, t)) ≈ expected rtol = 1.0e-14
+        @test Array(rg(g, u, aux, p, t)) ≈ expected rtol = 1.0e-14
+    end
+
+    @testset "an RK4 leaf emits the operator once" begin
+        f, args = fragment_rk4_inputs()
+        h = repr(Reactant.@code_hlo optimize = false fragment_rk4(f, args...))
+        @test count(r"func\.func private @[^(]*_fragment_body", h) == 1
+        @test count(r"call @[^(]*_fragment_body", h) == 4
+        g = emit_fragment(f.ir; calls = :inline)
+        hg = repr(Reactant.@code_hlo optimize = false fragment_rk4(g, args...))
+        @test !occursin("_fragment_body", hg)
+        run_f = Reactant.@compile donated_args = :none fragment_rk4(f, args...)
+        run_g = Reactant.@compile donated_args = :none fragment_rk4(g, args...)
+        @test Array(run_f(f, args...)) ≈ Array(run_g(g, args...)) rtol = 1.0e-14
+        @test_throws EarthSciAST.DirectEmitError emit_fragment(f.ir; calls = :sometimes)
     end
 
     @testset "vector parameters and caller-owned loop" begin
@@ -418,7 +492,12 @@ end
     @testset "concurrent independent traces" begin
         f, args = fragment_rk4_inputs()
         g = emit_fragment(f.ir; fold = :reduce)
-        trace(fragment) = repr(Reactant.@code_hlo optimize = false fragment_rk4(fragment, args...))
+        # Reactant names each called function with a process-wide counter
+        # (`##_fragment_body#142`), so traces are compared without it.
+        trace(fragment) = replace(
+            repr(Reactant.@code_hlo optimize = false fragment_rk4(fragment, args...)),
+            r"(##[A-Za-z0-9_]+)#[0-9]+" => s"\1"
+        )
         expected = (trace(f), trace(g))
         ready = Channel{Nothing}(2)
         go = Base.Event()

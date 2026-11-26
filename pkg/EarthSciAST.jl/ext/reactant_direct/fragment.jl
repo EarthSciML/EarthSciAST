@@ -100,7 +100,10 @@ function Reactant.make_tracer(
     return prev
 end
 
-function emit_fragment(ir::_E.OperatorIR; eltype::Type = ir.working_eltype, fold::Symbol = :tree)
+function emit_fragment(
+        ir::_E.OperatorIR; eltype::Type = ir.working_eltype, fold::Symbol = :tree,
+        calls::Symbol = :functions
+    )
     eltype in (Float32, Float64) || throw(ArgumentError("fragment eltype must be Float32 or Float64"))
     eltype === ir.working_eltype || throw(
         _E._range_error(
@@ -126,7 +129,7 @@ function emit_fragment(ir::_E.OperatorIR; eltype::Type = ir.working_eltype, fold
     # slices as the tile or lane capacity grows.
     return _StableHLOFragment{eltype, typeof(ir), typeof(buffers)}(
         ir, buffers, Vector{Float64}[values(host)...], names,
-        DirectEmitOptions(; read = :always), eltype === Float64 && fold === :tree
+        DirectEmitOptions(; read = :always, calls), eltype === Float64 && fold === :tree
     )
 end
 
@@ -465,7 +468,18 @@ function (f::_StableHLOFragment{T})(
     return _fragment_call(f, u, aux, p, t, forcing, nothing, dt)
 end
 
+# Under `calls = :functions` the operator is emitted ONCE per trace as a private
+# function (one per argument types) and each use is a `func.call`, so an RK4
+# leaf holds the operator once, not four times. Reactant's call cache keys the
+# function by the fragment (a trace leaf, by identity) and the traced argument
+# types; every input is an argument, so the body captures nothing.
 function _fragment_call(f, u, aux, p, t, forcing, indices, dt)
+    f.options.calls === :functions &&
+        return Reactant.Ops.call(_fragment_body, f, u, aux, p, t, forcing, indices, dt)
+    return _fragment_body(f, u, aux, p, t, forcing, indices, dt)
+end
+
+function _fragment_body(f, u, aux, p, t, forcing, indices, dt)
     if f.ir.kernel === nothing
         dt === nothing || throw(ArgumentError("only output kernels take a dt argument"))
         return _fragment_rhs(f, u, aux, p, t, forcing, indices)
