@@ -49,6 +49,7 @@ struct _DECallFn <: Function
     rule::String
     uses_time::Bool
     callfns::Dict{Any, Any}
+    stats::Dict{Symbol, Int}
 end
 
 # Reactant names the emitted function after this printed form, so it is an
@@ -140,7 +141,7 @@ function _de_call(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
     fn = get!(ctx.callfns, key) do
         _DECallFn(
             site, ranges, ctx.n_states, length(ctx.ue.m), T, ctx.tree_fold, ctx.opts,
-            ctx.rule, info.uses_time, ctx.callfns
+            ctx.rule, info.uses_time, ctx.callfns, ctx.stats
         )
     end::_DECallFn
     traced = Any[_de_traced(a, T) for a in args]
@@ -171,7 +172,9 @@ function _de_call_body(fn::_DECallFn, xs::TracedRArray...)
         frame, callfns = fn.callfns
     )
     sub.rule = "the body of the template `$(tg.name)` ($(fn.rule))"
-    out = _de_walk(sub, _DEScalarFrame(_DEVal[], _E._NodeMap{_DEVal}()), tg.body)
+    sub.stats = fn.stats            # the emission's tallies, not a function's own
+    body = _de_body_with_tables(fn.callfns, fn.site)
+    out = _de_walk(sub, _DEScalarFrame(_DEVal[], _E._NodeMap{_DEVal}()), body)
     return _de_traced(out, T)
 end
 
@@ -211,4 +214,35 @@ function _de_arg_range(ctx::_DECtx, nd::_E._Node)
     fr = ctx.frame
     fr isa _DECallFrame || return nothing
     return fr.ranges[nd.idx]
+end
+
+# The target's body with each read of a `:const` array argument replaced by the
+# const read of the array this site passes, as the inlined body has it, so the
+# host analyses (folding, the comparison count, subscript intervals) see the
+# table. Scalar arguments stay arguments and calls stay calls. Once per site.
+function _de_body_with_tables(callfns::Dict{Any, Any}, site::_E._CallSite)::_E._Node
+    key = (:tables, site)
+    hit = get(callfns, key, nothing)
+    hit === nothing || return hit::_E._Node
+    tg = site.target
+    memo = _E._NodeMap{_E._Node}()
+    function sub(x::_E._Node)::_E._Node
+        got = get(memo, x, nothing)
+        got === nothing || return got
+        isempty(x.children) && x.kind !== _E._NK_ARG_GATHER && return x
+        ch = _E._Node[sub(c) for c in x.children]
+        r = if x.kind === _E._NK_ARG_GATHER && (x.payload::_E._ArgGatherRef).target === tg
+            a = site.arrays[tg.passed[(x.payload::_E._ArgGatherRef).j]]
+            _E._mknode(kind = _E._NK_CONST_GATHER, payload = a.data::_E._ConstGatherArray, children = ch)
+        elseif all(i -> ch[i] === x.children[i], eachindex(ch))
+            x
+        else
+            _E._Node(x.kind, x.op, x.literal, x.idx, x.sym, x.payload, ch)
+        end
+        memo[x] = r
+        return r
+    end
+    body = sub(tg.body)
+    callfns[key] = body
+    return body
 end

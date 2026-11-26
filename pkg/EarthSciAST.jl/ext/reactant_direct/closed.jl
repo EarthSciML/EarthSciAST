@@ -355,7 +355,7 @@ function _de_same_node(a::_E._Node, b::_E._Node)::Bool
     k = a.kind
     if k === _E._NK_LITERAL
         isequal(a.literal, b.literal) || return false
-    elseif k === _E._NK_STATE || k === _E._NK_CACHED
+    elseif k === _E._NK_STATE || k === _E._NK_CACHED || k === _E._NK_ARG
         (a.idx == b.idx && a.payload === b.payload) || return false
     elseif k === _E._NK_PARAM
         a.sym === b.sym || return false
