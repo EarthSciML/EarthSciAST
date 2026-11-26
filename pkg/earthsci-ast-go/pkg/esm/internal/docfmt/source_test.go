@@ -103,11 +103,11 @@ func TestTextHelpers(t *testing.T) {
 	if got := string(linesDecodeText([]rune("\uFEFFa\r\nb\r\n"))); got != "a\nb\n" {
 		t.Fatalf("decodeText %q", got)
 	}
-	if got := string(stypEscT(true, []rune("-a // b\n+c*"))); got != "\\-a \\// b\n\\+c\\*" {
-		t.Fatalf("escT %q", got)
+	if !stypVerbOK([]rune("a `b` [c [d]] col_1d")) || stypVerbOK([]rune("a * b")) || stypVerbOK([]rune("x_ y")) {
+		t.Fatal("verbOK")
 	}
-	if s, r, ok := stypReadEsc([]rune("a\\]b] x")); !ok || string(s) != "a]b" || string(r) != " x" {
-		t.Fatal("readEsc")
+	if s, r, ok := stypReadVerb([]rune("a\\]b [c]] x")); !ok || string(s) != "a]b [c]" || string(r) != " x" {
+		t.Fatal("readVerb")
 	}
 	if stypNameLenT([]rune("italic(\"a,b\"), c")) != 13 {
 		t.Fatal("nameLenT")

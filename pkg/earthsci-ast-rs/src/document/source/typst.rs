@@ -22,7 +22,7 @@ use crate::document::typst_dict;
 
 // ## Spellings
 
-pub const O_DESC: &str = "#description[";
+pub const O_DESC: &str = "#description";
 pub const O_BLOCK: &str = "#esm-block(";
 pub const O_MODEL: &str = "#model(";
 pub const O_RS: &str = "#reaction-system(";
@@ -56,46 +56,98 @@ fn push_s(out: &mut Vec<char>, s: &str) {
 }
 
 // ## Description text
+//
+// A description is written verbatim as Typst markup, `#description[…]`, when
+// `verb_ok` says that markup is safe to typeset, and as a Typst string,
+// `#description("…")`, otherwise (`Typ.itemT`). The reader reads a content
+// block as Typst does: a backslash escapes the next character and brackets nest.
 
-/// `Typ.mustEsc`: whether a character of a description is written escaped.
-pub fn must_esc(bol: bool, c: char, next: Option<char>) -> bool {
-    ['\\', '[', ']', '#', '$', '*', '_', '`', '<', '>', '@', '~'].contains(&c)
-        || (bol && ['=', '-', '+'].contains(&c))
-        || (c == '/' && (next == Some('/') || next == Some('*')))
+/// `Typ.alnumA`: an ASCII letter or digit.
+fn alnum_a(c: Option<&char>) -> bool {
+    c.is_some_and(|c| c.is_ascii_alphanumeric())
 }
 
-/// `Typ.escT`: a description's text in a content block.
-pub fn esc_t(bol: bool, cs: &[char]) -> Vec<char> {
-    let mut out = Vec::with_capacity(cs.len());
-    let mut b = bol;
+/// `Typ.verbOK`: whether a description is written verbatim: none of
+/// `# $ @ \ < * ~`, none of the sequences `//`, `/*`, `--`, `-?`, `...` (a
+/// comment, or a Typst shorthand that would typeset differently from the
+/// text), every `_` between two ASCII letters or digits, balanced brackets
+/// outside backtick raw spans, none inside one, and every raw span closed.
+pub fn verb_ok(cs: &[char]) -> bool {
+    let mut depth = 0usize;
+    let mut raw = false;
     for (i, &c) in cs.iter().enumerate() {
-        if must_esc(b, c, cs.get(i + 1).copied()) {
-            out.push('\\');
+        let next = cs.get(i + 1).copied();
+        match c {
+            '#' | '$' | '@' | '\\' | '<' | '*' | '~' => return false,
+            '/' if matches!(next, Some('/' | '*')) => return false,
+            '-' if matches!(next, Some('-' | '?')) => return false,
+            '.' if next == Some('.') && cs.get(i + 2) == Some(&'.') => return false,
+            '_' if !(i > 0 && alnum_a(cs.get(i - 1)) && alnum_a(cs.get(i + 1))) => return false,
+            '`' => raw = !raw,
+            '[' | ']' if raw => return false,
+            '[' => depth += 1,
+            ']' => match depth.checked_sub(1) {
+                Some(d) => depth = d,
+                None => return false,
+            },
+            _ => {}
         }
-        out.push(c);
-        b = c == '\n';
     }
-    out
+    depth == 0 && !raw
 }
 
-/// `Typ.readEsc`: the text of a content block up to its unescaped `]`.
-pub fn read_esc(mut s: &[char]) -> Option<(Vec<char>, &[char])> {
+/// `Typ.readVerb 0 false`: the text of a content block up to the `]` that
+/// closes it, as Typst reads it: outside a backtick raw span a backslash
+/// escapes the next character (`\u{…}` is a code point) and brackets nest;
+/// inside one every character is literal.
+pub fn read_verb(mut s: &[char]) -> Option<(Vec<char>, &[char])> {
     let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut raw = false;
     loop {
         match s {
             [] => return None,
-            [']', r @ ..] => return Some((out, r)),
+            ['`', r @ ..] => {
+                out.push('`');
+                raw = !raw;
+                s = r;
+            }
+            [c, r @ ..] if raw => {
+                out.push(*c);
+                s = r;
+            }
+            [']', r @ ..] if depth == 0 => return Some((out, r)),
+            ['\\', 'u', '{', r @ ..] => {
+                let (c, r) = unicode_esc(r)?;
+                out.push(c);
+                s = r;
+            }
             ['\\', c, r @ ..] => {
                 out.push(*c);
                 s = r;
             }
-            ['[', ..] => return None,
             [c, r @ ..] => {
+                match c {
+                    ']' => depth -= 1,
+                    '[' => depth += 1,
+                    _ => {}
+                }
                 out.push(*c);
                 s = r;
             }
         }
     }
+}
+
+/// `Typ.readVerb`'s `\u{…}`: one or more hex digits then `}`, a Unicode
+/// scalar value.
+fn unicode_esc(s: &[char]) -> Option<(char, &[char])> {
+    let n = s.iter().take_while(|c| c.is_ascii_hexdigit()).count();
+    if n == 0 || s.get(n) != Some(&'}') {
+        return None;
+    }
+    let v = u32::from_str_radix(&string(&s[..n]), 16).ok()?;
+    char::from_u32(v).map(|c| (c, &s[n + 1..]))
 }
 
 /// `Typ.argT`: `key: value`.
@@ -437,8 +489,15 @@ pub fn item_t(it: &RItem) -> Vec<char> {
         RItem::Desc(s) => {
             push_s(&mut out, O_DESC);
             let cs: Vec<char> = s.chars().collect();
-            out.extend(esc_t(true, &cs));
-            out.extend([']', '\n']);
+            if verb_ok(&cs) {
+                out.push('[');
+                out.extend(cs);
+                out.extend([']', '\n']);
+            } else {
+                out.push('(');
+                out.extend(quote(true, s));
+                out.extend([')', '\n']);
+            }
         }
         RItem::Block(k, v) => {
             push_s(&mut out, O_BLOCK);
@@ -525,14 +584,21 @@ pub fn label_ok(sl: &[char]) -> bool {
 
 // ## The lexer
 
+/// `Typ.descOpen`: a description opener, `#description[` or `#description(`
+/// (a line such as `#description-note[…]` is prose).
+pub fn desc_open(s: &[char]) -> bool {
+    pre_s(O_DESC, s) && matches!(s.get(O_DESC.len()), Some('[' | '('))
+}
+
 /// `Typ.blockOpen`.
 pub fn block_open(s: &[char]) -> bool {
-    [
-        O_DESC, O_BLOCK, O_MODEL, O_RS, O_EQ, O_CE, O_RXN, O_INIT, O_CONS, O_PLOT, O_SUB, O_TMPL,
-        O_RULE,
-    ]
-    .iter()
-    .any(|o| pre_s(o, s))
+    desc_open(s)
+        || [
+            O_BLOCK, O_MODEL, O_RS, O_EQ, O_CE, O_RXN, O_INIT, O_CONS, O_PLOT, O_SUB, O_TMPL,
+            O_RULE,
+        ]
+        .iter()
+        .any(|o| pre_s(o, s))
 }
 
 /// `Typ.declOpen`.
@@ -540,10 +606,20 @@ pub fn decl_open(s: &[char]) -> bool {
     pre_s(O_VAR, s) || pre_s(O_PARAM, s) || pre_s(O_SPECIES, s)
 }
 
-/// `Typ.descAt`.
+/// `Typ.descAt`: a description after `#description`: a content block, or a
+/// string in parentheses.
 pub fn desc_at(u: &[char]) -> Option<(RItem, &[char])> {
-    let (t, r) = read_esc(u)?;
-    line_end(r).map(|r1| (RItem::Desc(string(&t)), r1))
+    match u {
+        ['[', v @ ..] => {
+            let (t, r) = read_verb(v)?;
+            line_end(r).map(|r1| (RItem::Desc(string(&t)), r1))
+        }
+        ['(', v @ ..] => match parse_quoted(true, v)? {
+            (t, [')', r @ ..]) => line_end(r).map(|r1| (RItem::Desc(t), r1)),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// `Typ.blockAtT`: a path block after `#esm-block(`.

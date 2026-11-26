@@ -1608,6 +1608,75 @@ def documents(g):
         document(models={"Box": box_model(description="The box model.")}),
     )
     P(
+        "description_verbatim",
+        "A description whose text is safe to typeset as Typst markup is written verbatim in "
+        "Typst, #description[...]: code spans, nested brackets, lists and an underscore "
+        "inside a word are kept as written.",
+        document(
+            models={
+                "Box": box_model(
+                    description="Mixes `q` over [lev, [tracer]]; see grids/column_1d.\n- one\n- two"
+                )
+            }
+        ),
+    )
+    P(
+        "description_string",
+        "A description that is not safe to typeset as Typst markup (here a * for "
+        "multiplication, a $, a #, an @, an underscore outside a word, a // and a <) is "
+        'written in Typst as a string, #description("...").',
+        document(
+            models={"Box": box_model(description='Loss is k * c, $5 per #2 @ x_ y // "z" <a>')}
+        ),
+    )
+    V(
+        "description_escaped",
+        "A Typst description written with its markup characters escaped by a backslash, as "
+        "earlier documents were, reads as the unescaped text.",
+        document(models={"Box": box_model(description="First-order *loss* [x]")}),
+        typ,
+        [
+            (
+                '#description("First-order *loss* [x]")',
+                "#description[First\\-order \\*loss\\* \\[x\\]]",
+            )
+        ],
+    )
+    P(
+        "description_string_shorthand",
+        "A description with a Typst shorthand (here ~, -- and ...) or a bracket inside a "
+        "code span is written in Typst as a string: as markup it would typeset differently "
+        "from the text, or not compile.",
+        document(models={"Box": box_model(description="Valid for ~10--20 km... see index [`]`].")}),
+    )
+    V(
+        "description_raw_span",
+        "In a hand-written Typst description, a code span's characters are literal (a "
+        "backslash or bracket inside one is kept as written), and outside one \\u{...} is a "
+        "code point.",
+        document(models={"Box": box_model(description="Use `\\n` or `]` here, caf\u00e9.")}),
+        typ,
+        [
+            (
+                '#description("Use `\\\\n` or `]` here, caf\u00e9.")',
+                "#description[Use `\\n` or `]` here, caf\\u{e9}.]",
+            )
+        ],
+    )
+    V(
+        "description_like_prose",
+        "A line that only starts like a description opener (here #description-note[...]) is "
+        "prose, which the reader skips.",
+        document(models={"Box": box_model(description="The box model.")}),
+        typ,
+        [
+            (
+                "#description[The box model.]",
+                "#description-note[An aside.]\n\n#description[The box model.]",
+            )
+        ],
+    )
+    P(
         "declarations",
         "Variables and parameters are :var and :param directives (Typst #var, #param), "
         "the other fields attributes; a list-valued field is a quoted flow collection.",
