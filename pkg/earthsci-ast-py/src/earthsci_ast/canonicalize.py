@@ -603,6 +603,16 @@ def _canonical_document_numbers(value: Any) -> Any:
     return value
 
 
+def _faq_without_defaults(node: dict) -> dict:
+    """A ``faq`` node without its default fields (esm-spec §4.8.2; Lean
+    ``Adapter.Doc.faqDefaults``): ``reduce: "+"`` and ``semiring: "sum_product"``
+    are dropped. A ``sum_product`` semiring goes only with a ``reduce`` that is
+    absent or ``"+"``; otherwise the node is left alone."""
+    if node.get("reduce", "+") != "+" or node.get("semiring", "sum_product") != "sum_product":
+        return node
+    return {k: v for k, v in node.items() if k not in ("reduce", "semiring")}
+
+
 def canonicalize_document(doc: Any) -> Any:
     """The document-level canonical step (esm-spec §4.8.2): every units string of a
     decoded document (the JSON object ``to_json`` writes and ``load_document`` reads)
@@ -617,7 +627,8 @@ def canonicalize_document(doc: Any) -> Any:
     scalar one becomes the bare literal, an array one a ``const`` without
     ``units``. The deprecated ops are rewritten (esm-spec §4.2): a ``neg`` node
     with one argument becomes unary ``-``, a ``pow`` node with two becomes
-    ``^``, and a ``broadcast`` of ``neg`` with one argument maps ``-``. Every
+    ``^``, and a ``broadcast`` of ``neg`` with one argument maps ``-``. A ``faq``
+    node drops its default ``reduce: "+"`` and ``semiring: "sum_product"``. Every
     number, free-form objects included, takes its canonical form (CONFORMANCE
     §5.5.3.1): an integral value in Int64 is an integer (``2.0`` is ``2``).
     The spellings an earlier document wrote are read as the esm-2.4.0 ones
@@ -641,6 +652,8 @@ def canonicalize_document(doc: Any) -> Any:
 
     def rewrite_deprecated(node: dict) -> dict:
         op, args = node.get("op"), node.get("args")
+        if op == "faq":
+            return _faq_without_defaults(node)
         if not isinstance(args, list):
             return node
         if isinstance(op, str) and op in _DEPRECATED_OPS:

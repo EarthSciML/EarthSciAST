@@ -4216,11 +4216,11 @@
         },
         {
           "lhs": {"op": "index", "args": ["EdgeEnumerationAreaEff.edge_dense_id", "EdgeEnumerationAreaEff.e"]},
-          "rhs": {"op": "faq", "args": [], "output_idx": ["e"], "expr": {"op": "-", "args": ["e", 1]}, "semiring": "sum_product", "ranges": {"e": {"from": "edges"}}},
+          "rhs": {"op": "faq", "args": [], "output_idx": ["e"], "expr": {"op": "-", "args": ["e", 1]}, "ranges": {"e": {"from": "edges"}}},
           "source_system": "EdgeEnumerationAreaEff",
           "contributions": [
             {
-              "rhs": {"op": "faq", "args": [], "output_idx": ["e"], "expr": {"op": "-", "args": ["e", 1]}, "semiring": "sum_product", "ranges": {"e": {"from": "edges"}}},
+              "rhs": {"op": "faq", "args": [], "output_idx": ["e"], "expr": {"op": "-", "args": ["e", 1]}, "ranges": {"e": {"from": "edges"}}},
               "origins": [
                 {
                   "component": "EdgeEnumerationAreaEff"
@@ -4231,11 +4231,11 @@
         },
         {
           "lhs": {"op": "faq", "args": [], "output_idx": ["i"], "expr": {"op": "D", "args": [{"op": "index", "args": ["EdgeEnumerationAreaEff.area_eff", "i"]}], "wrt": "t"}, "ranges": {"i": {"from": "cells"}}},
-          "rhs": {"op": "faq", "args": ["EdgeEnumerationAreaEff.dc", "EdgeEnumerationAreaEff.dv", "EdgeEnumerationAreaEff.edges_on_cell"], "output_idx": ["i"], "expr": {"op": "*", "args": [0.25, {"op": "index", "args": ["EdgeEnumerationAreaEff.dc", {"op": "index", "args": ["EdgeEnumerationAreaEff.edges_on_cell", "i", "k"]}]}, {"op": "index", "args": ["EdgeEnumerationAreaEff.dv", {"op": "index", "args": ["EdgeEnumerationAreaEff.edges_on_cell", "i", "k"]}]}]}, "semiring": "sum_product", "ranges": {"i": {"from": "cells"}, "k": {"from": "edges_of_cell", "of": ["i"]}}},
+          "rhs": {"op": "faq", "args": ["EdgeEnumerationAreaEff.dc", "EdgeEnumerationAreaEff.dv", "EdgeEnumerationAreaEff.edges_on_cell"], "output_idx": ["i"], "expr": {"op": "*", "args": [0.25, {"op": "index", "args": ["EdgeEnumerationAreaEff.dc", {"op": "index", "args": ["EdgeEnumerationAreaEff.edges_on_cell", "i", "k"]}]}, {"op": "index", "args": ["EdgeEnumerationAreaEff.dv", {"op": "index", "args": ["EdgeEnumerationAreaEff.edges_on_cell", "i", "k"]}]}]}, "ranges": {"i": {"from": "cells"}, "k": {"from": "edges_of_cell", "of": ["i"]}}},
           "source_system": "EdgeEnumerationAreaEff",
           "contributions": [
             {
-              "rhs": {"op": "faq", "args": ["EdgeEnumerationAreaEff.dc", "EdgeEnumerationAreaEff.dv", "EdgeEnumerationAreaEff.edges_on_cell"], "output_idx": ["i"], "expr": {"op": "*", "args": [0.25, {"op": "index", "args": ["EdgeEnumerationAreaEff.dc", {"op": "index", "args": ["EdgeEnumerationAreaEff.edges_on_cell", "i", "k"]}]}, {"op": "index", "args": ["EdgeEnumerationAreaEff.dv", {"op": "index", "args": ["EdgeEnumerationAreaEff.edges_on_cell", "i", "k"]}]}]}, "semiring": "sum_product", "ranges": {"i": {"from": "cells"}, "k": {"from": "edges_of_cell", "of": ["i"]}}},
+              "rhs": {"op": "faq", "args": ["EdgeEnumerationAreaEff.dc", "EdgeEnumerationAreaEff.dv", "EdgeEnumerationAreaEff.edges_on_cell"], "output_idx": ["i"], "expr": {"op": "*", "args": [0.25, {"op": "index", "args": ["EdgeEnumerationAreaEff.dc", {"op": "index", "args": ["EdgeEnumerationAreaEff.edges_on_cell", "i", "k"]}]}, {"op": "index", "args": ["EdgeEnumerationAreaEff.dv", {"op": "index", "args": ["EdgeEnumerationAreaEff.edges_on_cell", "i", "k"]}]}]}, "ranges": {"i": {"from": "cells"}, "k": {"from": "edges_of_cell", "of": ["i"]}}},
               "origins": [
                 {
                   "component": "EdgeEnumerationAreaEff"

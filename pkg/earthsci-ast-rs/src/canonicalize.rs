@@ -964,10 +964,25 @@ pub fn canonicalize_document(doc: &serde_json::Value) -> serde_json::Value {
             other => other.clone(),
         }
     }
+    /// A `faq` node without its default fields (esm-spec §4.8.2; Lean
+    /// `Adapter.Doc.faqDefaults`): `reduce: "+"` and
+    /// `semiring: "sum_product"` are dropped. A `sum_product` semiring goes
+    /// only with a `reduce` that is absent or `"+"`; otherwise the node is
+    /// left alone.
+    fn drop_faq_defaults(obj: &mut serde_json::Map<String, serde_json::Value>) {
+        let is = |k: &str, default: &str| obj.get(k).is_none_or(|v| v.as_str() == Some(default));
+        if is("reduce", "+") && is("semiring", "sum_product") {
+            obj.shift_remove("reduce");
+            obj.shift_remove("semiring");
+        }
+    }
     /// `neg` with one argument is unary `-`, `pow` with two is `^`, a
     /// `broadcast` of `neg` with one argument maps `-` (Lean
     /// `Adapter.Doc.deprecatedTo`).
     fn rewrite_deprecated(obj: &mut serde_json::Map<String, serde_json::Value>) {
+        if obj.get("op").and_then(|v| v.as_str()) == Some("faq") {
+            return drop_faq_defaults(obj);
+        }
         let Some(arity) = obj.get("args").and_then(|a| a.as_array()).map(Vec::len) else {
             return;
         };

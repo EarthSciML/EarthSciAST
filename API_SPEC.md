@@ -575,7 +575,7 @@ Divergences:
 | `substitute(expr, bindings) -> Expr` | capture-free substitution | no, anywhere |
 | `canonicalize(expr) -> Expr` | RFC §5.4 canonical form | yes, `CanonicalizeError` |
 | `canonical_json(expr) -> str` | canonical serialization | yes, `CanonicalizeError` |
-| `canonicalize_document(doc) -> doc` | every units string of a decoded JSON document in the canonical unit spelling (esm-spec §4.8.2), the deprecated `neg`/`pow` rewritten to `-`/`^` (esm-spec §4.2), every number in canonical form (CONFORMANCE_SPEC §5.5.3.1); nothing else changes | no, anywhere |
+| `canonicalize_document(doc) -> doc` | every units string of a decoded JSON document in the canonical unit spelling (esm-spec §4.8.2), the deprecated `neg`/`pow` rewritten to `-`/`^` (esm-spec §4.2), a `faq` node's default `reduce: "+"` / `semiring: "sum_product"` dropped, every number in canonical form (CONFORMANCE_SPEC §5.5.3.1); nothing else changes | no, anywhere |
 
 Divergences:
 
