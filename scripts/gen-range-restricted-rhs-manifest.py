@@ -53,6 +53,8 @@ DOCS = {
     "selection_two_operator": {"document": "fixtures/selection_two_operator.esm"},
     "lanes_pointwise": {"document": "fixtures/lanes_pointwise.esm"},
     "lanes_column": {"document": "fixtures/lanes_column.esm"},
+    "lanes_surface_region": {"document": "fixtures/lanes_surface_region.esm"},
+    "lanes_time_observed_ic": {"document": "fixtures/lanes_time_observed_ic.esm"},
     "global_horizontal_sum": {"document": "fixtures/global_horizontal_sum.esm"},
     "global_scalar_state": {"document": "fixtures/global_scalar_state.esm"},
     "esd_ppm_1d_periodic": {
@@ -592,6 +594,49 @@ def lane_cases():
             "batches": batches,
             "negative_control": {"batch": "permutation_1", "swap_lanes": [1, 2]},
             "covers": ["lanes", "column", "index_derived_reads"],
+        }
+    )
+    # A makearray region one cell thick along a lane set (a surface-only
+    # coefficient): lanes at every level, the surface among them, in one
+    # batch and in a short padded one. Its own generator, so the cases above
+    # keep their cells.
+    srng = random.Random(541)
+    cells = [[i, j, k] for k in range(1, 5) for j in range(1, 6) for i in range(1, 7)]
+    perm = cells[:]
+    srng.shuffle(perm)
+    cap = 16
+    out.append(
+        {
+            "id": "lanes_surface_region",
+            "kind": "lanes",
+            **doc_ref("lanes_surface_region"),
+            "selection": SELECT_ALL,
+            "lane_kind": "cells",
+            "lane_sets": ["lon", "lat", "lev"],
+            "capacity": cap,
+            "batches": [
+                {"id": "mixed_levels", "cells": perm[:cap], "n": cap},
+                {"id": "mixed_levels_padded", "cells": perm[cap : cap + 11] + [perm[cap]] * (cap - 11), "n": 11},
+            ],
+            "negative_control": {"batch": "mixed_levels", "swap_lanes": [1, 2]},
+            "covers": ["lanes", "makearray_region_along_lane_set"],
+        }
+    )
+    # A scalar observed that depends on t, read by an initial condition
+    # through another observed: the lane program reads it per lane and has
+    # no initial condition. The same cells as the case above.
+    out.append(
+        {
+            "id": "lanes_time_observed_ic",
+            "kind": "lanes",
+            **doc_ref("lanes_time_observed_ic"),
+            "selection": SELECT_ALL,
+            "lane_kind": "cells",
+            "lane_sets": ["lon", "lat", "lev"],
+            "capacity": cap,
+            "batches": [{"id": "mixed_levels", "cells": perm[:cap], "n": cap}],
+            "negative_control": {"batch": "mixed_levels", "swap_lanes": [1, 2]},
+            "covers": ["lanes", "time_observed_read_by_ic"],
         }
     )
     # A lane program over an operator that reads a neighbour is refused.

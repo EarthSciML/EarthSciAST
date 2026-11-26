@@ -1,0 +1,189 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "lanes_surface_region",
+    "description": "A pointwise loss on a 6 x 5 x 4 grid whose right-hand side is a whole-array makearray with a region one cell thick along a lane set: every cell loses k*A, and the surface layer (lev 1) a larger kd + k, written as a later region over lev 1..1 whose value is an array faq over (lon, lat) reading A at the literal lev 1 (the form of a planner's surface-only band coefficient). A lane's region depends on its cell, so a lane program reads it by region membership.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-25T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 6
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 5
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "Dep": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.3
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  6
+                ],
+                [
+                  1,
+                  5
+                ],
+                [
+                  1,
+                  4
+                ]
+              ],
+              [
+                [
+                  1,
+                  6
+                ],
+                [
+                  1,
+                  5
+                ],
+                [
+                  1,
+                  1
+                ]
+              ]
+            ],
+            "values": [
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": [
+                  "i",
+                  "j",
+                  "l"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    6
+                  ],
+                  "j": [
+                    1,
+                    5
+                  ],
+                  "l": [
+                    1,
+                    4
+                  ]
+                },
+                "expr": {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        "k"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "A",
+                        "i",
+                        "j",
+                        "l"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": [
+                  "i",
+                  "j"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    6
+                  ],
+                  "j": [
+                    1,
+                    5
+                  ]
+                },
+                "expr": {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        {
+                          "op": "+",
+                          "args": [
+                            "k",
+                            "kd"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "A",
+                        "i",
+                        "j",
+                        1
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

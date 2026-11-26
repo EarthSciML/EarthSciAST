@@ -834,6 +834,33 @@ impl Rewriter<'_> {
         let (Some(regions), Some(values)) = (m.regions.as_ref(), m.values.as_ref()) else {
             return self.refuse("holds a makearray with no regions");
         };
+        // A region that covers only part of a lane set along the axis a lane
+        // subscript runs on (a coefficient that exists only at the surface,
+        // region 1..1 along `lev`): which regions hold a lane's element
+        // depends on the lane's cell, so the read is lowered to region
+        // membership instead, each lane taking the value of the last region
+        // that holds its cell (esm-spec §4.3.2) and 0 where none does.
+        let partial = regions.iter().any(|region| {
+            region.iter().zip(subs).any(|(b, s)| match s {
+                Expr::Variable(x) => sc.lane_set(x).is_some_and(|set| {
+                    let n = self.sizes.get(set).copied().unwrap_or(-1);
+                    crate::types::region_bounds(b).is_none_or(|[lo, hi]| lo != 1 || hi != n)
+                }),
+                _ => false,
+            })
+        });
+        if partial {
+            let lane_of: Vec<Option<String>> = subs
+                .iter()
+                .map(|s| match s {
+                    Expr::Variable(x) => sc.lane_set(x).map(str::to_string),
+                    _ => None,
+                })
+                .collect();
+            let lowered = membership_read(regions, values, subs, &lane_of, self.axes)
+                .map_err(|why| refused(format!("lane: rule `{}` {why}", self.rule)))?;
+            return self.expr(&lowered, sc);
+        }
         // Per axis: the lane set it runs along, if any.
         let mut lane_axes: Vec<Option<String>> = Vec::with_capacity(subs.len());
         let mut inner_subs = Vec::new();
@@ -1741,4 +1768,227 @@ pub(super) fn build(
             precision,
         }),
     })
+}
+
+fn op_node(op: &str, args: Vec<Expr>) -> Expr {
+    Expr::operator(ExpressionNode {
+        op: op.to_string(),
+        args,
+        ..Default::default()
+    })
+}
+
+/// `index(makearray(regions, values), subs…)` as region membership:
+/// `ifelse(in_k, value_k at subs, …ifelse(in_1, value_1 at subs, 0))`, the
+/// last region holding the element winning (esm-spec §4.3.2). A region value
+/// is a scalar expression (the same at every element) or an array `faq`
+/// whose output indices span either every dimension of its region or only
+/// its non-singleton ones, starting at its ranges' lower bounds; it is read
+/// at `sub − lo + start` on each dimension it spans. Anything else is an
+/// error, which the caller refuses.
+///
+/// Inside a region one cell thick along a lane set (`lo == hi`), the lane's
+/// coordinate there is `lo`, so a read of a state or array observed at the
+/// literal `lo` on that axis is the read at the lane's own subscript, and is
+/// written so (the lane rewrite reads a state only at its lane's cell).
+fn membership_read(
+    regions: &[Vec<[RegionBound; 2]>],
+    values: &[Expr],
+    subs: &[Expr],
+    lane_of: &[Option<String>],
+    axes: &HashMap<String, Vec<Option<String>>>,
+) -> Result<Expr, String> {
+    let int = |k: i64| Expr::Integer(k);
+    let mut out = Expr::Number(0.0);
+    for (region, value) in regions.iter().zip(values) {
+        if region.len() != subs.len() {
+            return Err("reads a makearray at the wrong rank".into());
+        }
+        let mut bounds = Vec::with_capacity(region.len());
+        for b in region {
+            let Some(lh) = crate::types::region_bounds(b) else {
+                return Err("holds a makearray with a symbolic region bound".into());
+            };
+            bounds.push(lh);
+        }
+        let mut conds = Vec::new();
+        for (s, [lo, hi]) in subs.iter().zip(&bounds) {
+            if lo == hi {
+                conds.push(op_node("==", vec![s.clone(), int(*lo)]));
+            } else {
+                conds.push(op_node(">=", vec![s.clone(), int(*lo)]));
+                conds.push(op_node("<=", vec![s.clone(), int(*hi)]));
+            }
+        }
+        // The lane sets this region is one cell thick along: (set, lo, sub).
+        let thin: Vec<(&str, i64, &Expr)> = (0..subs.len())
+            .filter_map(|d| {
+                let set = lane_of[d].as_deref()?;
+                (bounds[d][0] == bounds[d][1]).then_some((set, bounds[d][0], &subs[d]))
+            })
+            .collect();
+        let value = &retarget_thin(value, &thin, axes);
+        let read = match value {
+            Expr::Operator(f)
+                if f.op == "faq" && f.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
+            {
+                let outs = f.output_idx.as_deref().unwrap_or_default();
+                let dims: Vec<usize> = if outs.len() == region.len() {
+                    (0..region.len()).collect()
+                } else {
+                    (0..region.len())
+                        .filter(|&d| bounds[d][0] != bounds[d][1])
+                        .collect()
+                };
+                if dims.len() != outs.len() {
+                    return Err("holds a faq region value that does not fit its region".into());
+                }
+                // The value's element at the read: its body with each output
+                // index renamed to the subscript, shifted onto the value's
+                // own range (`sub - lo + start`). Inside the region's
+                // condition the subscript lies in the region, so the value's
+                // range need not span the lane set.
+                let ranges = f.ranges.clone().unwrap_or_default();
+                let mut renames: HashMap<String, Expr> = HashMap::new();
+                for (o, &d) in outs.iter().zip(&dims) {
+                    let start = match ranges.get(o) {
+                        Some(crate::types::RangeSpec::Interval([lo, _])) => *lo,
+                        Some(crate::types::RangeSpec::Strided([lo, _, _])) => *lo,
+                        _ => 1,
+                    };
+                    let shift = start - bounds[d][0];
+                    renames.insert(
+                        o.clone(),
+                        if shift == 0 {
+                            subs[d].clone()
+                        } else {
+                            op_node("+", vec![subs[d].clone(), int(shift)])
+                        },
+                    );
+                }
+                let free: HashSet<String> = renames
+                    .values()
+                    .flat_map(|e| crate::binders::free_names(e, crate::binders::Binders::BODY))
+                    .collect();
+                let Some(body) = f.expr.as_deref() else {
+                    return Err("holds a faq region value with no body".into());
+                };
+                let body = rename_free(body, &renames, &free)?;
+                let contracted: HashMap<String, crate::types::RangeSpec> = ranges
+                    .iter()
+                    .filter(|(k, _)| !outs.contains(k))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                if contracted.is_empty() && f.filter.is_none() {
+                    body
+                } else {
+                    let mut g = (**f).clone();
+                    g.output_idx = None;
+                    g.ranges = Some(contracted);
+                    g.expr = Some(Box::new(body));
+                    if let Some(fl) = f.filter.as_deref() {
+                        g.filter = Some(Box::new(rename_free(fl, &renames, &free)?));
+                    }
+                    Expr::operator(g)
+                }
+            }
+            Expr::Operator(f) if f.op == "faq" || f.op == "makearray" => {
+                return Err("holds an array region value a lane cannot read".into());
+            }
+            _ => value.clone(),
+        };
+        let cond = if conds.len() == 1 {
+            conds.pop().expect("one")
+        } else {
+            op_node("and", conds)
+        };
+        out = op_node("ifelse", vec![cond, read, out]);
+    }
+    Ok(out)
+}
+
+/// `e` with every `index(v, …)` whose subscript on an axis of lane set `set`
+/// is the literal `lo` of a `thin` entry read at that entry's subscript
+/// instead ([`membership_read`]).
+fn retarget_thin(
+    e: &Expr,
+    thin: &[(&str, i64, &Expr)],
+    axes: &HashMap<String, Vec<Option<String>>>,
+) -> Expr {
+    if thin.is_empty() {
+        return e.clone();
+    }
+    let Expr::Operator(n) = e else {
+        return e.clone();
+    };
+    let mut out = ExpressionNode::clone(n);
+    let mut f = |c: &Expr| retarget_thin(c, thin, axes);
+    out = out.map_children(&mut f);
+    if out.op == "index" {
+        if let Some(Expr::Variable(v)) = out.args.first() {
+            if let Some(ax) = axes.get(v) {
+                for (p, a) in ax.iter().enumerate() {
+                    let Some(set) = a.as_deref() else { continue };
+                    if let Some(arg) = out.args.get_mut(p + 1) {
+                        if let Some((_, _, sub)) = thin.iter().find(|(s, lo, _)| {
+                            *s == set && matches!(arg, Expr::Integer(k) if k == lo)
+                        }) {
+                            *arg = (*sub).clone();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Expr::operator(out)
+}
+
+/// `e` with each free variable of `renames` replaced, capture-avoiding: a
+/// nested binder of a renamed name shadows it below, and one that binds a
+/// name `free` (the replacements' own names) where a renamed name is free
+/// would capture it, which is an error.
+fn rename_free(
+    e: &Expr,
+    renames: &HashMap<String, Expr>,
+    free: &HashSet<String>,
+) -> Result<Expr, String> {
+    match e {
+        Expr::Variable(v) => Ok(renames.get(v).cloned().unwrap_or_else(|| e.clone())),
+        Expr::Operator(n) => {
+            let bound: Vec<String> = n
+                .ranges
+                .as_ref()
+                .map(|r| r.keys().cloned().collect())
+                .unwrap_or_default();
+            let active: HashMap<String, Expr> = renames
+                .iter()
+                .filter(|(k, _)| !bound.contains(k))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            if active.is_empty() {
+                return Ok(e.clone());
+            }
+            if !bound.is_empty() && bound.iter().any(|b| free.contains(b)) {
+                let names = crate::binders::free_names(e, crate::binders::Binders::BODY);
+                if active.keys().any(|k| names.contains(k)) {
+                    return Err(
+                        "holds a region value whose nested binder would capture a subscript".into(),
+                    );
+                }
+            }
+            let mut err = None;
+            let out = n.map_children(&mut |c: &Expr| match rename_free(c, &active, free) {
+                Ok(x) => x,
+                Err(m) => {
+                    err.get_or_insert(m);
+                    c.clone()
+                }
+            });
+            match err {
+                Some(m) => Err(m),
+                None => Ok(Expr::operator(out)),
+            }
+        }
+        _ => Ok(e.clone()),
+    }
 }

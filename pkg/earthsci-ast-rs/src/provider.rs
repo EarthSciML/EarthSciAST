@@ -363,6 +363,11 @@ struct Feed {
     /// since it last delivered, so until it delivers again that record is
     /// this one, not the buffer's.
     detached: Option<ArrayD<f64>>,
+    /// Whether the provider has delivered a record yet. A provider may
+    /// answer "unchanged" (`None`) before its first delivery, for the record
+    /// it was primed with (EarthSciIO's providers prime at the start of
+    /// their window): that record is then read with [`DataProvider::sample`].
+    delivered: bool,
 }
 
 impl Feed {
@@ -385,6 +390,7 @@ impl Feed {
             provider,
             anchors,
             detached: None,
+            delivered: false,
         }
     }
 
@@ -404,7 +410,10 @@ impl Feed {
 
     fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
         match self.provider.refresh(t)? {
-            Some(a) => self.checked(a).map(Some),
+            Some(a) => {
+                self.delivered = true;
+                self.checked(a).map(Some)
+            }
             None => Ok(None),
         }
     }
@@ -416,12 +425,33 @@ impl Feed {
     fn ask_in_effect(&mut self, t: f64) -> Result<Option<Option<ArrayD<f64>>>, ProviderError> {
         let a = self.refresh(t)?;
         if a.is_some() || self.is_anchor(t) {
-            return Ok(Some(a));
+            return self.primed_if_unchanged(a).map(Some);
         }
         match self.anchor_before(t) {
-            Some(b) => self.refresh(b).map(Some),
+            Some(b) => {
+                let a = self.refresh(b)?;
+                self.primed_if_unchanged(a).map(Some)
+            }
             None => Ok(None),
         }
+    }
+
+    /// A refresh's answer at a time the provider has a record in effect,
+    /// with "unchanged" (`None`) before the provider's first delivery read as
+    /// the record it holds: a provider may be primed with the record in
+    /// effect at the start of its window (EarthSciIO's are) and answer
+    /// `None` for it, and nothing has read that record yet. Without this an
+    /// `ic` at the start of the run, or the forcing at construction, would
+    /// take the parameter's declared default instead of its data.
+    fn primed_if_unchanged(
+        &mut self,
+        a: Option<ArrayD<f64>>,
+    ) -> Result<Option<ArrayD<f64>>, ProviderError> {
+        if a.is_some() || self.delivered {
+            return Ok(a);
+        }
+        self.delivered = true;
+        self.sample().map(Some)
     }
 
     /// Write a delivery into the forcing buffer: a new one, or on `None` (no

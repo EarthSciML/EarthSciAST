@@ -2142,12 +2142,28 @@ impl EsioProvider {
         }
     }
 
-    /// EarthSciIO's anchors (Unix seconds) moved onto the model clock.
+    /// EarthSciIO's anchors (Unix seconds) moved onto the model clock, and,
+    /// for a time-varying source, the instant it is primed at (the start of
+    /// the run window, or the source's start): the record in effect there is
+    /// the one EarthSciIO primes with and answers "unchanged" for, so it is
+    /// an anchor of its own. Without it a window that starts between two
+    /// records has no anchor at or before its start, and a read at the start
+    /// (an `ic` right-hand side, esm-spec §11.4.2; the forcing at
+    /// construction) would take the declared default instead of the data.
     pub fn model_refresh_times(&self) -> Vec<f64> {
-        self.inner
+        let mut out: Vec<f64> = self
+            .inner
             .refresh_times()
             .into_iter()
             .map(|unix| unix - self.time_origin)
-            .collect()
+            .collect();
+        if self.time_varying && self.table.is_none() {
+            let primed = self.prime.unix_timestamp_nanos() as f64 * 1e-9 - self.time_origin;
+            if !out.iter().any(|x| x.to_bits() == primed.to_bits()) {
+                out.push(primed);
+                out.sort_by(f64::total_cmp);
+            }
+        }
+        out
     }
 }

@@ -253,6 +253,8 @@ fn constant(key: &str, times: &[f64], value: f64) -> Box<dyn DataProvider> {
         shape: Vec::new(),
         base: vec![value],
         slope: 0.0,
+        primed_at: None,
+        last: None,
     })
 }
 

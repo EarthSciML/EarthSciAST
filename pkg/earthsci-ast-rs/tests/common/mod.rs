@@ -193,6 +193,14 @@ pub struct LinearProvider {
     /// Row-major.
     pub base: Vec<f64>,
     pub slope: f64,
+    /// A provider primed at this time (`primed_at`): it holds the record in
+    /// effect there before any refresh ([`DataProvider::sample`]), lists the
+    /// time among its refresh times and answers "unchanged" for the record it
+    /// last delivered, the primed one first, as EarthSciIO's providers do for
+    /// a run window that starts between two records.
+    pub primed_at: Option<f64>,
+    /// The time of the record last delivered (primed providers only).
+    pub last: Option<f64>,
 }
 
 impl LinearProvider {
@@ -218,6 +226,8 @@ impl LinearProvider {
                 .collect(),
             base,
             slope: p["slope"].as_f64().unwrap(),
+            primed_at: p["primed_at"].as_f64(),
+            last: p["primed_at"].as_f64(),
         }
     }
 
@@ -230,14 +240,30 @@ impl LinearProvider {
 
 impl DataProvider for LinearProvider {
     fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
+        if let Some(t) = self.primed_at {
+            return Ok(self.at(t));
+        }
         assert!(self.slope == 0.0, "only a const provider is materialized");
         Ok(self.at(0.0))
     }
     fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
+        if self.primed_at.is_some() {
+            if self.last == Some(t) {
+                return Ok(None);
+            }
+            self.last = Some(t);
+        }
         Ok(Some(self.at(t)))
     }
     fn refresh_times(&self) -> Vec<f64> {
-        self.times.clone()
+        let mut out = self.times.clone();
+        if let Some(t) = self.primed_at {
+            if !out.contains(&t) {
+                out.push(t);
+                out.sort_by(f64::total_cmp);
+            }
+        }
+        out
     }
 }
 
