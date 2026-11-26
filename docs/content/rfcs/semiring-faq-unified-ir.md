@@ -173,10 +173,15 @@ is a spec change, not a per-file extension:
 | `semiring` | ⊕ (`reduce`) | 0̄ (⊕-identity / empty reduce) | ⊗ | 1̄ (⊗-identity / empty product) | Value domain | Role |
 |---|---|---|---|---|---|---|
 | `sum_product` *(default)* | `+` | `0` | `×` | `1` | ℝ | today's einsum / ESD discretization |
-| `max_product` | `max` | `-∞` | `×` | `1` | ℝ≥0 | best-path / saturation |
+| `max_product` | `max` | `-∞` | `×` | `1` | ℝ≥0 with an adjoined bottom | best-path / saturation |
 | `min_sum` *(tropical)* | `min` | `+∞` | `+` | `0` | ℝ∪{+∞} | shortest-path / cost |
 | `max_sum` | `max` | `-∞` | `+` | `0` | ℝ∪{-∞} | longest-path |
 | `bool_and_or` *(relational)* | `∨` (OR) | `false` | `∧` (AND) | `true` | 𝔹 | existence / join / `distinct` (§5.5) |
+
+The `max_product` domain is the domain of the exact semiring laws. The
+adjoined bottom is absorbing under the exact product. Authored expressions
+use ordinary numeric operations on signed values and on an empty reduction's
+`-∞`, as specified in CONFORMANCE_SPEC §5.6.1.
 
 Notes that bindings MUST honor: (1) the `reduce` field names ⊕ only; the matching
 ⊗ and both identities come from this table, never from the file. (2) `±∞`

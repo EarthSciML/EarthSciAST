@@ -71,6 +71,11 @@ def score_controls(adapter):
         (b"1e-6", b"0.000001"),
         (b"1e21", b"1e21"),
         (b'{"op":"*","args":[-0.0,"x"]}', b"-0.0"),
+        (b'{"op":"*","args":[0,-0.0]}', b"0"),
+        (b'{"op":"*","args":[-0.0,0]}', b"-0.0"),
+        (b'{"op":"*","args":[0.0,-0.0]}', b"0.0"),
+        (b'{"op":"*","args":[-0.0,0.0]}', b"-0.0"),
+        (b'{"op":"*","args":["x",{"op":"*","args":[-0.0,0]},0.0]}', b"-0.0"),
         (b'{"op":"*","args":[1.0,"x"]}', b'{"args":[1.0,"x"],"op":"*"}'),
         (rb'"a\u0009\u0008\u000cb\\u0009"', rb'"a\t\b\fb\\u0009"'),
         (
@@ -79,9 +84,14 @@ def score_controls(adapter):
         ),
     )
     for source, expected in controls:
-        failure = compare_bytes(invoke(adapter, "-", source=source), expected)
+        result = invoke(adapter, "-", source=source)
+        failure = compare_bytes(result, expected)
         if failure:
             yield f"control {source!r}: {failure}"
+            continue
+        repeated = invoke(adapter, "-", source=result.stdout)
+        if failure := compare_bytes(repeated, expected):
+            yield f"control fixed point {source!r}: {failure}"
 
     overflow = invoke(adapter, "-", source=b'{"op":"+","args":[1e400,0]}')
     failure = compare_error(overflow, "E_CANONICAL_NONFINITE", "/args/0")
@@ -101,10 +111,6 @@ def score_controls(adapter):
         failure = compare_error(invoke(adapter, "-", source=source), code, "/bindings/x~1y")
         if failure:
             yield f"binding control: {failure}"
-    mixed_zero = invoke(adapter, "-", source=b'{"op":"*","args":[0,-0.0]}')
-    failure = compare_error(mixed_zero, "E_CANONICAL_UNSUPPORTED_EXPRESSION", "")
-    if failure:
-        yield f"mixed-zero control: {failure}"
 
 
 def main():

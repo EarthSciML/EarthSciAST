@@ -54,6 +54,12 @@ def fieldSub (σ : Bindings) (s : String) : String :=
   | some _ => ""
   | none => s
 
+private def shapeSub (σ : Bindings) : Nat ⊕ String → Nat ⊕ String
+  | .inl n => .inl n
+  | .inr name => match σ.lookup name with
+    | some (.num n 0) => if n < 0 then .inr "" else .inl n.toNat
+    | _ => .inr (fieldSub σ name)
+
 mutual
 
 /-- §9.6.3 constraint 5: substitute every parameter occurrence. -/
@@ -65,11 +71,17 @@ def subst (σ : Bindings) : Ast → Ast
     | none => .var s
   | .const c => .const c
   | .node op args => .node op (substList σ args)
+  | .array op args =>
+    let op := match op with
+      | .reshape dims => ShapeOp.reshape (dims.map (shapeSub σ))
+      | .broadcast fn => ShapeOp.broadcast (fieldSub σ fn)
+      | other => other
+    .array op (substList σ args)
   | .faq out red rs body args =>
-    .faq (out.map (fieldSub σ)) (fieldSub σ red) (substRanges σ rs) (subst σ body)
+    .faq (out.map (fun i => i.mapSymbol (fieldSub σ))) (fieldSub σ red) (substRanges σ rs) (subst σ body)
       (substList σ args)
   | .faqWhere out red rs p body args =>
-    .faqWhere (out.map (fieldSub σ)) (fieldSub σ red) (substRanges σ rs) (subst σ p)
+    .faqWhere (out.map (fun i => i.mapSymbol (fieldSub σ))) (fieldSub σ red) (substRanges σ rs) (subst σ p)
       (subst σ body) (substList σ args)
   | .apply n bs => .apply n (substBinds σ bs)
 
@@ -121,6 +133,7 @@ def walkRefs (f : String → Binds → Except ExpandError Ast) : Ast → Except 
   | .var s => .ok (.var s)
   | .const c => .ok (.const c)
   | .node op args => do return .node op (← walkRefsList f args)
+  | .array op args => do return .array op (← walkRefsList f args)
   | .faq out red rs body args => do
     return .faq out red (← walkRefsRanges f rs) (← walkRefs f body) (← walkRefsList f args)
   | .faqWhere out red rs p body args => do

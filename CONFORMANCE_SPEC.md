@@ -1695,10 +1695,20 @@ per-file extension). The five rows, with their normative identities:
 | `semiring` | ⊕ (reduce) | `0̄` (empty ⊕) | ⊗ | `1̄` (empty ⊗) | Domain | Role |
 |---|---|---|---|---|---|---|
 | `sum_product` *(default)* | `+` | `0` | `×` | `1` | ℝ | einsum / FVM-diffusion & ESD discretization |
-| `max_product` | `max` | `−∞` | `×` | `1` | ℝ≥0 | best-path / saturation |
+| `max_product` | `max` | `−∞` | `×` | `1` | ℝ≥0 with an adjoined bottom | best-path / saturation |
 | `min_sum` *(tropical)* | `min` | `+∞` | `+` | `0` | ℝ∪{+∞} | shortest-path / least-cost |
 | `max_sum` | `max` | `−∞` | `+` | `0` | ℝ∪{−∞} | longest-path |
 | `bool_and_or` *(relational)* | `∨` (or) | `false` (`0`) | `∧` (and) | `true` (`1`) | 𝔹 | existence / `distinct` / join |
+
+For `max_product`, the domain describes the exact algebra. Multiplication
+of finite factors agrees with ordinary multiplication on nonnegative reals,
+and the adjoined bottom absorbs multiplication in that algebra. In a
+document, `semiring: "max_product"` selects `max` with empty result `−∞`.
+The factors and terms follow the ordinary expression rules, including
+negative numeric values. The semiring laws about multiplication apply
+only on the stated exact domain. A `*` expression that uses the empty
+result follows ordinary numeric multiplication. For example, in binary64,
+`0 × (−∞)` yields NaN.
 
 The enum spelling is normative: `"sum_product"`, `"max_product"`, `"min_sum"`,
 `"max_sum"`, `"bool_and_or"`. The schema (`esm-schema.json`, the `semiring`

@@ -81,14 +81,24 @@
       "question": "Q-17"
     },
     {
-      "id": "P-semiring-max-product-domain",
+      "id": "P-semiring-max-product-finite-multiplication",
       "clauses": [
-        "conf.5.6.identities-not-in-file",
+        "conf.5.6.identities-not-in-file"
+      ],
+      "statement": "The exact max_product multiplication of embedded nonnegative real factors is their ordinary product embedded in the exact carrier.",
+      "lean_statement": "∀ (a b : NNReal), Esm.Semiring.maxProductMul (↑a) (↑b) = ↑(a * b)",
+      "status": "proven",
+      "theorem": "Esm.Semiring.maxProductMul_finite"
+    },
+    {
+      "id": "P-semiring-max-product-bottom",
+      "clauses": [
         "conf.5.6.3.empty-reduction-registry-identity"
       ],
-      "statement": "Specify the runtime and validation implications of the max_product carrier, including negative terms and subsequent products of the empty result.",
-      "status": "question",
-      "question": "Q-114"
+      "statement": "The abstract bottom absorbs multiplication with every element of the exact max_product carrier.",
+      "lean_statement": "∀ (a : Esm.Semiring.MaxProduct), Esm.Semiring.maxProductMul ⊥ a = ⊥",
+      "status": "proven",
+      "theorem": "Esm.Semiring.bot_maxProductMul"
     }
   ]
 }

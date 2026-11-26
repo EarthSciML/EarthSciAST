@@ -1,5 +1,8 @@
-import Adapter.Doc
+import Lean.Data.Json
+import Adapter.Decimal
 import Adapter.JsonString
+import Esm.Expr.Canonical
+import Esm.Units.Canonical
 
 /-! The discretization RFC §5.4 `canonical_json` expression format. Its typed
 float tokens, signed zeros and algebraic rewrites are specific to this API.
@@ -7,6 +10,8 @@ The document reader, document writer and numerical evaluator have separate
 entry points. -/
 
 namespace Adapter.CanonicalExpr
+
+open Esm.Expr.Canonical
 
 private inductive Literal where
   | int (value : Int)
@@ -224,19 +229,15 @@ private def before : SortKey → SortKey → Bool
 
 private def withSortedArgs (op : String) (args : List Expression) (fields : List (String × Payload)) :
     Expression :=
-  let args := (args.map fun a => (sortKey a, a)).mergeSort fun a b => before a.1 b.1
-  .node op (args.map Prod.snd) fields
+  .node op (orderArgs sortKey before args) fields
 
 private def flatten (op : String) (args : List Expression) : List Expression :=
-  args.flatMap fun a => match a with
-    | .node child children [] => if op == child then children else [a]
-    | _ => [a]
+  flattenArgs (fun a => match a with
+    | .node child children [] => if op == child then some children else none
+    | _ => none) args
 
-private def eraseIdentity (op : String) (identity : Int) (args : List Expression)
-    (fields : List (String × Payload)) : Expression :=
-  let (neutral, rest) := args.partition fun a => match a with
-    | .number n => n.is identity
-    | _ => false
+private def retainFloatIdentity (identity : Int) (neutral rest : List Expression) :
+    Option Expression :=
   let floating := neutral.any fun a => match a with
     | .number n => n.isFloat
     | _ => false
@@ -248,8 +249,13 @@ private def eraseIdentity (op : String) (identity : Int) (args : List Expression
       | .number n => n.negativeZero
       | _ => false)
     else .float false (2 ^ 52) (-52)
-  let rest := if floating && (!knownFloats || rest.isEmpty) then
-    .number floatIdentity :: rest else rest
+  if floating && (!knownFloats || rest.isEmpty) then some (.number floatIdentity) else none
+
+private def eraseIdentity (op : String) (identity : Int) (args : List Expression)
+    (fields : List (String × Payload)) : Expression :=
+  let rest := identityArgs (fun a => match a with
+    | .number n => n.is identity
+    | _ => false) (retainFloatIdentity identity) args
   match rest, fields with
   | [], [] => .number (.int identity)
   | [a], [] => a
@@ -290,13 +296,10 @@ private partial def canonicalize (path : String) : Expression → Except Failure
     | "*", _, _ =>
       let flattened := flatten op args
       if fields.isEmpty then
-        let zeros := flattened.filterMap fun a => match a with
+        let zero := flattened.findSome? fun a => match a with
           | .number n => if n.is 0 then some n else none
           | _ => none
-        if let z :: zs := zeros then
-          unless zs.all (fun val => val.render == z.render) do
-            throw ⟨"E_CANONICAL_UNSUPPORTED_EXPRESSION", path, "product has differently typed or signed zeros"⟩
-          return .number z
+        if let some n := zero then return .number n
       return eraseIdentity op 1 flattened fields
     | "-", [a], [] | "neg", [a], [] => return negate a
     | "neg", [_], _ => return .node "-" args fields

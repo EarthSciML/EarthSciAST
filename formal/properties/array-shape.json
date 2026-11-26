@@ -1,0 +1,12 @@
+{
+  "properties": [
+    {
+      "id": "P-unary-broadcast-applies-function",
+      "clauses": ["spec.4.3.4.broadcast-one-operand-not-identity"],
+      "statement": "Broadcast with one operand calls the scalar function on each selected cell.",
+      "lean_statement": "∀ {β ε : Type} (apply : β → Except ε β) (err : ε) (data : Esm.Expr.ArrayData β), Esm.Expr.ArrayData.broadcast (fun | [x] => apply x | _ => throw err) err [data] = (do let cells ← (Esm.Expr.ArrayData.coords data.dims).mapM (fun ix => match data.broadcastAt ix with | some x => apply x | none => throw err); return ⟨data.dims, cells⟩)",
+      "status": "proven",
+      "theorem": "Esm.Expr.ArrayData.broadcast_unary"
+    }
+  ]
+}

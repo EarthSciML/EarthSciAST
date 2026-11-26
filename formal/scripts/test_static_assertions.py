@@ -2,6 +2,8 @@
 """Regression cases for the Lean scalar and expression adapters."""
 
 import json
+import math
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -92,6 +94,81 @@ class StaticAssertions(unittest.TestCase):
         rows = {row["name"]: row for row in json.loads(result.stdout)["results"]}
         for name, expected in {"any_hot": 1, "spread": 1, "never": 0, "dependent": 1}.items():
             self.assertEqual(rows[name].get("value"), expected, rows[name])
+
+    def test_semiring_domain_and_shaped_boolean_refusal(self):
+        def faq(ranges, expr, output_idx=(), **reduction):
+            return {
+                "op": "faq",
+                "args": [],
+                "output_idx": list(output_idx),
+                **reduction,
+                "ranges": ranges,
+                "expr": expr,
+            }
+
+        empty = faq({"i": [1, 0]}, "i", semiring="max_product")
+        zero_product = {"op": "*", "args": [0, empty]}
+        expressions = {
+            "signed": faq({"i": [1, 3]}, {"op": "*", "args": ["i", -1]}, semiring="max_product"),
+            "zero_times_empty": zero_product,
+            "positive_times_empty": {
+                "op": "max",
+                "args": [{"op": "*", "args": [empty, 2]}, -7],
+            },
+            "negative_times_empty": {
+                "op": "min",
+                "args": [{"op": "*", "args": [empty, -2]}, 7],
+            },
+            "nan_term_is_true": faq({"j": [1, 2]}, zero_product, semiring="bool_and_or"),
+            "dense_product": faq({"k": [1, 1]}, empty, reduce="*"),
+            "stepped_product": faq({"k": [1, 1, 1]}, empty, reduce="*"),
+            "named_product": faq({"k": {"from": "one"}}, empty, reduce="*"),
+            "shaped_boolean": {
+                "op": "index",
+                "args": [faq({"i": [1, 2], "j": [1, 2]}, 1, ("i",), semiring="bool_and_or"), 1],
+            },
+        }
+        model = {
+            "variables": {name: {"type": "unknown"} for name in expressions},
+            "equations": [{"lhs": name, "rhs": rhs} for name, rhs in expressions.items()],
+            "tests": [
+                {
+                    "id": "semiring",
+                    "assertions": [{"variable": name, "time": 0} for name in expressions],
+                }
+            ],
+        }
+        doc = {
+            "models": {"M": model},
+            "index_sets": {"one": {"kind": "interval", "size": 1}},
+        }
+        requests = [
+            {
+                "document": doc,
+                "requests": [{"test_id": "semiring", "assertion_idx": idx} for idx in indices],
+            }
+            for indices in (range(1, len(expressions)), [len(expressions)])
+        ]
+        result = subprocess.run(
+            [BINARY, "static-assertions-jsonl", "M"],
+            input="".join(json.dumps(request) + "\n" for request in requests),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        values, refusal = map(json.loads, result.stdout.splitlines())
+        signed, zero_value, positive_product, negative_product, nan_term, *folds = [
+            struct.unpack(">d", int(bits).to_bytes(8, "big"))[0] for bits in values["values"]
+        ]
+        self.assertEqual(signed, -1)
+        self.assertTrue(math.isnan(zero_value))
+        self.assertEqual(positive_product, -7)
+        self.assertEqual(negative_product, 7)
+        self.assertEqual(nan_term, 1)
+        self.assertEqual(folds, [-math.inf] * 3)
+        self.assertEqual(
+            refusal["error"], "unsupported_construct: array-valued bool_and_or reduction"
+        )
 
     def test_expression_reader_rejects_overflow_in_expression_and_metadata(self):
         with tempfile.TemporaryDirectory() as d:

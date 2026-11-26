@@ -106,8 +106,14 @@ def ast(e, indent, path):
         if "expr" not in e:
             raise Unsupported(f"{path}: faq has no expr")
         out = e.get("output_idx", [])
-        if any(not isinstance(o, str) for o in out):
-            raise Unsupported(f"{path}: faq output_idx entry that is not a symbol")
+        axes = []
+        for axis in out:
+            if isinstance(axis, str):
+                axes.append(f"(OutputIndex.symbol {lean_str(axis)})")
+            elif type(axis) is int and axis == 1:
+                axes.append("OutputIndex.singleton")
+            else:
+                raise Unsupported(f"{path}: faq output_idx entry that is not a symbol or 1")
         ranges = "Ranges.nil"
         for k, r in reversed(list(e.get("ranges", {}).items())):
             if isinstance(r, dict) and set(r) == {"from"} and isinstance(r["from"], str):
@@ -120,8 +126,7 @@ def ast(e, indent, path):
                       + f"] {ranges})")
         head = "(Ast.faqWhere [" if "filter" in e else "(Ast.faq ["
         lines = [
-            pad + head + ", ".join(lean_str(o) for o in out) + "] "
-            + lean_str(e.get("reduce", "+")) + " " + ranges,
+            pad + head + ", ".join(axes) + "] " + lean_str(e.get("reduce", "+")) + " " + ranges,
         ]
         if "filter" in e:
             lines.append(ast(e["filter"], indent + 1, path + ".filter"))

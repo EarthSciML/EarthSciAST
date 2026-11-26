@@ -14,6 +14,18 @@ SPEC = importlib.util.spec_from_file_location("inline_tests_conformance", RUNNER
 INLINE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(INLINE)
 BINARY = INLINE.REPO_ROOT / "formal" / ".lake" / "build" / "bin" / "esm-lean"
+REFUSAL_CODES = {
+    "E_TREEWALK_CONSTARRAY_OOB",
+    "array_shape_mismatch",
+    "float32_unsupported",
+    "indexed_definition_unsupported_form",
+    "invalid_broadcast_fn",
+    "unsupported_construct",
+}
+
+
+def decode_float_bits(value):
+    return struct.unpack(">d", int(value).to_bytes(8, "big"))[0]
 
 
 def run_fixture(manifest_path, fixture):
@@ -35,8 +47,8 @@ def run_fixture(manifest_path, fixture):
     )
     if proc.returncode:
         message = proc.stderr.strip()
-        code, sep, reason = message.partition(": ")
-        if sep and code in {"unsupported_construct", "float32_unsupported"}:
+        code, _, reason = message.partition(": ")
+        if code in REFUSAL_CODES:
             return {"status": "refused", "code": code, "reason": reason}
         return {"error": message or f"esm-lean exited {proc.returncode}"}
 
@@ -45,7 +57,7 @@ def run_fixture(manifest_path, fixture):
         raise ValueError("esm-lean returned the wrong number of assertions")
     assertions = []
     for key, entry, value in zip(keys, authored, bits):
-        actual = struct.unpack(">d", int(value).to_bytes(8, "big"))[0]
+        actual = decode_float_bits(value)
         assertions.append(
             {
                 **key,

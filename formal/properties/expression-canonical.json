@@ -1,0 +1,45 @@
+{
+  "properties": [
+    {
+      "id": "P-rfc-canonical-flatten-idempotent",
+      "defined_by": "formal/Esm/Expr/Canonical.lean",
+      "statement": "Flattening an argument list a second time leaves it unchanged when the same-operator children were normalized first.",
+      "lean_statement": "∀ {α : Type} (children : α → Option (List α)) (args : List α), (∀ arg ∈ args, ∀ inner, children arg = some inner → ∀ child ∈ inner, children child = none) → Esm.Expr.Canonical.flattenArgs children (Esm.Expr.Canonical.flattenArgs children args) = Esm.Expr.Canonical.flattenArgs children args",
+      "status": "proven",
+      "theorem": "Esm.Expr.Canonical.flattenArgs_idempotent"
+    },
+    {
+      "id": "P-rfc-canonical-associative-arguments-idempotent",
+      "defined_by": "formal/Esm/Expr/Canonical.lean",
+      "statement": "Flattening, sorting and removing or retaining typed identities reaches a fixed point when children are normalized, the key order is total and transitive, and retained identity leaves are stable under reordering.",
+      "lean_statement": "∀ {α κ : Type} (children : α → Option (List α)) (identity : α → Bool) (retain : List α → List α → Option α) (key : α → κ) (before : κ → κ → Bool) (args : List α), (∀ a b c, before a b → before b c → before a c) → (∀ a b, before a b || before b a) → (∀ arg ∈ args, ∀ inner, children arg = some inner → ∀ child ∈ inner, children child = none) → (∀ rest, retain [] rest = none) → (∀ neutral rest arg, retain neutral rest = some arg → identity arg = true ∧ children arg = none) → (∀ neutral rest ordered arg, rest.Perm ordered → retain neutral rest = some arg → retain [arg] ordered = some arg) → let normalize := fun xs => Esm.Expr.Canonical.orderArgs key before (Esm.Expr.Canonical.identityArgs identity retain (Esm.Expr.Canonical.flattenArgs children xs)); normalize (normalize args) = normalize args",
+      "status": "proven",
+      "theorem": "Esm.Expr.Canonical.associativeArgs_idempotent"
+    },
+    {
+      "id": "P-rfc-canonical-arguments-preserve-exact-fold",
+      "defined_by": "formal/Esm/Expr/Canonical.lean",
+      "statement": "Flattening, removing or retaining literal identities, and sorting preserve an exact commutative monoid fold, in particular real sums and products.",
+      "lean_statement": "∀ {α κ M : Type} [CommMonoid M] (children : α → Option (List α)) (identity : α → Bool) (retain : List α → List α → Option α) (key : α → κ) (before : κ → κ → Bool) (value : α → M) (args : List α), (∀ arg inner, children arg = some inner → (inner.map value).prod = value arg) → (∀ arg, identity arg = true → value arg = 1) → (∀ removed rest arg, retain removed rest = some arg → value arg = 1) → ((Esm.Expr.Canonical.orderArgs key before (Esm.Expr.Canonical.identityArgs identity retain (Esm.Expr.Canonical.flattenArgs children args))).map value).prod = (args.map value).prod",
+      "status": "proven",
+      "theorem": "Esm.Expr.Canonical.associativeArgs_preserve"
+    },
+    {
+      "id": "P-rfc-canonical-first-zero-preserves-product",
+      "defined_by": "formal/Esm/Expr/Canonical.lean",
+      "statement": "Replacing a product with the first literal zero accepted by the detector preserves its exact value.",
+      "lean_statement": "∀ {α M : Type} [MonoidWithZero M] (zero : α → Option α) (value : α → M) (args : List α) (chosen : α), args.findSome? zero = some chosen → (∀ arg selected, zero arg = some selected → value arg = 0 ∧ value selected = 0) → (args.map value).prod = value chosen",
+      "status": "proven",
+      "theorem": "Esm.Expr.Canonical.firstZero_preserves"
+    },
+    {
+      "id": "P-rfc-canonical-order-preserves-binary64-sum",
+      "defined_by": "formal/Esm/Expr/Canonical.lean",
+      "statement": "Sorting the arguments of a binary64 left-fold sum always preserves its value.",
+      "lean_statement": "∀ values : List ℚ, (Esm.Expr.Canonical.orderArgs id (fun a b => decide (a ≤ b)) values).foldl Esm.F64.fadd 0 = values.foldl Esm.F64.fadd 0",
+      "status": "refuted",
+      "theorem": "Esm.Expr.Canonical.binary64_order_changes_sum",
+      "reproducer": "tests/differential/scalar/canonical_sum_order.esm"
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 import Esm.Closed.Interp.Template
 import Esm.Float64.Decimal
+import Esm.Expr.Array
 import Mathlib.Analysis.SpecialFunctions.Complex.Arg
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
 
@@ -33,30 +34,22 @@ The evaluator covers the scalar operations and the array operations below:
   and `log10`, through the scalar operations or `Elem`;
 * `min` / `max`, n-ary with arity ≥ 2, left folds, NaN-propagating (§4.2: IEEE
   754-2019 `minimum`/`maximum`, not `minNum`/`maxNum`);
-* `index` on a rank-1, rank-2 or rank-3 array, 1-based, each index a value holding an
-  integer, out of range an error (§4.3.3, `E_TREEWALK_CONSTARRAY_OOB`);
-* `faq` with `output_idx: []`, `reduce` one of `+`, `*`, `min`, `max`, and one
-  dense `ranges` entry `[start, stop]`: the fold `0 + t_start + … + t_stop`
-  seeded at `+0.0` (`1` for `*`), in increasing index order (§4.3.1). A `min` /
-  `max` fold starts from its first term (IEEE `minimum(+∞, x) = x`, so this is
-  the fold from the identity); over no term it is the identity `±∞`, the value
-  `Val.inf`, which the scalar types do not have. The same `faq` with a `filter` (reduce `+`,
-  `min` or `max`) folds only the terms at whose index the filter holds. A `faq`
-  nested in another's body is evaluated afresh at each outer index.
-* the same `faq`s with the one range `{"from": S}` over an index set whose size
-  `n` the environment binds (under `setKey S`; the adapter binds every interval
-  set's declared `size`): the same fold over the positions `1, …, n` (§4.3.1,
-  §9.6.1). A set with no size bound (a derived set, whose size value invention
-  fixes, or a ragged set) is refused.
+* `index` with 1-based integer subscripts, checking each subscript against
+  the matching extent (§4.3.3, `E_TREEWALK_CONSTARRAY_OOB`);
+* scalar and shaped `faq` over dense, stepped or sized index-set ranges
+  (§4.3.1, §9.6.1). Output symbols are bound in `output_idx` order and
+  contracted tuples fold in symbol order. Only admitted tuples contribute.
+  A reverse window over the node's own output index folds from the top.
+  The numeric identities are `+0.0`, `1`, `+∞` and `−∞` for `+`, `*`, `min`
+  and `max`, respectively. A pointwise cell returns its admitted body value
+  directly. A nested `faq` has its own bindings.
+* scalar `bool_and_or` (`CONFORMANCE_SPEC` §5.6.1), with exact zero/one
+  results and NaN counted as a nonzero admitted term.
 
-* scalar `bool_and_or` (`CONFORMANCE_SPEC` §5.6.1), with any number of
-  dense two-bound or named-set ranges and an optional filter. The result is
-  a crisp zero or one, and NaN as an admitted term counts as nonzero.
-
-Everything else — another op, a `faq` with output indices, another reduction,
-a stepped range, or several range symbols on a numeric reduction — evaluates to
-`EvalError.unsupported`, never to a value. Signed zeros are not modelled by
-`Num`/`Bin64` (so `min`/`max` do not order `-0.0` below `+0.0`).
+The model infers an omitted range from a bare subscript into a known array.
+Ragged bounds and join nodes are outside the modelled slice. Signed zeros are
+preserved at `Float`. The exact `Num` and `Bin64` types do not distinguish the
+zero signs.
 -/
 
 namespace Esm.Expr
@@ -184,6 +177,15 @@ inductive Const where
   | leaf (m : Int) (e : Nat)
   | arr (cs : List Const)
 
+/-- `faq.output_idx` contains bound symbols and literal singleton axes (§4.3.1). -/
+inductive OutputIndex where
+  | symbol (name : String)
+  | singleton
+
+def OutputIndex.mapSymbol (f : String → String) : OutputIndex → OutputIndex
+  | .symbol name => .symbol (f name)
+  | .singleton => .singleton
+
 mutual
 
 /-- The ESM Expression AST (§4.1). A JSON number is `num`, a bare string a
@@ -195,12 +197,13 @@ inductive Ast where
   | var (name : String)
   | const (c : Const)
   | node (op : String) (args : List Ast)
+  | array (op : ShapeOp) (args : List Ast)
   /-- `faq`: `output_idx`, `reduce`, `ranges`, `expr`, `args`. -/
-  | faq (outputIdx : List String) (reduce : String) (ranges : Ranges) (expr : Ast)
+  | faq (outputIdx : List OutputIndex) (reduce : String) (ranges : Ranges) (expr : Ast)
       (args : List Ast)
   /-- `faq` with a `filter`: `output_idx`, `reduce`, `ranges`, `filter`, `expr`,
   `args`. -/
-  | faqWhere (outputIdx : List String) (reduce : String) (ranges : Ranges) (filter : Ast)
+  | faqWhere (outputIdx : List OutputIndex) (reduce : String) (ranges : Ranges) (filter : Ast)
       (expr : Ast) (args : List Ast)
   /-- `apply_operator`: the template `name` with its `bindings`
   (§9.6.2). It denotes its expansion (§9.6.4 rule 2); `eval` refuses it, and
@@ -212,8 +215,8 @@ inductive Ast where
 inductive Ranges where
   | nil
   | cons (sym : String) (tuple : List Ast) (rest : Ranges)
-  /-- A range over a whole index set, `{"from": set}`. The model has no index
-  sets, so a `faq` with one is refused; the name is a substitution site. -/
+  /-- A range over a whole index set, `{"from": set}`. The set's extent
+  is bound in the evaluation environment; its name is a substitution site. -/
   | fromSet (sym : String) (set : String) (rest : Ranges)
 
 /-- An `apply_operator` node's `bindings` object, in key order. -/
@@ -231,16 +234,38 @@ inductive Val (α : Type) where
   | arr1 (v : List α)
   | arr2 (v : List (List α))
   | arr3 (v : List (List (List α)))
+  /-- Row-major cells with explicit extents, preserving zero-length axes
+  and the infinite cells produced by empty extrema reductions. -/
+  | shaped (dims : List Nat) (cells : List (Val α))
   /-- `+∞` (`neg = false`) or `-∞`: the identity of an empty `min` / `max`
-  reduction (§4.3.1). Scalar extrema and Boolean FAQ terms consume it explicitly
-  because the exact scalar types have no infinity. -/
+  reduction (§4.3.1). Scalar extrema, multiplication, and Boolean FAQ terms
+  consume it explicitly because the exact scalar types have no infinity. -/
   | inf (neg : Bool)
+
+/-- The rectangular arrays recognized by the evaluator, in output-axis order. -/
+def Val.arrayData {α : Type} : Val α → Option (List Nat × List (Val α))
+  | .arr1 values => some ([values.length], values.map .num)
+  | .arr2 rows => do
+    let width := rows.head?.map List.length |>.getD 0
+    if rows.all (fun row => row.length == width) then
+      some ([rows.length, width], rows.flatMap (List.map .num))
+    else none
+  | .arr3 planes => do
+    let first := planes.head?.getD []
+    let width := first.head?.map List.length |>.getD 0
+    if planes.all (fun plane => plane.length == first.length &&
+        plane.all (fun row => row.length == width)) then
+      some ([planes.length, first.length, width], planes.flatMap (·.flatMap (List.map .num)))
+    else none
+  | .shaped dims cells => some (dims, cells)
+  | _ => none
 
 inductive EvalError where
   /-- Outside the modelled slice: an explicit refusal, not a value. -/
   | unsupported (what : String)
   | unbound (name : String)
   | typeError (what : String)
+  | shapeMismatch
   /-- `E_TREEWALK_CONSTARRAY_OOB` (§4.3.3). -/
   | outOfRange
   | nonIntegral
@@ -299,6 +324,26 @@ def indexVal : Val α → List Int → Except EvalError α
       else .error .outOfRange
     else .error .outOfRange
   | _, _ => .error (.typeError "index: operand rank and index count disagree")
+
+/-- The row-major offset, checking each one-based subscript against its own axis. -/
+private def indexOffset (offset : Nat) : List Nat → List Int → Except EvalError Nat
+  | [], [] => .ok offset
+  | dim :: dims, i :: is =>
+    if 1 ≤ i ∧ i ≤ (dim : Int) then indexOffset (offset * dim + (i - 1).toNat) dims is
+    else .error .outOfRange
+  | _, _ => .error (.typeError "index: operand rank and index count disagree")
+
+/-- Index either array representation while preserving a non-finite cell. -/
+def indexCell (value : Val α) (subscripts : List Int) : Except EvalError (Val α) :=
+  match value with
+  | .shaped dims cells => do
+    unless dims.length == subscripts.length do
+      throw (.typeError "index: operand rank and index count disagree")
+    let offset ← indexOffset 0 dims subscripts
+    match cells[offset]? with
+    | some cell => return cell
+    | none => throw (.typeError "index: inconsistent array extents")
+  | _ => .num <$> indexVal value subscripts
 
 def constLeaf : Const → Except EvalError α
   | .leaf m e => .ok (Lits.ofDec m e)
@@ -477,6 +522,22 @@ def infMinMax : StrictOp → List (Val α) → Except EvalError (Val α)
     | [] => return .inf (!isMin)
     | u :: us => return .num (us.foldl (if isMin then fmin else fmax) u)
 
+/-- Ordinary numeric multiplication may consume the infinite value of an
+empty reduction. An infinity multiplied by either signed zero yields NaN. -/
+private def mulWithInf : Val α → Val α → Except EvalError (Val α)
+  | .num a, .num b => .ok (.num (mul a b))
+  | .inf a, .inf b => .ok (.inf (a != b))
+  | .inf neg, .num x | .num x, .inf neg =>
+    if isNaN x then .ok (.num x)
+    else if lt x zero then .ok (.inf (!neg))
+    else if lt zero x then .ok (.inf neg)
+    else .ok (.num nan)
+  | _, _ => .error (.typeError "expected a scalar")
+
+def strictWithInf : StrictOp → List (Val α) → Except EvalError (Val α)
+  | .mul, v :: vs => vs.foldlM mulWithInf v
+  | op, vs => infMinMax op vs
+
 /-- One step of a `faq` `+` fold. -/
 def faqStep (acc : α) (v : Val α) : Except EvalError α := do
   return add acc (← asNum v)
@@ -504,8 +565,7 @@ def foldRed (red : String) (js : List Int) (term : Int → Except EvalError (Val
     let r ← js.foldlM (fun acc j => do faqStep acc (← term j)) (zero : α)
     return .num r
   else if red = "*" then do
-    let r ← js.foldlM (fun acc j => do return mul acc (← asNum (← term j))) (one : α)
-    return .num r
+    js.foldlM (fun acc j => do mulWithInf acc (← term j)) (.num one)
   else if red = "min" then
     match js with
     | [] => .ok (.inf false)
@@ -522,22 +582,6 @@ def foldRed (red : String) (js : List Int) (term : Int → Except EvalError (Val
       return .num r
   else .error (.unsupported s!"faq with reduce {red}")
 
-/-- A filtered `faq` reduction over `js`: `pred j` is the filter, `term j` the
-term, as in the dense-range filtered case of `eval`. -/
-def foldWhere (red : String) (js : List Int) (pred term : Int → Except EvalError (Val α)) :
-    Except EvalError (Val α) := do
-  let r ← js.foldlM (fun (acc : Option α) j => do
-    if truthy (← asNum (← pred j)) then
-      let v ← asNum (← term j)
-      return some (match acc with
-        | none => if red = "+" then add zero v else v
-        | some x => if red = "+" then add x v else if red = "min" then fmin x v else fmax x v)
-    else return acc) none
-  if red = "+" then return .num (r.getD zero)
-  else if red = "min" then return (match r with | some x => .num x | none => .inf false)
-  else if red = "max" then return (match r with | some x => .num x | none => .inf true)
-  else .error (.unsupported s!"filtered faq with reduce {red}")
-
 /-- A numeric FAQ term counts as true exactly when it is not zero. Unlike
 a branch condition in this evaluator, an admitted NaN is true (§5.6.1). -/
 def nonzeroTerm : Val α → Except EvalError Bool
@@ -547,21 +591,299 @@ def nonzeroTerm : Val α → Except EvalError Bool
 
 /-- An index range and the function that resolves its visiting order in the
 current environment. -/
-abbrev BoolRange (α : Type) := String × (Env α → Except EvalError (List Int))
+abbrev FaqRange (α : Type) := String × (Env α → Except EvalError (List Int))
 
-/-- Visit every combination in range order, while retaining any evaluation
-error from an admitted term even if a preceding term was true. -/
-def foldBoolRanges (term : Env α → Except EvalError Bool) :
-    List (BoolRange α) → Env α → Except EvalError Bool
-  | [], env => term env
-  | (k, bounds) :: rs, env => do
-    let js ← bounds env
-    Semiring.foldBoolM js
-      (fun j => foldBoolRanges term rs ((k, .num (Lits.ofDec j 0)) :: env))
+private def outputNames (output : List OutputIndex) : List String :=
+  output.filterMap (fun axis => match axis with | .symbol name => some name | .singleton => none)
+
+/-- A shape-only binding cannot collide with an authored variable or index. -/
+def shapeKey (name : String) : String := "\x00shape_" ++ name
+
+private def valueDims (value : Val α) : List Nat :=
+  (value.arrayData.map Prod.fst).getD []
+
+private def variableDims (env : Env α) (name : String) : Option (List Nat) :=
+  match env.lookup name with
+  | some value => some (valueDims value)
+  | none => (env.lookup (shapeKey name)).map valueDims
+
+private def gatherDims (env : Env α) : Ast → Except String (List Nat)
+  | .var name =>
+    match variableDims env name with
+    | some dims => pure dims
+    | none => throw name
+  | .const value => pure ((constVal (α := α) value).toOption.map valueDims |>.getD [])
+  | _ => pure []
+
+private abbrev ImplicitFaqAxis := String × Except String Nat
 
 mutual
 
-/-- Evaluation of the modelled slice (§4.2, §4.3.1, §4.3.3). -/
+/-- Extents implied by bare symbols in direct gathers. A nested query owns
+its own ranges; its gather sites do not constrain the enclosing query. -/
+private def implicitFaqAxes (env : Env α) : Ast → List ImplicitFaqAxis
+  | .node "index" (base :: is) =>
+    let extents := match gatherDims env base with
+      | .ok dims => dims.map Except.ok
+      | .error name => List.replicate is.length (.error name)
+    let reads := (is.zip extents).filterMap fun (subscript, extent) =>
+      match subscript with | .var name => some (name, extent) | _ => none
+    reads ++ implicitFaqAxes env base ++ implicitFaqArgs env is
+  | .node _ args | .array _ args => implicitFaqArgs env args
+  | _ => []
+
+private def implicitFaqArgs (env : Env α) : List Ast → List ImplicitFaqAxis
+  | [] => []
+  | arg :: args => implicitFaqAxes env arg ++ implicitFaqArgs env args
+
+end
+
+private def declareFaqRanges (output : List OutputIndex) (ranges : List (FaqRange α))
+    (body : Ast) (filter : Option Ast) (env : Env α) (onlyOutput : Bool := false) :
+    Except EvalError (List (FaqRange α)) := do
+  let outputs := outputNames output
+  let reads := implicitFaqAxes env body ++ (filter.map (implicitFaqAxes env)).getD []
+  let names := (reads.map Prod.fst).eraseDups
+  let implicitRanges ← names.filterMapM fun name => do
+    let isOutput := outputs.contains name
+    if (ranges.lookup name).isSome || (!isOutput && (onlyOutput || (env.lookup name).isSome)) then
+      return none
+    let candidates := reads.filterMap (fun (k, n) => if k == name then some n else none)
+    -- Resolve every extent before binding the index, including indices used
+    -- by the filter. The filter still gates evaluation of each term.
+    let lengths ← candidates.mapM (fun n => n.mapError .unbound)
+    return lengths.min?.map (fun size => (name, fun _ : Env α => .ok (indices 1 (size : Int))))
+  return ranges ++ implicitRanges
+
+private def steppedIndices (lo step hi : Int) : Except EvalError (List Int) :=
+  if step == 0 then throw (.typeError "faq range: step is zero")
+  else if (0 < step ∧ hi < lo) ∨ (step < 0 ∧ lo < hi) then pure []
+  else pure ((List.range ((hi - lo).natAbs / step.natAbs + 1)).map
+    (fun i => lo + (i : Int) * step))
+
+/-- A suffix scan folds from the highest admitted term. The comparison must
+use the node's own output index and its only contracted index (esm-spec §4.3.1). -/
+def reverseFaqWindow (output : List String) (contracted : List String) (filter : Option Ast) : Bool :=
+  match contracted, filter with
+  | [k], some (.node op [.var a, .var b]) =>
+    ((op == ">=" || op == ">") && a == k && output.contains b) ||
+    ((op == "<=" || op == "<") && b == k && output.contains a)
+  | _, _ => false
+
+/-- Visit contracted tuples in order, passing their current bindings to the fold. -/
+def faqFold (reverse : Bool) (step : Val α → Env α → Except EvalError (Val α)) :
+    List (FaqRange α) → Env α → Val α → Except EvalError (Val α)
+  | [], env, acc => step acc env
+  | (name, bounds) :: rest, env, acc => do
+    let values ← bounds env
+    let values := if reverse then values.mergeSort (fun a b => decide (b ≤ a)) else values
+    values.foldlM (fun a i => faqFold reverse step rest ((name, .num (Lits.ofDec i 0)) :: env) a) acc
+
+omit [Scalar α] [Elem α] in
+/-- An empty outer range preserves the seeded identity and evaluates no term. -/
+theorem faqFold_empty_range (reverse : Bool) (step : Val α → Env α → Except EvalError (Val α))
+    (name : String) (bounds : Env α → Except EvalError (List Int)) (rest : List (FaqRange α))
+    (env : Env α) (identity : Val α) (empty : bounds env = .ok []) :
+    faqFold reverse step ((name, bounds) :: rest) env identity = .ok identity := by
+  cases reverse <;> simp [faqFold, empty, bind, Except.bind, pure, Except.pure]
+
+omit [Scalar α] [Elem α] in
+/-- A one-axis reverse window is the sequential fold in descending index order. -/
+theorem faqFold_reverse (step : Val α → Env α → Except EvalError (Val α))
+    (name : String) (bounds : Env α → Except EvalError (List Int)) (env : Env α)
+    (identity : Val α) (values : List Int) (resolved : bounds env = .ok values) :
+    faqFold true step [(name, bounds)] env identity =
+      (values.mergeSort (fun a b => decide (b ≤ a))).foldlM
+        (fun acc i => step acc ((name, .num (Lits.ofDec i 0)) :: env)) identity := by
+  simp [faqFold, resolved, bind, Except.bind]
+
+/-- The scalar Boolean fold shares the registry's exact OR over admitted terms. -/
+private def foldBoolRanges (term : Env α → Except EvalError Bool) :
+    List (FaqRange α) → Env α → Except EvalError Bool
+  | [], env => term env
+  | (name, bounds) :: rest, env => do
+    let values ← bounds env
+    Semiring.foldBoolM values
+      (fun i => foldBoolRanges term rest ((name, .num (Lits.ofDec i 0)) :: env))
+
+private def faqIdentity (red : String) : Except EvalError (Val α) :=
+  match red with
+  | "+" | "bool_and_or" => pure (.num zero)
+  | "*" => pure (.num one)
+  | "min" => pure (.inf false)
+  | "max" => pure (.inf true)
+  | _ => throw (.unsupported s!"faq with reduce {red}")
+
+/-- Combine one admitted term with the cell's current accumulator. -/
+def faqCombine (red : String) (acc term : Val α) : Except EvalError (Val α) := do
+  match red with
+  | "+" => return .num (← faqStep (← asNum acc) term)
+  | "*" =>
+    if hasInf [acc, term] then strictWithInf .mul [acc, term]
+    else return .num (mul (← asNum acc) (← asNum term))
+  | "min" | "max" =>
+    let op := if red == "min" then StrictOp.min else StrictOp.max
+    if hasInf [acc, term] then infMinMax op [acc, term]
+    else return .num (← applyStrict op [acc, term])
+  | _ => throw (.unsupported s!"faq with reduce {red}")
+
+/-- Fold the explicitly declared range of a scalar filtered extremum. -/
+def foldFilteredExtremum (isMax : Bool) (values : List Int)
+    (passesFilter : Int → Except EvalError Bool) (term : Int → Except EvalError (Val α)) :
+    Except EvalError (Val α) :=
+  values.foldlM (fun acc i => do
+    if ← passesFilter i then
+      faqCombine (if isMax then "max" else "min") acc (← term i)
+    else pure acc) (.inf isMax)
+
+private def faqOutputRanges (ranges : List (FaqRange α)) (env : Env α) :
+    List OutputIndex → Except EvalError (List (Option String × List Int))
+  | [] => pure []
+  | .singleton :: rest => return (none, [1]) :: (← faqOutputRanges ranges env rest)
+  | .symbol name :: rest => do
+    let some bounds := ranges.lookup name
+      | throw (.unsupported s!"faq output index {name} has no explicit range")
+    return (some name, ← bounds env) :: (← faqOutputRanges ranges env rest)
+
+private def faqCells (cell : Env α → Except EvalError (Val α)) :
+    List (Option String × List Int) → Env α → Except EvalError (List (Val α))
+  | [], env => return [← cell env]
+  | (name, values) :: rest, env => do
+    let parts ← values.mapM (fun i =>
+      let env' := match name with
+        | some k => (k, .num (Lits.ofDec i 0)) :: env
+        | none => env
+      faqCells cell rest env')
+    return parts.flatten
+
+/-- Evaluate a rectangular output box in output-axis order. Each cell folds
+its admitted contracted tuples using the same evaluator as the scalar case. -/
+private def evalFaq (output : List OutputIndex) (red : String) (ranges : List (FaqRange α))
+    (isReverse : List String → List String → Bool)
+    (passesFilter : Env α → Except EvalError Bool) (term : Env α → Except EvalError (Val α))
+    (env : Env α) (atCell : Option (List Nat) := none) : Except EvalError (Val α) := do
+  let outputs := outputNames output
+  let contracted := (ranges.filter (fun r => !outputs.contains r.1)).mergeSort
+    (fun a b => decide (a.1 ≤ b.1))
+  if red == "bool_and_or" then
+    if output.isEmpty then
+      let result ← foldBoolRanges (fun e => do
+        if ← passesFilter e then nonzeroTerm (← term e) else pure false) contracted env
+      return .num (ofBool result)
+    unless contracted.isEmpty do throw (.unsupported "array-valued bool_and_or reduction")
+  let identity ← faqIdentity red
+  let reverse := isReverse outputs (contracted.map Prod.fst)
+  let cell := fun e =>
+    if contracted.isEmpty then do
+      if ← passesFilter e then
+        match ← term e with
+        | .num x => pure (.num x)
+        | .inf neg => pure (.inf neg)
+        | _ => throw (.typeError "faq: expected a scalar body")
+      else pure identity
+    else
+      faqFold reverse (fun acc e => do
+        if ← passesFilter e then faqCombine red acc (← term e) else pure acc) contracted e identity
+  if output.isEmpty then cell env
+  else
+    let axes ← faqOutputRanges ranges env output
+    match atCell with
+    | none => return .shaped (axes.map fun axis => axis.2.length) (← faqCells cell axes env)
+    | some ix =>
+      unless axes.length ≤ ix.length do throw .shapeMismatch
+      let bindings ← (axes.zip ix).foldlM (fun e ((name, values), pos) => do
+        let some i := values[if values.length == 1 then 0 else pos]? | throw .shapeMismatch
+        return match name with
+          | some k => (k, .num (Lits.ofDec i 0)) :: e
+          | none => e) env
+      cell bindings
+
+private def shapeData (value : Val α) : Except EvalError (ArrayData (Val α)) :=
+  match value with
+  | .num _ | .inf _ => pure (ArrayData.scalar value)
+  | _ =>
+    match value.arrayData with
+    | some (dims, cells) => pure ⟨dims, cells⟩
+    | none => throw (.typeError "ragged array")
+
+private def fromShape (data : ArrayData (Val α)) : Except EvalError (Val α) :=
+  if data.dims.isEmpty then
+    match data.cells with
+    | [x] => pure x
+    | _ => throw (.typeError "invalid scalar extent")
+  else pure (.shaped data.dims data.cells)
+
+private def shapeResult {β : Type} (result : Option β) : Except EvalError β :=
+  match result with
+  | some result => pure result
+  | none => throw .shapeMismatch
+
+private def applyCell (op : StrictOp) (values : List (Val α)) : Except EvalError (Val α) :=
+  if hasInf values then strictWithInf op values else Val.num <$> applyStrict op values
+
+def broadcastArity (fn : String) (arity : Nat) : Bool :=
+  match Op.ofString fn with
+  | .ifelse => arity == 3
+  | .other s =>
+    arity == 1 && ["asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh"].contains s
+  | .strict o => match o with
+    | .index | .bool _ => false
+    | .add | .mul => arity ≥ 1
+    | .min | .max | .and | .or => arity ≥ 2
+    | .sub => arity == 1 || arity == 2
+    | .div | .pow | .le | .ge | .lt | .gt | .eq | .ne | .atan2 => arity == 2
+    | _ => arity == 1
+
+private def reshapeDims (shape : List (Nat ⊕ String)) (env : Env α) :
+    Except EvalError (List Nat) :=
+  shape.mapM fun d => match d with
+    | .inl n => pure n
+    | .inr set => do
+      let n ← setSize set env
+      if n < 0 then throw .shapeMismatch else return n.toNat
+
+private def broadcastDims (shapes : List (List Nat)) : Except EvalError (List Nat) :=
+  shapeResult (shapes.foldlM ArrayData.mergeDims [])
+
+private def projectCell (value : Val α) (ix : List Nat) : Except EvalError (Val α) := do
+  let data ← shapeData value
+  shapeResult (data.broadcastAt ix)
+
+private def evalShape (op : ShapeOp) (values : List (Val α)) (env : Env α) :
+    Except EvalError (Val α) := do
+  let data ← values.mapM shapeData
+  let result ← match op, data with
+    | .reshape shape, [source] => do
+      shapeResult (source.reshape (← reshapeDims shape env))
+    | .transpose perm, [source] => shapeResult (source.transpose perm)
+    | .concat axis, sources => shapeResult (ArrayData.concat axis sources)
+    | .makearray regions, sources =>
+      shapeResult (ArrayData.makearray regions sources (.num zero))
+    | .broadcast fn, sources =>
+      match Op.ofString fn with
+      | .strict o => ArrayData.broadcast (applyCell o) .shapeMismatch sources
+      | .other s => throw (.unsupported s)
+      | .ifelse => throw (.typeError "invalid_broadcast_fn")
+    | _, _ => throw .shapeMismatch
+  fromShape result
+
+private def queryDims (out : List OutputIndex) (ranges : List (FaqRange α)) (body : Ast)
+    (p : Option Ast) (env : Env α) : Except EvalError (Option (List Nat)) := do
+  match declareFaqRanges out ranges body p env (onlyOutput := true) with
+  | .error (.unbound _) => return none
+  | .error err => throw err
+  | .ok ranges =>
+    let axes ← faqOutputRanges ranges env out
+    return some (axes.map fun axis => axis.2.length)
+
+private def expressionBroadcastDims (shapes : List (Option (List Nat))) :
+    Except EvalError (Option (List Nat)) := do
+  let some shapes := shapes.mapM id | return none
+  some <$> broadcastDims shapes
+
+mutual
+
+/-- Evaluation of the modelled slice (§4.2 and §4.3). -/
 def eval : Ast → Env α → Except EvalError (Val α)
   | .num m e, _ => .ok (.num (Lits.ofDec m e))
   | .var s, env =>
@@ -569,23 +891,36 @@ def eval : Ast → Env α → Except EvalError (Val α)
     | some v => .ok v
     | none => .error (.unbound s)
   | .const c, _ => constVal c
+  | .array (.makearray regions) args, env => do
+    if regions.any ArrayData.invertedRegion then throw (.typeError "makearray_region_inverted")
+    evalShape (.makearray regions) (← evalRegions regions args env) env
+  | .array (.broadcast fn) args, env => do
+    unless broadcastArity fn args.length do throw (.typeError "invalid_broadcast_fn")
+    if fn == "ifelse" then evalBroadcastIfelse args env
+    else evalShape (.broadcast fn) (← evalList args env) env
+  | .array op args, env => do
+    evalShape op (← evalList args env) env
   | .node op args, env =>
     match Op.ofString op with
     | .ifelse => evalIfelse args env
     | .strict o => do
       let vs ← evalList args env
-      if hasInf vs then infMinMax o vs else return .num (← applyStrict o vs)
+      let broadcast := do
+        let data ← vs.mapM shapeData
+        fromShape (← ArrayData.broadcast (applyCell o) .shapeMismatch data)
+      match vs with
+      | (.shaped dims cells) :: is =>
+        if o = .index then
+          indexCell (.shaped dims cells) (← is.mapM (fun v => do asInt (← asNum v)))
+        else broadcast
+      | _ =>
+        if vs.any (fun v => v.arrayData.isSome) && o != .index then broadcast
+        else if hasInf vs then strictWithInf o vs else return .num (← applyStrict o vs)
     | .other s => .error (.unsupported s)
   | .faq [] "bool_and_or" rs body _, env => do
-    let ranges ← boolRanges rs
-    let b ← foldBoolRanges (fun e => do nonzeroTerm (← eval body e)) ranges env
-    return .num (ofBool b)
-  | .faqWhere [] "bool_and_or" rs p body _, env => do
-    let ranges ← boolRanges rs
-    let b ← foldBoolRanges (fun e => do
-      if truthy (← asNum (← eval p e)) then nonzeroTerm (← eval body e)
-      else pure false) ranges env
-    return .num (ofBool b)
+    let ranges ← faqRanges rs
+    let ranges ← declareFaqRanges [] ranges body none env
+    evalFaq [] "bool_and_or" ranges (fun _ _ => false) (fun _ => pure true) (eval body) env
   | .faq [] "+" (.cons k [s, t] .nil) body _, env => do
     -- §4.3.1: a `+` reduction over one dense range, seeded at `+0.0`, in index order
     let a ← asInt (← asNum (← eval s env))
@@ -596,10 +931,7 @@ def eval : Ast → Env α → Except EvalError (Val α)
   | .faq [] "*" (.cons k [s, t] .nil) body _, env => do
     let a ← asInt (← asNum (← eval s env))
     let b ← asInt (← asNum (← eval t env))
-    let r ← (indices a b).foldlM
-      (fun acc j => do return mul acc (← asNum (← eval body ((k, .num (Lits.ofDec j 0)) :: env))))
-      (one : α)
-    return .num r
+    foldRed "*" (indices a b) (fun j => eval body ((k, .num (Lits.ofDec j 0)) :: env))
   | .faq [] "min" (.cons k [s, t] .nil) body _, env => do
     let a ← asInt (← asNum (← eval s env))
     let b ← asInt (← asNum (← eval t env))
@@ -620,50 +952,53 @@ def eval : Ast → Env α → Except EvalError (Val α)
       let r ← js.foldlM (fun acc i => do
         return fmax acc (← asNum (← eval body ((k, .num (Lits.ofDec i 0)) :: env)))) v
       return .num r
-  | .faqWhere [] red (.cons k [s, t] .nil) p body _, env => do
-    -- a filtered reduction: only the indices at which `p` holds contribute
-    let a ← asInt (← asNum (← eval s env))
-    let b ← asInt (← asNum (← eval t env))
-    let r ← (indices a b).foldlM (fun (acc : Option α) j => do
-      let e := (k, Val.num (Lits.ofDec j 0)) :: env
-      if truthy (← asNum (← eval p e)) then
-        let v ← asNum (← eval body e)
-        return some (match acc with
-          | none => if red = "+" then add zero v else v
-          | some x => if red = "+" then add x v else if red = "min" then fmin x v else fmax x v)
-      else return acc) none
-    if red = "+" then return .num (r.getD zero)
-    else if red = "min" then return (match r with | some x => .num x | none => .inf false)
-    else if red = "max" then return (match r with | some x => .num x | none => .inf true)
-    else .error (.unsupported s!"filtered faq with reduce {red}")
   | .faq [] red (.fromSet k S .nil) body _, env => do
     -- §4.3.1: a range over an index set visits its positions `1 … |S|` in order
     let n ← setSize S env
     foldRed red (indices 1 n) (fun j => eval body ((k, .num (Lits.ofDec j 0)) :: env))
-  | .faqWhere [] red (.fromSet k S .nil) p body _, env => do
-    let n ← setSize S env
-    foldWhere red (indices 1 n) (fun j => eval p ((k, .num (Lits.ofDec j 0)) :: env))
+  | .faqWhere [] "min" (.cons k [s, t] .nil) p body _, env => do
+    let a ← asInt (← asNum (← eval s env))
+    let b ← asInt (← asNum (← eval t env))
+    foldFilteredExtremum false (indices a b)
+      (fun j => do return truthy (← asNum (← eval p ((k, .num (Lits.ofDec j 0)) :: env))))
       (fun j => eval body ((k, .num (Lits.ofDec j 0)) :: env))
-  | .faqWhere _ _ _ _ _ _, _ =>
-    .error (.unsupported "filtered faq outside output_idx [], one dense [start, stop] or from range")
+  | .faqWhere [] "max" (.cons k [s, t] .nil) p body _, env => do
+    let a ← asInt (← asNum (← eval s env))
+    let b ← asInt (← asNum (← eval t env))
+    foldFilteredExtremum true (indices a b)
+      (fun j => do return truthy (← asNum (← eval p ((k, .num (Lits.ofDec j 0)) :: env))))
+      (fun j => eval body ((k, .num (Lits.ofDec j 0)) :: env))
+  | .faq out red rs body _, env => do
+    let ranges ← faqRanges rs
+    let ranges ← declareFaqRanges out ranges body none env
+    evalFaq out red ranges (fun _ _ => false) (fun _ => pure true) (eval body) env
+  | .faqWhere out red rs p body _, env => do
+    let ranges ← faqRanges rs
+    let ranges ← declareFaqRanges out ranges body (some p) env
+    evalFaq out red ranges (fun outputs contracted => reverseFaqWindow outputs contracted (some p))
+      (fun e => do return truthy (← asNum (← eval p e))) (eval body) env
   | .apply n _, _ => .error (.unsupported s!"apply_operator {n}: not expanded")
-  | .faq _ _ _ _ _, _ =>
-    .error (.unsupported "faq outside output_idx [], reduce + * min max, one dense [start, stop] or from range")
 
-/-- Resolve the two supported range forms without materializing the
-Cartesian product. -/
-def boolRanges : Ranges → Except EvalError (List (BoolRange α))
+/-- Resolve declared bounds in the environment where the range is visited. -/
+def faqRanges : Ranges → Except EvalError (List (FaqRange α))
   | .nil => return []
   | .cons k [lo, hi] rest => do
-    let ranges ← boolRanges rest
+    let ranges ← faqRanges rest
     return (k, fun env => do
       let a ← asInt (← asNum (← eval lo env))
       let b ← asInt (← asNum (← eval hi env))
       return indices a b) :: ranges
+  | .cons k [lo, step, hi] rest => do
+    let ranges ← faqRanges rest
+    return (k, fun env => do
+      let a ← asInt (← asNum (← eval lo env))
+      let s ← asInt (← asNum (← eval step env))
+      let b ← asInt (← asNum (← eval hi env))
+      steppedIndices a s b) :: ranges
   | .fromSet k set rest => do
-    let ranges ← boolRanges rest
+    let ranges ← faqRanges rest
     return (k, fun env => do return indices 1 (← setSize set env)) :: ranges
-  | .cons _ _ _ => throw (.unsupported "bool_and_or range outside dense [start, stop] or from set")
+  | .cons _ _ _ => throw (.typeError "faq range: expected [start, stop] or [start, step, stop]")
 
 def evalList : List Ast → Env α → Except EvalError (List (Val α))
   | [], _ => .ok []
@@ -671,6 +1006,103 @@ def evalList : List Ast → Env α → Except EvalError (List (Val α))
     let v ← eval e env
     let vs ← evalList es env
     return v :: vs
+
+/-- Infer extents from the AST and shape bindings without reading operand cells. -/
+def expressionDims : Ast → Env α → Except EvalError (Option (List Nat))
+  | .num _ _, _ => return some []
+  | .var name, env => return variableDims env name
+  | .const c, _ => return some (valueDims (← constVal (α := α) c))
+  | .node op args, env =>
+    if broadcastArity op args.length then do expressionBroadcastDims (← expressionDimsList args env)
+    else return some []
+  | .array (.broadcast _) args, env => do expressionBroadcastDims (← expressionDimsList args env)
+  | .array (.reshape dims) _, env => some <$> reshapeDims dims env
+  | .array (.transpose perm) [a], env => do
+    let some dims ← expressionDims a env | return none
+    let order ← shapeResult (ArrayData.transposeOrder perm dims.length)
+    return order.mapM (fun i => dims[i]?)
+  | .array (.concat axis) args, env => do
+    let some shapes := (← expressionDimsList args env).mapM id | return none
+    some <$> shapeResult (ArrayData.concatDims axis shapes)
+  | .array (.makearray regions) _, _ =>
+    some <$> shapeResult ((ArrayData.regionBounds regions).map (List.map ArrayData.extent))
+  | .faq [] _ _ _ _, _ | .faqWhere [] _ _ _ _ _, _ => return some []
+  | .faq out _ rs body _, env => do queryDims out (← faqRanges rs) body none env
+  | .faqWhere out _ rs p body _, env => do queryDims out (← faqRanges rs) body (some p) env
+  | _, _ => return none
+
+def expressionDimsList : List Ast → Env α → Except EvalError (List (Option (List Nat)))
+  | [], _ => pure []
+  | a :: rest, env => do return (← expressionDims a env) :: (← expressionDimsList rest env)
+
+/-- Interpret each selected branch at a broadcast coordinate. Scalar gathers
+and whole-array operators keep their operand scopes. -/
+def evalCell : Ast → Env α → List Nat → Except EvalError (Val α)
+  | .num m e, _, _ => pure (.num (Lits.ofDec m e))
+  | .var name, env, ix => do
+    let some value := env.lookup name | throw (.unbound name)
+    projectCell value ix
+  | .const c, _, ix => do projectCell (← constVal c) ix
+  | .node op args, env, ix =>
+    match Op.ofString op with
+    | .ifelse => evalConditionalCell args env ix
+    | .strict .index => do
+      let a :: is ← evalList args env | throw (.typeError "operand count")
+      indexCell a (← is.mapM (fun v => do asInt (← asNum v)))
+    | .strict o => do applyCell o (← evalCellList args env ix)
+    | .other s => throw (.unsupported s)
+  | .array (.broadcast fn) args, env, ix => do
+    unless broadcastArity fn args.length do throw (.typeError "invalid_broadcast_fn")
+    match Op.ofString fn with
+    | .ifelse => evalConditionalCell args env ix
+    | .strict o => applyCell o (← evalCellList args env ix)
+    | .other s => throw (.unsupported s)
+  | .array (.makearray regions) args, env, ix => do
+    if regions.any ArrayData.invertedRegion then throw (.typeError "makearray_region_inverted")
+    projectCell (← evalShape (.makearray regions) (← evalRegions regions args env) env) ix
+  | .array op args, env, ix => do
+    projectCell (← evalShape op (← evalList args env) env) ix
+  | .faq out red rs body _, env, ix => do
+    let ranges ← declareFaqRanges out (← faqRanges rs) body none env
+    evalFaq out red ranges (fun _ _ => false) (fun _ => pure true) (eval body) env (some ix)
+  | .faqWhere out red rs p body _, env, ix => do
+    let ranges ← declareFaqRanges out (← faqRanges rs) body (some p) env
+    evalFaq out red ranges (fun outputs contracted => reverseFaqWindow outputs contracted (some p))
+      (fun e => do return truthy (← asNum (← eval p e))) (eval body) env (some ix)
+  | .apply n _, _, _ => .error (.unsupported s!"apply_operator {n}: not expanded")
+
+def evalCellList : List Ast → Env α → List Nat → Except EvalError (List (Val α))
+  | [], _, _ => pure []
+  | a :: rest, env, ix => do return (← evalCell a env ix) :: (← evalCellList rest env ix)
+
+def evalConditionalCell : List Ast → Env α → List Nat → Except EvalError (Val α)
+  | [c, a, b], env, ix => do
+    let cv ← asNum (← evalCell c env ix)
+    if truthy cv then evalCell a env ix else evalCell b env ix
+  | _, _, _ => throw (.typeError "ifelse takes three arguments")
+
+def evalBroadcastIfelse : List Ast → Env α → Except EvalError (Val α)
+  | [c, a, b], env => do
+    let condition ← shapeData (← eval c env)
+    let shapes := [← expressionDims a env, ← expressionDims b env]
+    let dims ← broadcastDims (condition.dims :: shapes.filterMap id)
+    if dims.isEmpty then
+      let cv ← asNum (← shapeResult (condition.at? []))
+      if truthy cv then eval a env else eval b env
+    else
+      let cells ← (ArrayData.coords dims).mapM fun ix => do
+        let cv ← asNum (← shapeResult (condition.broadcastAt ix))
+        if truthy cv then evalCell a env ix else evalCell b env ix
+      return .shaped dims cells
+  | _, _ => throw (.typeError "ifelse takes three arguments")
+
+/-- An empty makearray region skips its value expression entirely. -/
+def evalRegions : List (List (Int × Int)) → List Ast → Env α → Except EvalError (List (Val α))
+  | [], [], _ => pure []
+  | region :: regions, arg :: args, env => do
+    let value ← if ArrayData.emptyRegion region then pure (.num zero) else eval arg env
+    return value :: (← evalRegions regions args env)
+  | _, _, _ => throw (.typeError "makearray region/value count mismatch")
 
 /-- `ifelse` evaluates its condition, then only the branch it takes. -/
 def evalIfelse : List Ast → Env α → Except EvalError (Val α)

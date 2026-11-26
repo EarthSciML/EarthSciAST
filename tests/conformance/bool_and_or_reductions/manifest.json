@@ -62,6 +62,27 @@
      "native"
     ]
    },
+   "named_exclusions": [
+    {
+     "binding": "lean",
+     "compilers": ["interpreter"],
+     "code": "unsupported_construct",
+     "reason": "The observed values depend on an integrated array state. Lean covers the static fixture below."
+    }
+   ]
+  },
+  {
+   "id": "static_bool_and_or",
+   "path": "fixtures/static_bool_and_or.esm",
+   "model": "StaticBooleanReduction",
+   "golden": "golden/static_bool_and_or.json",
+   "tags": ["faq", "semiring", "bool_and_or", "static-evaluation"],
+   "note": "Authored here. Lean and the native binding compilers score the same static assertions.",
+   "required": {
+    "julia": ["native"],
+    "python": ["native"],
+    "rust": ["native"]
+   },
    "named_exclusions": []
   }
  ]

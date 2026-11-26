@@ -138,7 +138,7 @@ with a pending question among its own clauses.
 - Phase: 2
 - Found by: exact registry model (`Esm/Semiring/Laws.lean`).
 - Problem: The stated domain ℝ≥0 excludes −∞, the required empty reduction. Adjoining −∞ and making it absorb the abstract semiring product gives a closed algebra. The author writes multiplication as an ordinary numeric Expression (§4.8.3), where in binary64 multiplying an empty result of −∞ by zero gives NaN. The table also does not specify a validation or runtime verdict for a negative term. Ordinary multiplication over signed reals fails distributivity over max: with factors −1, 0 and 1, the two sides are −1 and 0.
-- Ruling: (pending) Clarify the distinction between the exact carrier and the executable empty result, and whether negative factors are rejected or only excluded from the algebraic guarantee.
+- Ruling: The exact carrier is the nonnegative reals with an abstract absorbing bottom. At runtime the semiring selects max with an empty result of −∞, and negative values are permitted. An authored product uses the ordinary numeric multiplication rules, including NaN for binary64 zero times an infinite value. The exact distributive law applies only on the exact carrier.
 
 ## Q-18 CONFORMANCE_SPEC.md §7.1: unresolved order not unbound
 - Clauses: `conf.7.1.unresolved-order-not-unbound`
@@ -172,8 +172,8 @@ with a pending question among its own clauses.
 - Clauses: `docs/content/rfcs/discretization.md` §5.4.4
 - Phase: 2
 - Found by: Lean expression canonicalizer
-- Problem: Zero annihilation preserves the type and sign of the zero. A product such as `{"op":"*","args":[0,-0.0]}` has two zero operands with different type and sign. The rule does not choose which representation to emit. The Lean adapter reports `E_CANONICAL_UNSUPPORTED_EXPRESSION` for this case.
-- Ruling: (pending)
+- Problem: Zero annihilation preserves the type and sign of the zero. A product such as `{"op":"*","args":[0,-0.0]}` has two zero operands with different type and sign. The rule does not choose which representation to emit.
+- Ruling: Preserve the first literal zero in left-to-right order after recursively canonicalizing and flattening the operands, matching the bindings. When the zeros have different kinds or signs their permutation can change the canonical bytes.
 
 ## Q-24 esm-spec.md §4.2: structural d unary
 - Clauses: `spec.4.2.structural-d-unary`
