@@ -475,7 +475,6 @@ private theorem eval_strict_one (name : String) (op : StrictOp) (arg : Ast) (env
     eval (.node name [arg]) env = (applyStrict op [.num x]).map Val.num := by
   simp [eval, evalList, dispatch, h, Val.arrayData, hasInf, bind, Except.bind,
     pure, Except.pure, Except.map]
-  cases op <;> rfl
 
 private theorem eval_strict_two (name : String) (op : StrictOp) (left right : Ast) (env : Env Num)
     (dispatch : Op.ofString name = .strict op) (x y : Num)
@@ -483,7 +482,6 @@ private theorem eval_strict_two (name : String) (op : StrictOp) (left right : As
     eval (.node name [left, right]) env = (applyStrict op [.num x, .num y]).map Val.num := by
   simp [eval, evalList, dispatch, hl, hr, Val.arrayData, hasInf, bind, Except.bind,
     pure, Except.pure, Except.map]
-  cases op <;> rfl
 
 /-- For any expression in the resolved scalar fragment, checking fixes the
 conversion scale of the result. Converting all of its declared inputs before

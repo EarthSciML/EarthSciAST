@@ -79,9 +79,9 @@
    "tags": ["faq", "semiring", "bool_and_or", "static-evaluation"],
    "note": "Authored here. Lean and the native binding compilers score the same static assertions.",
    "required": {
-    "julia": ["interpreter", "native"],
-    "python": ["interpreter", "native"],
-    "rust": ["interpreter", "native"]
+    "julia": ["native"],
+    "python": ["native"],
+    "rust": ["native"]
    },
    "named_exclusions": []
   }

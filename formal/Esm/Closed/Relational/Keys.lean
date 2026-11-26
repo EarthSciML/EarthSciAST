@@ -573,13 +573,13 @@ section Where
 
 variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [Elem α] [ExprLaws α] [NaNIs α]
 
-theorem foldlM_opt (f : α → α → α) (Pb : ℕ → Bool) (g : ℕ → α) (n : ℕ)
-    (step : Option α → ℤ → Except EvalError (Option α))
-    (hstep : ∀ acc (i : ℕ), i < n → step acc ((1 : ℤ) + i) =
-      .ok (if Pb (i + 1) then some (match acc with | none => g (i + 1) | some x => f x (g (i + 1)))
-        else acc)) :
-    ∀ m, m ≤ n → ((List.range m).map (fun i : ℕ => (1 : ℤ) + i)).foldlM step none =
-      .ok (optFold f g (passL Pb m)) := by
+theorem foldlM_opt {β : Type} (encode : Option α → β) (f : α → α → α)
+    (Pb : ℕ → Bool) (g : ℕ → α) (n : ℕ) (step : β → ℤ → Except EvalError β)
+    (hstep : ∀ acc (i : ℕ), i < n → step (encode acc) ((1 : ℤ) + i) =
+      .ok (encode (if Pb (i + 1) then
+        some (match acc with | none => g (i + 1) | some x => f x (g (i + 1))) else acc))) :
+    ∀ m, m ≤ n → ((List.range m).map (fun i : ℕ => (1 : ℤ) + i)).foldlM step (encode none) =
+      .ok (encode (optFold f g (passL Pb m))) := by
   intro m
   induction m with
   | zero => intro _; rfl
@@ -608,21 +608,19 @@ theorem ev_faqw_min {k : String} {P body : Ast} {args : List Ast} {env : Env α}
     simpa using toInt_nat (α := α) 1
   have hi : indices 1 (n : ℤ) = (List.range n).map (fun i : ℕ => (1 : ℤ) + (i : ℤ)) := by
     simp [indices]
-  have hred : ("min" : String) ≠ "bool_and_or" := by decide
-  simp only [eval, asNum, asInt, o1, t1, toInt_n hn, bind, Except.bind, pure, Except.pure,
-    Option.bind, hi]
-  rw [foldlM_opt fmin Pb g n _ ?_ n le_rfl]
-  · simp only [show ¬ (("min" : String) = "+") from by decide, ↓reduceIte]
-    cases optFold _ g (passL Pb n) <;> rfl
-  · intro acc i hi'
-    have e : (Lits.ofDec ((1 : ℤ) + (i : ℤ)) 0 : α) = fin (((i + 1 : ℕ)) : ℝ) := by
-      rw [show (1 : ℤ) + (i : ℤ) = ((i + 1 : ℕ) : ℤ) by push_cast; ring]
-      exact ofDec_nat' (by omega)
-    simp only [e, hp (i + 1) (by omega) (by omega), truthy_ofBool]
-    cases hP : Pb (i + 1)
-    · simp
-    · simp only [↓reduceIte, hb (i + 1) (by omega) (by omega) hP]
-      cases acc <;> simp
+  let encode : Option α → Val α := fun | none => .inf false | some x => .num x
+  simp only [eval.eq_14, eval.eq_1, foldFilteredExtremum, asNum, asInt, o1, t1, toInt_n hn, bind, Except.bind,
+    pure, Except.pure, Option.bind, hi]
+  refine foldlM_opt encode fmin Pb g n _ ?_ n le_rfl
+  intro acc i hi'
+  have e : (Lits.ofDec ((1 : ℤ) + (i : ℤ)) 0 : α) = fin (((i + 1 : ℕ)) : ℝ) := by
+    rw [show (1 : ℤ) + (i : ℤ) = ((i + 1 : ℕ) : ℤ) by push_cast; ring]
+    exact ofDec_nat' (by omega)
+  simp only [e, hp (i + 1) (by omega) (by omega), truthy_ofBool]
+  by_cases hP : Pb (i + 1) = true
+  · simp only [hP, ↓reduceIte, hb (i + 1) (by omega) (by omega) hP]
+    cases acc <;> rfl
+  · simp [hP]
 
 /-- A filtered `max` reduction: the fold over the passing candidates, or `-∞`
 when none passes. -/
@@ -640,21 +638,19 @@ theorem ev_faqw_max {k : String} {P body : Ast} {args : List Ast} {env : Env α}
     simpa using toInt_nat (α := α) 1
   have hi : indices 1 (n : ℤ) = (List.range n).map (fun i : ℕ => (1 : ℤ) + (i : ℤ)) := by
     simp [indices]
-  have hred : ("max" : String) ≠ "bool_and_or" := by decide
-  simp only [eval, asNum, asInt, o1, t1, toInt_n hn, bind, Except.bind, pure, Except.pure,
-    Option.bind, hi]
-  rw [foldlM_opt fmax Pb g n _ ?_ n le_rfl]
-  · simp only [show ¬ (("max" : String) = "+") from by decide, show ¬ (("max" : String) = "min") from by decide, ↓reduceIte]
-    cases optFold _ g (passL Pb n) <;> rfl
-  · intro acc i hi'
-    have e : (Lits.ofDec ((1 : ℤ) + (i : ℤ)) 0 : α) = fin (((i + 1 : ℕ)) : ℝ) := by
-      rw [show (1 : ℤ) + (i : ℤ) = ((i + 1 : ℕ) : ℤ) by push_cast; ring]
-      exact ofDec_nat' (by omega)
-    simp only [e, hp (i + 1) (by omega) (by omega), truthy_ofBool]
-    cases hP : Pb (i + 1)
-    · simp
-    · simp only [↓reduceIte, hb (i + 1) (by omega) (by omega) hP]
-      cases acc <;> simp
+  let encode : Option α → Val α := fun | none => .inf true | some x => .num x
+  simp only [eval.eq_15, eval.eq_1, foldFilteredExtremum, asNum, asInt, o1, t1, toInt_n hn, bind, Except.bind,
+    pure, Except.pure, Option.bind, hi]
+  refine foldlM_opt encode fmax Pb g n _ ?_ n le_rfl
+  intro acc i hi'
+  have e : (Lits.ofDec ((1 : ℤ) + (i : ℤ)) 0 : α) = fin (((i + 1 : ℕ)) : ℝ) := by
+    rw [show (1 : ℤ) + (i : ℤ) = ((i + 1 : ℕ) : ℤ) by push_cast; ring]
+    exact ofDec_nat' (by omega)
+  simp only [e, hp (i + 1) (by omega) (by omega), truthy_ofBool]
+  by_cases hP : Pb (i + 1) = true
+  · simp only [hP, ↓reduceIte, hb (i + 1) (by omega) (by omega) hP]
+    cases acc <;> rfl
+  · simp [hP]
 
 theorem ev_bodyW {k red : String} {F P : Ast} {n : ℕ} {env : Env α} {u M : α} {j : ℕ}
     (hn : n + 1 ≤ 2 ^ 53)

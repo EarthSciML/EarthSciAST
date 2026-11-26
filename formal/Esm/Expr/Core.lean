@@ -704,7 +704,8 @@ private def faqIdentity (red : String) : Except EvalError (Val α) :=
   | "max" => pure (.inf true)
   | _ => throw (.unsupported s!"faq with reduce {red}")
 
-private def faqCombine (red : String) (acc term : Val α) : Except EvalError (Val α) := do
+/-- Combine one admitted term with the cell's current accumulator. -/
+def faqCombine (red : String) (acc term : Val α) : Except EvalError (Val α) := do
   match red with
   | "+" => return .num (← faqStep (← asNum acc) term)
   | "*" =>
@@ -715,6 +716,15 @@ private def faqCombine (red : String) (acc term : Val α) : Except EvalError (Va
     if hasInf [acc, term] then infMinMax op [acc, term]
     else return .num (← applyStrict op [acc, term])
   | _ => throw (.unsupported s!"faq with reduce {red}")
+
+/-- Fold the explicitly declared range of a scalar filtered extremum. -/
+def foldFilteredExtremum (isMax : Bool) (values : List Int)
+    (passesFilter : Int → Except EvalError Bool) (term : Int → Except EvalError (Val α)) :
+    Except EvalError (Val α) :=
+  values.foldlM (fun acc i => do
+    if ← passesFilter i then
+      faqCombine (if isMax then "max" else "min") acc (← term i)
+    else pure acc) (.inf isMax)
 
 private def faqOutputRanges (ranges : List (FaqRange α)) (env : Env α) :
     List OutputIndex → Except EvalError (List (Option String × List Int))
@@ -909,6 +919,18 @@ def eval : Ast → Env α → Except EvalError (Val α)
     -- §4.3.1: a range over an index set visits its positions `1 … |S|` in order
     let n ← setSize S env
     foldRed red (indices 1 n) (fun j => eval body ((k, .num (Lits.ofDec j 0)) :: env))
+  | .faqWhere [] "min" (.cons k [s, t] .nil) p body _, env => do
+    let a ← asInt (← asNum (← eval s env))
+    let b ← asInt (← asNum (← eval t env))
+    foldFilteredExtremum false (indices a b)
+      (fun j => do return truthy (← asNum (← eval p ((k, .num (Lits.ofDec j 0)) :: env))))
+      (fun j => eval body ((k, .num (Lits.ofDec j 0)) :: env))
+  | .faqWhere [] "max" (.cons k [s, t] .nil) p body _, env => do
+    let a ← asInt (← asNum (← eval s env))
+    let b ← asInt (← asNum (← eval t env))
+    foldFilteredExtremum true (indices a b)
+      (fun j => do return truthy (← asNum (← eval p ((k, .num (Lits.ofDec j 0)) :: env))))
+      (fun j => eval body ((k, .num (Lits.ofDec j 0)) :: env))
   | .faq out red rs body _, env => do
     let ranges ← faqRanges rs
     let ranges ← declareFaqRanges out ranges body none env

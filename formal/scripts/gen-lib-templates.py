@@ -126,8 +126,7 @@ def ast(e, indent, path):
                       + f"] {ranges})")
         head = "(Ast.faqWhere [" if "filter" in e else "(Ast.faq ["
         lines = [
-            pad + head + ", ".join(axes) + "] "
-            + lean_str(e.get("reduce", "+")) + " " + ranges,
+            pad + head + ", ".join(axes) + "] " + lean_str(e.get("reduce", "+")) + " " + ranges,
         ]
         if "filter" in e:
             lines.append(ast(e["filter"], indent + 1, path + ".filter"))
