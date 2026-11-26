@@ -105,6 +105,7 @@ class StaticArrayAssertions(unittest.TestCase):
             "from_default_array": "q",
             "named_broadcast": node("broadcast", "q", "c", fn="+"),
             "named_union": node("*", "q", "c"),
+            "gather_named_union": node("index", node("+", "q", "c"), 1, 2),
             "mixed_broadcast": node("+", "q", node("const", value=[[100], [200], [300]])),
             "named_matrix": node("const", value=[[1, 2], [3, 4], [5, 6]]),
             "named_reordered": "named_matrix",
@@ -177,6 +178,7 @@ class StaticArrayAssertions(unittest.TestCase):
                                 assertion("from_default_array[2]", 8),
                                 assertion("named_broadcast[3,2]", 28),
                                 assertion("named_union[2,2]", 80),
+                                assertion("gather_named_union", 15),
                                 assertion("mixed_broadcast[3,2]", 308),
                                 assertion("named_reordered[1,2]", 3),
                                 assertion("lazy_dependency", 7),
@@ -214,6 +216,69 @@ class StaticArrayAssertions(unittest.TestCase):
             path.write_text(json.dumps(doc))
             result = ADAPTER.run_fixture(manifest_path, fixture)
             self.assertEqual(result.get("code"), "invalid_broadcast_fn", result)
+            expressions["unary_broadcast"].update(
+                fn="+", args=[node("const", value=[1, 2]), node("const", value=[3, 4, 5])]
+            )
+            path.write_text(json.dumps(doc))
+            result = ADAPTER.run_fixture(manifest_path, fixture)
+            self.assertEqual(result.get("status"), "refused", result)
+            self.assertEqual(result.get("code"), "array_shape_mismatch", result)
+
+    def test_array_conditionals(self):
+        def node(op, *args, **fields):
+            return {"op": op, "args": list(args), **fields}
+
+        def const(values):
+            return node("const", value=values)
+
+        mask = const([1, 0])
+        guarded_gather = node(
+            "faq",
+            output_idx=["i"],
+            ranges={"i": [1, 2]},
+            expr=node("index", const([0, 9]), node("+", "i", 1)),
+        )
+        expressions = {
+            "explicit": node("broadcast", mask, 11, 22, fn="ifelse"),
+            "bare": node("ifelse", mask, node("+", 1, const([3, 4])), const([5, 6])),
+            "guarded": node("ifelse", mask, guarded_gather, 7),
+            "source": const([1, 2, 3]),
+            "replicated": node("+", 2, node("ifelse", 0, "source", 5)),
+            "shaped": node("ifelse", 0, node("reshape", const([1, 2]), shape=[2, 1]), 4),
+        }
+        assertions = {
+            "explicit[1]": 11,
+            "explicit[2]": 22,
+            "bare[1]": 4,
+            "bare[2]": 6,
+            "guarded[1]": 9,
+            "guarded[2]": 7,
+            "replicated[3]": 7,
+            "shaped[2,1]": 4,
+        }
+        doc = {
+            "models": {
+                "M": {
+                    "variables": {name: {"type": "unknown"} for name in expressions},
+                    "equations": [{"lhs": name, "rhs": rhs} for name, rhs in expressions.items()],
+                    "tests": [
+                        {
+                            "id": "conditionals",
+                            "assertions": [
+                                {"variable": name, "time": 0, "expected": value}
+                                for name, value in assertions.items()
+                            ],
+                        }
+                    ],
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            path = directory / "conditionals.esm"
+            path.write_text(json.dumps(doc))
+            fixture = {"id": "conditionals", "path": path.name, "model": "M"}
+            self.check_passes(directory / "manifest.json", fixture)
 
     def test_faq_scan_order_and_empty_cells(self):
         def node(op, *args, **fields):
@@ -252,6 +317,11 @@ class StaticArrayAssertions(unittest.TestCase):
                 filter=node("index", "mask", "i"),
             ),
             "strided": faq(["i"], "i", ranges={"i": [1, 2, 5]}),
+            "implicit_filtered": faq([], contribution, filter=node("<", "j", 1)),
+            "faulting_observed": node("index", node("const", value=[0]), 2),
+            "implicit_guarded": faq(
+                [], node("index", "faulting_observed", "j"), filter=node("<", "j", 1)
+            ),
         }
         assertions = [
             ("two_contracts", 1),
@@ -262,12 +332,17 @@ class StaticArrayAssertions(unittest.TestCase):
             ("pointwise[1,1]", -1e16),
             ("pointwise[1,4]", 0),
             ("strided[3]", 5),
+            ("implicit_filtered", 0),
+            ("implicit_guarded", 0),
         ]
         doc = {
             "index_sets": {"x": {"kind": "interval", "size": 4}},
             "models": {
                 "M": {
-                    "variables": {name: {"type": "unknown"} for name in expressions},
+                    "variables": {
+                        **{name: {"type": "unknown"} for name in expressions},
+                        "faulting_observed": {"type": "unknown", "shape": ["x"]},
+                    },
                     "equations": [{"lhs": name, "rhs": rhs} for name, rhs in expressions.items()],
                     "tests": [
                         {

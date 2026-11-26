@@ -81,14 +81,25 @@ private partial def namedOperands (shapes : Shapes) : Ast → List String
     if broadcastArity op args.length then args.flatMap (namedOperands shapes) else []
   | _ => []
 
+private def rangeNames : Ranges → List String
+  | .nil => []
+  | .cons name _ rest | .fromSet name _ rest => name :: rangeNames rest
+
+private def faqScope (shapes : Shapes) (out : List OutputIndex) (ranges : Ranges) : Shapes :=
+  let bound := out.filterMap (fun | .symbol name => some name | .singleton => none) ++ rangeNames ranges
+  shapes.filter fun (name, _) => !bound.contains name
+
 /-- Put named operands in result-axis order through the spec's equivalent
-pointwise FAQ. Anonymous operands keep the evaluator's positional alignment.
-Operators that consume whole arrays retain their own operand scopes. -/
-private partial def alignNamed (shapes : Shapes) (resultAxes : List String) :
-    Ast → Except String Ast
-  | .var name => do
+pointwise FAQ. Whole-array operators give each operand its own axis order. -/
+private partial def alignNamed (shapes : Shapes) (targetAxes : Option (List String))
+    (ast : Ast) : Except String Ast := do
+  let resultAxes := match targetAxes with
+    | some axes => axes
+    | none => (namedOperands shapes ast).eraseDups
+  match ast with
+  | .var name =>
     let axes := (shapes.lookup name).getD []
-    if axes.isEmpty || axes == resultAxes then return .var name
+    if axes.isEmpty || axes == resultAxes then return ast
     -- A NUL-prefixed symbol cannot occur in a valid authored ESM identifier.
     let bindings := resultAxes.map (fun axis => (axis, "\x00axis_" ++ axis))
     let subscripts ← axes.mapM fun axis => match bindings.lookup axis with
@@ -97,21 +108,27 @@ private partial def alignNamed (shapes : Shapes) (resultAxes : List String) :
     let out := bindings.map (fun (_, symbol) => OutputIndex.symbol symbol)
     let ranges := bindings.foldr (fun (axis, symbol) rest => Ranges.fromSet symbol axis rest) .nil
     return .faq out "+" ranges (.node "index" (.var name :: subscripts)) []
-  | .node op args => do
-    if broadcastArity op args.length then
-      return .node op (← args.mapM (alignNamed shapes resultAxes))
+  | .node op args =>
+    let target := if broadcastArity op args.length then some resultAxes else none
+    let args ← args.mapM (alignNamed shapes target)
+    -- Both surface spellings use the pointwise conditional for static arrays.
+    if op == "ifelse" && args.length == 3 then return .array (.broadcast op) args
     return .node op args
-  | .array (.broadcast op) args => do
-    return .array (.broadcast op) (← args.mapM (alignNamed shapes resultAxes))
-  | ast => pure ast
+  | .array (.broadcast op) args =>
+    return .array (.broadcast op) (← args.mapM (alignNamed shapes (some resultAxes)))
+  | .array op args =>
+    return .array op (← args.mapM (alignNamed shapes none))
+  | .faq out red ranges body args =>
+    return .faq out red ranges (← alignNamed (faqScope shapes out ranges) none body) args
+  | .faqWhere out red ranges filter body args =>
+    let localShapes := faqScope shapes out ranges
+    return .faqWhere out red ranges (← alignNamed localShapes none filter)
+      (← alignNamed localShapes none body) args
+  | _ => pure ast
 
 private def lowerExpression (shapes : Shapes) (name : String) (expression : Json) :
     Except String Ast := do
-  let ast ← Templates.astOf expression
-  let axes := (namedOperands shapes ast).eraseDups
-  if axes.isEmpty then return ast
-  let resultAxes := (shapes.lookup name).getD axes
-  alignNamed shapes resultAxes ast
+  alignNamed shapes (shapes.lookup name) (← Templates.astOf expression)
 
 private def operation (node : Json) : String :=
   (node.getObjValAs? String "op").toOption.getD ""
@@ -237,6 +254,22 @@ private def environment (model : Model) (atTime : Float) (overrides : Json) :
       let constant ← Templates.constOf value
       let value ← evalResult (constVal constant)
       env := (name, ← conformShape name (model.shapes.lookup name) model.sizes value) :: env
+  -- Shape information can be needed even when an observed's value is never read.
+  for (name, axes) in model.shapes do
+    if let .ok dims := dimensions axes model.sizes then
+      env := (shapeKey name, .shaped dims []) :: env
+  let mut pending := model.equations
+  for _ in [:pending.length] do
+    let mut next := []
+    for (name, rhs) in pending do
+      if (env.lookup (shapeKey name)).isNone then
+        if let .ok (some dims) := rhs.toOption.map (fun ast => expressionDims ast env)
+            |>.getD (.ok none) then
+          env := (shapeKey name, .shaped dims []) :: env
+        else
+          next := (name, rhs) :: next
+    if next.isEmpty || next.length == pending.length then break
+    pending := next.reverse
   return env
 
 /-- Resolve dependencies only when the AST evaluator reads them, preserving

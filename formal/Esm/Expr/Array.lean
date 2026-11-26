@@ -49,10 +49,15 @@ def reshape (dims : List Nat) (source : ArrayData β) : Option (ArrayData β) :=
     source.at? (coordsFromColumnOffset source.dims (offset dims.reverse ix.reverse))
   return ⟨dims, cells⟩
 
-def transpose (perm : Option (List Nat)) (source : ArrayData β) : Option (ArrayData β) := do
-  let axes := List.range source.dims.length
+def transposeOrder (perm : Option (List Nat)) (rank : Nat) : Option (List Nat) := do
+  let axes := List.range rank
   let order := perm.getD axes.reverse
   guard (order.length = axes.length ∧ axes.all order.contains)
+  return order
+
+def transpose (perm : Option (List Nat)) (source : ArrayData β) : Option (ArrayData β) := do
+  let axes := List.range source.dims.length
+  let order ← transposeOrder perm source.dims.length
   let dims ← order.mapM fun axis => source.dims[axis]?
   let cells ← (coords dims).mapM fun ix => do
     let input ← axes.mapM fun axis => ix[order.idxOf axis]?
@@ -66,14 +71,16 @@ private def concatAt (axis : Nat) : List (ArrayData β) → List Nat → Nat →
     if i < n then src.at? (ix.set axis i)
     else concatAt axis sources ix (i - n)
 
-def concat (axis : Nat) (operands : List (ArrayData β)) : Option (ArrayData β) := do
-  let src ← operands.head?
-  guard (axis < src.dims.length)
-  let extents ← operands.mapM fun x => do
-    let n ← x.dims[axis]?
-    guard (x.dims.set axis 0 = src.dims.set axis 0)
+def concatDims (axis : Nat) (shapes : List (List Nat)) : Option (List Nat) := do
+  let first ← shapes.head?
+  let extents ← shapes.mapM fun dims => do
+    let n ← dims[axis]?
+    guard (dims.set axis 0 = first.set axis 0)
     return n
-  let dims := src.dims.set axis extents.sum
+  return first.set axis extents.sum
+
+def concat (axis : Nat) (operands : List (ArrayData β)) : Option (ArrayData β) := do
+  let dims ← concatDims axis (operands.map (·.dims))
   let cells ← (coords dims).mapM fun (ix : List Nat) => do
     let i ← ix[axis]?
     concatAt axis operands ix i
@@ -106,7 +113,7 @@ def emptyRegion (region : List (Int × Int)) : Bool :=
 def invertedRegion (region : List (Int × Int)) : Bool :=
   region.any fun (lo, hi) => hi < lo - 1
 
-private def extent (bound : Int × Int) : Nat :=
+def extent (bound : Int × Int) : Nat :=
   (bound.2 - bound.1 + 1).toNat
 
 private def contains (region : List (Int × Int)) (ix : List Int) : Bool :=
@@ -126,14 +133,17 @@ private def regionCoordinates : List (Int × Int) → List Nat → List Int → 
     | [] => if n = 1 then regionCoordinates rs [] is else none
   | _, _, _ => none
 
+def regionBounds (regions : List (List (Int × Int))) : Option (List (Int × Int)) := do
+  let first ← regions.head?
+  guard (regions.all fun r => r.length == first.length && !invertedRegion r)
+  return regions.foldl (List.zipWith fun (lo, hi) (a, b) => (min lo a, max hi b)) first
+
 /-- Assembly uses the region bounding box, with later entries taking
 precedence at covered cells. Empty regions contribute no cells. -/
 def makearray (regions : List (List (Int × Int))) (values : List (ArrayData β))
     (zero : β) : Option (ArrayData β) := do
-  let first ← regions.head?
   guard (regions.length = values.length)
-  guard (regions.all fun r => r.length == first.length && !invertedRegion r)
-  let bounds := regions.foldl (List.zipWith fun (lo, hi) (a, b) => (min lo a, max hi b)) first
+  let bounds ← regionBounds regions
   let dims := bounds.map extent
   let entries := (regions.zip values).filter fun (r, _) => !emptyRegion r
   for (region, source) in entries do

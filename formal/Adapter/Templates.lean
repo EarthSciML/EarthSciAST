@@ -183,6 +183,7 @@ def errorString : ApplyError → String
   | .eval (.unsupported w) => s!"unsupported: {w}"
   | .eval (.unbound n) => s!"unbound: {n}"
   | .eval (.typeError w) => s!"type error: {w}"
+  | .eval .shapeMismatch => "array_shape_mismatch"
   | .eval .outOfRange => "E_TREEWALK_CONSTARRAY_OOB"
   | .eval .nonIntegral => "index not integral"
 

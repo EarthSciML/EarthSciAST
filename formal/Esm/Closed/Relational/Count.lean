@@ -498,7 +498,7 @@ theorem ev_fromSet {red : String} (hred : red ∈ ["+", "*", "min", "max"]) {k S
   · simp only [eval, setSize, hS, foldRed, asNum, asInt, toInt_nat, ofDec_nat hn, o1, t1, bind,
       Except.bind, pure, Except.pure, ↓reduceIte]
   · simp only [eval, setSize, hS, foldRed, asNum, asInt, toInt_nat, ofDec_nat hn, o1, t1, bind,
-      Except.bind, pure, Except.pure, m1, ↓reduceIte]
+      Except.bind, m1, ↓reduceIte]
   · simp only [eval, setSize, hS, foldRed, asNum, asInt, toInt_nat, ofDec_nat hn, o1, t1, bind,
       Except.bind, pure, Except.pure, m2, m3, ↓reduceIte]
   · simp only [eval, setSize, hS, foldRed, asNum, asInt, toInt_nat, ofDec_nat hn, o1, t1, bind,

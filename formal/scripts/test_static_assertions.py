@@ -96,20 +96,20 @@ class StaticAssertions(unittest.TestCase):
             self.assertEqual(rows[name].get("value"), expected, rows[name])
 
     def test_semiring_domain_and_shaped_boolean_refusal(self):
-        def faq(semiring, ranges, expr, output_idx=()):
+        def faq(ranges, expr, output_idx=(), **reduction):
             return {
                 "op": "faq",
                 "args": [],
                 "output_idx": list(output_idx),
-                "semiring": semiring,
+                **reduction,
                 "ranges": ranges,
                 "expr": expr,
             }
 
-        empty = faq("max_product", {"i": [1, 0]}, "i")
+        empty = faq({"i": [1, 0]}, "i", semiring="max_product")
         zero_product = {"op": "*", "args": [0, empty]}
         expressions = {
-            "signed": faq("max_product", {"i": [1, 3]}, {"op": "*", "args": ["i", -1]}),
+            "signed": faq({"i": [1, 3]}, {"op": "*", "args": ["i", -1]}, semiring="max_product"),
             "zero_times_empty": zero_product,
             "positive_times_empty": {
                 "op": "max",
@@ -119,10 +119,13 @@ class StaticAssertions(unittest.TestCase):
                 "op": "min",
                 "args": [{"op": "*", "args": [empty, -2]}, 7],
             },
-            "nan_term_is_true": faq("bool_and_or", {"j": [1, 2]}, zero_product),
+            "nan_term_is_true": faq({"j": [1, 2]}, zero_product, semiring="bool_and_or"),
+            "dense_product": faq({"k": [1, 1]}, empty, reduce="*"),
+            "stepped_product": faq({"k": [1, 1, 1]}, empty, reduce="*"),
+            "named_product": faq({"k": {"from": "one"}}, empty, reduce="*"),
             "shaped_boolean": {
                 "op": "index",
-                "args": [faq("bool_and_or", {"i": [1, 2], "j": [1, 2]}, 1, ("i",)), 1],
+                "args": [faq({"i": [1, 2], "j": [1, 2]}, 1, ("i",), semiring="bool_and_or"), 1],
             },
         }
         model = {
@@ -135,13 +138,16 @@ class StaticAssertions(unittest.TestCase):
                 }
             ],
         }
-        doc = {"models": {"M": model}}
+        doc = {
+            "models": {"M": model},
+            "index_sets": {"one": {"kind": "interval", "size": 1}},
+        }
         requests = [
             {
                 "document": doc,
                 "requests": [{"test_id": "semiring", "assertion_idx": idx} for idx in indices],
             }
-            for indices in ([1, 2, 3, 4, 5], [6])
+            for indices in (range(1, len(expressions)), [len(expressions)])
         ]
         result = subprocess.run(
             [BINARY, "static-assertions-jsonl", "M"],
@@ -151,7 +157,7 @@ class StaticAssertions(unittest.TestCase):
             check=True,
         )
         values, refusal = map(json.loads, result.stdout.splitlines())
-        signed, zero_value, positive_product, negative_product, nan_term = [
+        signed, zero_value, positive_product, negative_product, nan_term, *folds = [
             struct.unpack(">d", int(bits).to_bytes(8, "big"))[0] for bits in values["values"]
         ]
         self.assertEqual(signed, -1)
@@ -159,6 +165,7 @@ class StaticAssertions(unittest.TestCase):
         self.assertEqual(positive_product, -7)
         self.assertEqual(negative_product, 7)
         self.assertEqual(nan_term, 1)
+        self.assertEqual(folds, [-math.inf] * 3)
         self.assertEqual(
             refusal["error"], "unsupported_construct: array-valued bool_and_or reduction"
         )
