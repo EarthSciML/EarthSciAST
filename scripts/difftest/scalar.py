@@ -237,6 +237,7 @@ def run(commands: dict[str, list[str]], args: argparse.Namespace) -> None:
     cases = 0
     disagreements = 0
     shrinking = not args.observer
+    runner_error: Exception | None = None
     with ExitStack() as stack:
         participants = {name: stack.enter_context(adapter(cmd)) for name, cmd in commands.items()}
         if args.fixture is not None:
@@ -256,7 +257,9 @@ def run(commands: dict[str, list[str]], args: argparse.Namespace) -> None:
             st.tuples(VALUES, VALUES, VALUES),
         )
         def check(expr: Any, values: tuple[float, ...]) -> None:
-            nonlocal cases, disagreements
+            nonlocal cases, disagreements, runner_error
+            if runner_error is not None:
+                return
             try:
                 result = compare(document(expr, values), participants, args.timeout)
             except Mismatch:
@@ -264,6 +267,11 @@ def run(commands: dict[str, list[str]], args: argparse.Namespace) -> None:
                     raise
                 disagreements += 1
                 result = None
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                # A broken stream can leave a late reply in flight. Do not
+                # reuse it to shrink an adapter startup or protocol failure.
+                runner_error = exc
+                return
             if shrinking and args.observer:
                 return
             cases += 1
@@ -274,7 +282,14 @@ def run(commands: dict[str, list[str]], args: argparse.Namespace) -> None:
                 observed.append(result)
             edge_counts.update({kind for value in observed if (kind := edge(value)) is not None})
 
-        check()
+        def sweep() -> None:
+            try:
+                check()
+            finally:
+                if runner_error is not None:
+                    raise runner_error
+
+        sweep()
         print(
             f"{cases} scalar cases for {', '.join(commands)} "
             f"(seed {args.seed}, {disagreements} disagreements)",
@@ -286,7 +301,7 @@ def run(commands: dict[str, list[str]], args: argparse.Namespace) -> None:
             # Replay the same seed with failures enabled so Hypothesis can
             # shrink one discrepancy after coverage for the sweep is reported.
             shrinking = True
-            check()
+            sweep()
 
 
 def main() -> int:
