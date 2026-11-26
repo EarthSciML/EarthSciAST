@@ -1249,6 +1249,12 @@ mod prepare_impl {
             self.model_refresh_times()
         }
 
+        fn primed(&self) -> bool {
+            // The same condition under which `model_refresh_times` lists the
+            // primed instant.
+            self.time_varying && self.table.is_none()
+        }
+
         fn supports_selection(&self) -> bool {
             EsioProvider::supports_selection(self)
         }
@@ -2142,12 +2148,42 @@ impl EsioProvider {
         }
     }
 
-    /// EarthSciIO's anchors (Unix seconds) moved onto the model clock.
+    /// EarthSciIO's anchors (Unix seconds) moved onto the model clock, and,
+    /// for a time-varying source, the instant it is primed at (the start of
+    /// the run window, or the source's start): the record in effect there is
+    /// the one EarthSciIO primes with and answers "unchanged" for, so it is
+    /// an anchor of its own. Without it a window that starts between two
+    /// records has no anchor at or before its start, and a read at the start
+    /// (an `ic` right-hand side, esm-spec §11.4.2; the forcing at
+    /// construction) would take the declared default instead of the data.
     pub fn model_refresh_times(&self) -> Vec<f64> {
-        self.inner
+        let mut out: Vec<f64> = self
+            .inner
             .refresh_times()
             .into_iter()
             .map(|unix| unix - self.time_origin)
-            .collect()
+            .collect();
+        if self.time_varying && self.table.is_none() {
+            // On EarthSciIO's own clock (`unix_seconds`), so the primed
+            // instant equals a record anchor, and the model start, to the
+            // bit: the anchor is matched exactly.
+            let primed = esio_unix_seconds(self.prime) - self.time_origin;
+            if !out.iter().any(|x| x.to_bits() == primed.to_bits()) {
+                out.push(primed);
+                out.sort_by(f64::total_cmp);
+            }
+        }
+        out
+    }
+}
+
+/// The Unix seconds of `t` as EarthSciIO computes them for its anchors (its
+/// private `unix_seconds`): whole microseconds, then one correctly rounded
+/// division, so an instant EarthSciIO also reports lands on the same `f64`.
+fn esio_unix_seconds(t: OffsetDateTime) -> f64 {
+    let micros = t.unix_timestamp_nanos().div_euclid(1_000);
+    match i64::try_from(micros) {
+        Ok(m) if m.unsigned_abs() < (1 << 53) => m as f64 / 1e6,
+        _ => t.unix_timestamp() as f64 + f64::from(t.microsecond()) / 1e6,
     }
 }

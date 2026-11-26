@@ -147,6 +147,61 @@
    "p": {}
   },
   {
+   "id": "data_fed_discrete_primed_provider",
+   "fixture": "fixtures/ic_data_fed.esm",
+   "tspan": [
+    5.0,
+    9.0
+   ],
+   "providers": [
+    {
+     "key": "H.F",
+     "refresh_times": [
+      8.0
+     ],
+     "shape": [
+      2,
+      3
+     ],
+     "base": [
+      [
+       100.0,
+       200.0,
+       300.0
+      ],
+      [
+       500.0,
+       600.0,
+       700.0
+      ]
+     ],
+     "slope": 4.0,
+     "primed_at": 5.0
+    },
+    {
+     "key": "H.q",
+     "refresh_times": [
+      8.0
+     ],
+     "shape": [],
+     "base": 3.0,
+     "slope": 0.5,
+     "primed_at": 5.0
+    }
+   ],
+   "expected": {
+    "H.m[1,1]": 120.0,
+    "H.m[1,2]": 60.0,
+    "H.m[2,1]": 170.0,
+    "H.m[2,2]": 85.0,
+    "H.m[3,1]": 220.0,
+    "H.m[3,2]": 110.0,
+    "H.s": 27.5
+   },
+   "note": "As data_fed_discrete_at_start, through a provider primed at the start of the run window (primed_at = t0 = 5): one that holds the record in effect there before any refresh (its sample), lists t0 among its refresh times and answers 'unchanged' there, as EarthSciIO's providers do for a window that starts between two records. The ic still reads the data at t0, not the declared default (EarthSciIntegrator M3 gate: reseact's air mass m = dp started from the default surface pressure in Rust). A binding whose providers are sampled at a time rather than refreshed reads it at t0 as for the case above.",
+   "p": {}
+  },
+  {
    "id": "data_fed_discrete_sample_time_differs",
    "fixture": "fixtures/ic_data_fed.esm",
    "tspan": [

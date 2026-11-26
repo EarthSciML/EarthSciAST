@@ -1,0 +1,151 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "lanes_time_observed_ic",
+    "description": "A pointwise loss on a 6 x 5 x 4 grid scaled by a scalar observed that depends on t (w = 1 + sin(t)/2, the form of a data-fed time-interpolation weight), with an initial condition that reads that observed (A starts at 2 w). A lane program carries t per lane, so w is read per lane; the initial condition, which would read w as one scalar at the start, is no part of a lane program.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-25T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 6
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 5
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "Dep": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 1.0
+        },
+        "w": {
+          "type": "unknown",
+          "units": "1",
+          "description": "A scalar observed that depends on t."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "l"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ],
+              "j": [
+                1,
+                5
+              ],
+              "l": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        "k",
+                        "w"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "A",
+                    "i",
+                    "j",
+                    "l"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "w",
+          "rhs": {
+            "op": "+",
+            "args": [
+              1.0,
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  {
+                    "op": "sin",
+                    "args": [
+                      "t"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "A"
+            ]
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              2.0,
+              "w"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
