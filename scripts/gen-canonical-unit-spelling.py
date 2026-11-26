@@ -572,8 +572,8 @@ def write_ops_numbers_fixture(formal: Path, out_dir: Path) -> None:
                 "canonicalize_document rewrites the deprecated ops (esm-spec §4.2): neg with one "
                 "operand is unary -, pow with two is ^, a broadcast of neg with one operand maps "
                 "-, and a use with the wrong operand count, or inside a free-form object, is "
-                "left as written. A faq drops its default reduce \"+\" and semiring "
-                "\"sum_product\" (esm-spec §4.8.2), and keeps both when either is anything "
+                'left as written. A faq drops its default reduce "+" and semiring '
+                '"sum_product" (esm-spec §4.8.2), and keeps both when either is anything '
                 "else. Every number, free-form objects included, takes its canonical "
                 "form (CONFORMANCE §5.5.3.1): a decimal token is rounded to binary64, an integral "
                 "double in Int64 is an integer (2.0 is 2, 1.0000000000000001 is 1, "
