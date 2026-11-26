@@ -53,12 +53,13 @@ lake build
 python3 ../scripts/formal-audit.py all
 ```
 
-## Static scalar conformance
+## Static assertion conformance
 
-The Lean adapter reads the original ESM documents and evaluates scalar
-observations at the authored times and parameter overrides. To score it against
-the current inline-test goldens, run the shared harness from the repository
-root after `lake build`.
+The Lean adapter reads the original ESM documents and evaluates state-free
+scalar and array observations at the authored times and parameter overrides.
+It supports element names, named-axis `coords`, and the `min`, `max`, `mean`,
+and `integral` field reductions. To score it against the current inline-test
+goldens, run the shared harness from the repository root after `lake build`.
 
 ```bash
 EARTHSCI_INLINE_TESTS_ADAPTER_LEAN="python3 scripts/run-lean-inline-tests.py" \
@@ -68,7 +69,12 @@ EARTHSCI_INLINE_TESTS_ADAPTER_LEAN="python3 scripts/run-lean-inline-tests.py" \
 ```
 
 The report lists integrated state assertions and out-of-scope fixtures as
-exclusions. The `static-assertions` executable mode also accepts a JSON array
+exclusions. The same command can score `faq_pointwise_filter` by selecting its
+manifest. Run `python3 formal/scripts/test_static_array_assertions.py` for
+constant-gather values and faults, indexed observations, and the static array
+operation checks.
+
+The `static-assertions` executable mode also accepts a JSON array
 of `{test_id, assertion_idx}` requests on stdin and returns binary64 bit
 patterns in the same order. It reports unsupported precision or scaled angle
 units explicitly when a model declares Float32 or requires angle conversion.
@@ -218,9 +224,15 @@ to check byte equality and fixture-level fixed points against the shared
 code of each rejected fixture and exercises signed zero, overflow and literal
 division by zero.
 
-The RFC specifies a product's zero-annihilation result by the zero operand's
-kind and sign. This adapter reports `E_CANONICAL_UNSUPPORTED_EXPRESSION` if a
-product has several zero operands with incompatible kinds or signs. It leaves
-the ordering of same-valued, same-kind literals stable, including opposite
-signs of floating zero. Value fields are literal payloads and non-expression
-fields follow the canonical fixture suite's whitelist.
+For a product with literal zero factors, the adapter preserves the type and
+sign of the first zero in the flattened, recursively canonicalized argument
+list. The ordering of same-valued, same-kind literals is stable, including
+opposite signs of floating zero. Value fields are literal payloads, and the
+canonical fixture suite lists the supported non-expression fields.
+
+`Esm/Expr/Canonical.lean` proves that flattening, removing or retaining a
+typed identity, sorting, and zero annihilation preserve exact sums or products
+under their respective algebraic laws. The argument-list proofs cover
+flattening with normalized children and stable reordering with a retained
+identity. The binary64 model gives a counterexample to value preservation
+under reordering, also covered by `tests/differential/scalar/canonical_sum_order.esm`.

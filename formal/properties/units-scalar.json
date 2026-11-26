@@ -79,6 +79,30 @@
       "lean_statement": "∀ (condition : Esm.Units.ScalarCheck.Verdict) (c : Esm.Closed.Num) (cs : ℝ), 0 < cs → ∀ (yes no : Esm.Units.U × Esm.Closed.Num) (result : Esm.Units.U), Esm.Units.ScalarCheck.checkIfelse condition (.ok (some yes.1)) (.ok (some no.1)) = .ok (some result) → (if Esm.Expr.truthy (Esm.Units.ScalarCheck.scaleValue cs c) then Esm.Units.ScalarCheck.scaleValue yes.1.scale.real yes.2 else Esm.Units.ScalarCheck.scaleValue no.1.scale.real no.2) = Esm.Units.ScalarCheck.scaleValue result.scale.real (if Esm.Expr.truthy c then yes.2 else no.2)",
       "status": "proven",
       "theorem": "Esm.Units.ScalarCheck.checked_ifelse_scaling"
+    },
+    {
+      "id": "P-units-scalar-compositional-exact-rescaling",
+      "clauses": [
+        "spec.4.8.3.sum-operands-share-unit",
+        "spec.4.8.3.sqrt-not-transcendental",
+        "spec.4.8.3.comparison-operands-share-unit",
+        "spec.4.8.3.agreement-dimension-and-scale"
+      ],
+      "statement": "For a checked scalar tree of declared inputs, arithmetic, extrema, comparisons, or conditionals, evaluating after converting the inputs gives the exact evaluator's authored result converted by the inferred unit's scale.",
+      "lean_statement": "∀ (bindings : Esm.Units.ScalarCheck.ScalarBindings) (term : Esm.Units.ScalarCheck.ScalarTerm) (result : Esm.Units.U), term.check (Esm.Units.ScalarCheck.scalarUnits bindings) = .ok (some result) → ∃ value : Esm.Closed.Num, Esm.Expr.eval term.ast (Esm.Units.ScalarCheck.scalarInputs bindings) = .ok (.num value) ∧ Esm.Expr.eval term.ast (Esm.Units.ScalarCheck.canonicalInputs bindings) = .ok (.num (Esm.Units.ScalarCheck.scaleValue result.scale.real value))",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checked_scalar_rescaling"
+    },
+    {
+      "id": "P-units-scalar-bare-literal-needs-context",
+      "clauses": [
+        "spec.4.8.3.sum-operands-share-unit",
+        "spec.4.8.4.undeterminable-not-dimensionless"
+      ],
+      "statement": "For a scale other than one, converting the declared operand of x + 1 and leaving the bare literal unchanged cannot give the converted value of the authored sum.",
+      "lean_statement": "∀ (s x : ℝ), s ≠ 1 → Esm.Expr.eval (.node \"+\" [.var \"x\", .num 1 0]) [(\"x\", .num (Esm.Closed.Num.fin (s * x)))] ≠ .ok (.num (Esm.Closed.Num.fin (s * (x + 1))))",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.unscaled_literal_breaks_rescaling"
     }
   ]
 }

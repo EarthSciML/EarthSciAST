@@ -4,7 +4,7 @@ Build `formal/.lake/build/bin/esm-lean` with `lake build`, then run from the
 repository root in a Python environment with the binding and Hypothesis.
 
 ```sh
-python -m pip install ./pkg/earthsci-ast-py hypothesis==6.170.17
+python -m pip install './pkg/earthsci-ast-py[simulate]' hypothesis==6.170.17
 python scripts/difftest/scalar.py --seed 20261026 --cases 200
 ```
 
@@ -54,9 +54,11 @@ python scripts/difftest/scalar.py \
 
 A disagreement exits with status 1 and Hypothesis shrinks it to an ordinary ESM
 document at `conformance-results/scalar-difftest.esm` (or `--reproducer PATH`).
-Replay a document with `--fixture PATH`. CI uses `--observer` to finish the
-sweep, report disagreement counts, and upload a shrunk reproducer. Startup
-and protocol failures still fail the workflow.
+Replay a document with `--fixture PATH`. Formal CI runs 200 cases with seed
+`20261026` on changes to the model or any of the three numeric bindings. The
+nightly workflow runs 1,200 cases with its GitHub run ID as the seed, so a rerun
+uses the same cases. Both runs compare Lean with the native compilers of
+Python, Julia and Rust, fail on disagreement, and upload the shrunk reproducer.
 
 The 1,200-case sweep with seed 20261026 shrank one disagreement to
 `min(+0, -0)`. The model returned positive zero and Python returned negative

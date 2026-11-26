@@ -2,7 +2,7 @@ import Esm.Expr.Core
 import Esm.Units.Laws
 
 /-!
-# Unit preservation for scalar extrema and `ifelse` (esm-spec §4.8.3–4.8.4)
+# Unit preservation for scalar expressions (esm-spec §4.8.3–4.8.4)
 
 These rules consume the unit verdicts of their child expressions. A successful
 verdict can name a resolved unit or report an undeterminable one. Invalid
@@ -243,6 +243,343 @@ theorem checked_ifelse_scaling (condition : Verdict) (c : Num) (cs : ℝ) (hc : 
   rw [truthy_scaled cs hc, hy, hn]
   split_ifs <;> rfl
 
+/-! ## Compositional soundness for resolved scalar arithmetic
+
+This fragment uses the same numeric expression AST and evaluator as the
+conformance adapter. Its inputs carry their exact declared units. Inference
+here requires every subexpression to have a determinable unit. The neutral
+literal rule permits a broader set of expressions in a document, but does
+not assign a conversion scale to a bare number (§4.8.4–4.8.6).
+-/
+
+inductive Unary where
+  | neg | abs | sqrt
+
+def Unary.spelling : Unary → String
+  | .neg => "-"
+  | .abs => "abs"
+  | .sqrt => "sqrt"
+
+def Unary.op : Unary → StrictOp
+  | .neg => .sub
+  | .abs => .abs
+  | .sqrt => .sqrt
+
+def Unary.unit : Unary → U → U
+  | .sqrt, u => u.rpow (1 / 2)
+  | _, u => u
+
+inductive Binary where
+  | add | sub | mul | div | min | max | le | ge | lt | gt | eq | ne
+
+def Binary.spelling : Binary → String
+  | .add => "+"
+  | .sub => "-"
+  | .mul => "*"
+  | .div => "/"
+  | .min => "min"
+  | .max => "max"
+  | .le => "<="
+  | .ge => ">="
+  | .lt => "<"
+  | .gt => ">"
+  | .eq => "=="
+  | .ne => "!="
+
+def Binary.op : Binary → StrictOp
+  | .add => .add
+  | .sub => .sub
+  | .mul => .mul
+  | .div => .div
+  | .min => .min
+  | .max => .max
+  | .le => .le
+  | .ge => .ge
+  | .lt => .lt
+  | .gt => .gt
+  | .eq => .eq
+  | .ne => .ne
+
+def Binary.check (op : Binary) (left right : U) : Verdict :=
+  match op with
+  | .mul => .ok (some (left.mul right))
+  | .div => .ok (some (left.div right))
+  | .add | .sub | .min | .max => checkKnown [left, right]
+  | .le | .ge | .lt | .gt | .eq | .ne => (checkKnown [left, right]).map (fun _ => some .one)
+
+/-- A scalar expression over declared inputs and the operator forms handled by
+the exact unit rescaling theorem. Conditions can carry a unit of their own. -/
+inductive ScalarTerm where
+  | var (name : String)
+  | unary (op : Unary) (arg : ScalarTerm)
+  | binary (op : Binary) (left right : ScalarTerm)
+  | ifelse (condition yes no : ScalarTerm)
+
+def ScalarTerm.ast : ScalarTerm → Ast
+  | .var name => .var name
+  | .unary op arg => .node op.spelling [arg.ast]
+  | .binary op left right => .node op.spelling [left.ast, right.ast]
+  | .ifelse condition yes no => .node "ifelse" [condition.ast, yes.ast, no.ast]
+
+/-- The checker for the resolved fragment. An absent declaration yields an
+undeterminable unit and keeps the tree outside the rescaling guarantee. -/
+def ScalarTerm.check (units : List (String × U)) : ScalarTerm → Verdict
+  | .var name => .ok (units.lookup name)
+  | .unary op arg => (arg.check units).map (Option.map op.unit)
+  | .binary op left right => do
+    let leftUnit ← left.check units
+    let rightUnit ← right.check units
+    match leftUnit, rightUnit with
+    | some l, some r => op.check l r
+    | _, _ => .ok none
+  | .ifelse condition yes no => do
+    let conditionUnit ← condition.check units
+    let yesUnit ← yes.check units
+    let noUnit ← no.check units
+    match conditionUnit, yesUnit, noUnit with
+    | some c, some y, some n => checkIfelse (.ok (some c)) (.ok (some y)) (.ok (some n))
+    | _, _, _ => .ok none
+
+/-- Declarations pairing each unit with its authored numeric input. Both
+numeric environments use the same names and shadowing as the checker. -/
+abbrev ScalarBindings := List (String × (U × Num))
+
+def scalarUnits (bindings : ScalarBindings) : List (String × U) :=
+  bindings.map (fun entry => (entry.1, entry.2.1))
+
+def scalarInputs (bindings : ScalarBindings) : Env Num :=
+  bindings.map (fun entry => (entry.1, .num entry.2.2))
+
+noncomputable def canonicalInputs (bindings : ScalarBindings) : Env Num :=
+  bindings.map (fun entry => (entry.1, .num (scaleValue entry.2.1.scale.real entry.2.2)))
+
+private theorem lookup_map_value {α β : Type} (f : α → β)
+    (bindings : List (String × α)) (name : String) :
+    (bindings.map (fun entry => (entry.1, f entry.2))).lookup name =
+      (bindings.lookup name).map f := by
+  induction bindings with
+  | nil => rfl
+  | cons entry rest ih =>
+    obtain ⟨key, value⟩ := entry
+    simp only [List.map_cons, List.lookup, ih]
+    split <;> rfl
+
+private theorem scale_one (x : Num) : scaleValue U.one.scale.real x = x := by
+  cases x <;> simp [U.one, Scale.real_nil, scaleValue, Scalar.mul, Num.lift₂]
+
+private theorem compatible_scales {l r result : U}
+    (h : checkKnown [l, r] = .ok (some result)) :
+    l.scale.real = result.scale.real ∧ r.scale.real = result.scale.real := by
+  have ⟨hm, compatible⟩ := checkKnown_compatible _ _ h
+  exact ⟨Scale.real_congr _ _ (compatible l (by simp) result hm).1,
+    Scale.real_congr _ _ (compatible r (by simp) result hm).1⟩
+
+private theorem comparison_units {l r result : U}
+    (h : ((checkKnown [l, r]).map fun _ => some U.one) = .ok (some result)) :
+    result = U.one ∧ l.scale.real = r.scale.real := by
+  unfold checkKnown at h
+  split at h
+  · rename_i ok
+    have hr : U.one = result := by simpa [Except.map] using h
+    have compatible := of_decide_eq_true (List.all_eq_true.mp (List.all_eq_true.mp ok l (by simp))
+      r (by simp))
+    exact ⟨hr.symm, Scale.real_congr _ _ compatible.1⟩
+  · contradiction
+
+private theorem le_scale (s : ℝ) (hs : 0 < s) (x y : Num) :
+    Scalar.le (scaleValue s x) (scaleValue s y) = Scalar.le x y := by
+  change Num.le (scaleValue s x) (scaleValue s y) = Num.le x y
+  cases x <;> cases y <;> simp [scaleValue, Scalar.mul, Num.lift₂, Num.le, mul_le_mul_iff_right₀ hs]
+
+private theorem add_scale (s : ℝ) (x y : Num) :
+    Scalar.add (scaleValue s x) (scaleValue s y) = scaleValue s (Scalar.add x y) := by
+  cases x <;> cases y <;> simp [scaleValue, Scalar.add, Scalar.mul, Num.lift₂, mul_add]
+
+private theorem sub_scale (s : ℝ) (x y : Num) :
+    Scalar.sub (scaleValue s x) (scaleValue s y) = scaleValue s (Scalar.sub x y) := by
+  cases x <;> cases y <;> simp [scaleValue, Scalar.sub, Scalar.mul, Num.lift₂, mul_sub]
+
+private theorem mul_scale (s t : ℝ) (x y : Num) :
+    Scalar.mul (scaleValue s x) (scaleValue t y) = scaleValue (s * t) (Scalar.mul x y) := by
+  cases x <;> cases y <;> simp [scaleValue, Scalar.mul, Num.lift₂, mul_mul_mul_comm]
+
+private theorem div_scale (s t : ℝ) (ht : 0 < t) (x y : Num) :
+    Scalar.div (scaleValue s x) (scaleValue t y) = scaleValue (s / t) (Scalar.div x y) := by
+  cases x <;> cases y <;> simp only [scaleValue, Scalar.mul, Scalar.div, Num.lift₂, Num.div]
+  rename_i x y
+  by_cases h : y = 0
+  · simp [h]
+  · simp [h, ht.ne', div_mul_div_comm]
+
+private theorem unit_div_scale (u v : U) :
+    (u.div v).scale.real = u.scale.real / v.scale.real := by
+  simp [U.div, U.mul, U.inv, U.rpow, Scale.real_append, Scale.real_rpow, Real.rpow_neg_one,
+    div_eq_mul_inv]
+
+private theorem unary_scale (op : Unary) (u : U) (x : Num) :
+    applyStrict op.op [.num (scaleValue u.scale.real x)] =
+      (applyStrict op.op [.num x]).map (scaleValue (op.unit u).scale.real) := by
+  have hs := Scale.real_pos u.scale
+  cases op with
+  | neg =>
+    cases x <;> simp [Unary.op, Unary.unit, applyStrict, asNum, bind, Except.bind, pure,
+      Except.pure, Except.map, scaleValue, Scalar.mul, Num.lift₂, Elem.neg]
+  | abs =>
+    cases x <;> simp [Unary.op, Unary.unit, applyStrict, asNum, bind, Except.bind, pure,
+      Except.pure, Except.map, scaleValue, Scalar.mul, Num.lift₂, Elem.abs, abs_mul, abs_of_pos hs]
+  | sqrt =>
+    cases x with
+    | nan => rfl
+    | fin x =>
+      simp only [Unary.op, Unary.unit, applyStrict, asNum, bind, Except.bind, pure, Except.pure,
+        Except.map, scaleValue, Scalar.mul, Num.lift₂, Elem.sqrt]
+      have hneg : u.scale.real * x < 0 ↔ x < 0 := by
+        simpa using (mul_lt_mul_iff_right₀ hs : u.scale.real * x < u.scale.real * 0 ↔ x < 0)
+      by_cases hx : x < 0
+      · simp [hneg, hx]
+      · simp [hneg, hx, U.rpow, Scale.real_rpow, Real.sqrt_eq_rpow,
+          Real.mul_rpow hs.le (le_of_not_gt hx)]
+
+private theorem binary_scale (op : Binary) (l r result : U) (x y : Num)
+    (h : op.check l r = .ok (some result)) :
+    applyStrict op.op [.num (scaleValue l.scale.real x), .num (scaleValue r.scale.real y)] =
+      (applyStrict op.op [.num x, .num y]).map (scaleValue result.scale.real) := by
+  cases op with
+  | mul =>
+    cases h
+    simp [Binary.op, applyStrict, asNum, bind, Except.bind, pure, Except.pure, Except.map,
+      U.mul, Scale.real_append, mul_scale]
+  | div =>
+    cases h
+    simp [Binary.op, applyStrict, asNum, bind, Except.bind, pure, Except.pure, Except.map,
+      unit_div_scale, div_scale _ _ (Scale.real_pos r.scale)]
+  | add | sub | min | max =>
+    have ⟨hl, hr⟩ := compatible_scales h
+    simp [Binary.op, applyStrict, asNum, hl, hr, bind, Except.bind, pure, Except.pure,
+      Except.map, add_scale, sub_scale, fmin_scale _ (Scale.real_pos _), fmax_scale _ (Scale.real_pos _)]
+  | le | ge | lt | gt | eq | ne =>
+    have ⟨hu, hs⟩ := comparison_units h
+    simp [Binary.op, applyStrict, asNum, hs, bind, Except.bind, pure, Except.pure, Except.map,
+      hu, scale_one, le_scale _ (Scale.real_pos r.scale), lt_scale _ (Scale.real_pos r.scale)]
+
+private theorem unary_evaluates (op : Unary) (x : Num) :
+    ∃ value, applyStrict op.op [.num x] = .ok value := by
+  cases op <;> exact ⟨_, rfl⟩
+
+private theorem binary_evaluates (op : Binary) (x y : Num) :
+    ∃ value, applyStrict op.op [.num x, .num y] = .ok value := by
+  cases op <;> exact ⟨_, rfl⟩
+
+private theorem eval_strict_one (name : String) (op : StrictOp) (arg : Ast) (env : Env Num)
+    (dispatch : Op.ofString name = .strict op) (x : Num) (h : eval arg env = .ok (.num x)) :
+    eval (.node name [arg]) env = (applyStrict op [.num x]).map Val.num := by
+  simp [eval, evalList, dispatch, h, Val.arrayData, hasInf, bind, Except.bind,
+    pure, Except.pure, Except.map]
+  cases op <;> rfl
+
+private theorem eval_strict_two (name : String) (op : StrictOp) (left right : Ast) (env : Env Num)
+    (dispatch : Op.ofString name = .strict op) (x y : Num)
+    (hl : eval left env = .ok (.num x)) (hr : eval right env = .ok (.num y)) :
+    eval (.node name [left, right]) env = (applyStrict op [.num x, .num y]).map Val.num := by
+  simp [eval, evalList, dispatch, hl, hr, Val.arrayData, hasInf, bind, Except.bind,
+    pure, Except.pure, Except.map]
+  cases op <;> rfl
+
+/-- For any expression in the resolved scalar fragment, checking fixes the
+conversion scale of the result. Converting all of its declared inputs before
+evaluation gives exactly the canonical value of the authored computation. -/
+theorem checked_scalar_rescaling (bindings : ScalarBindings) (term : ScalarTerm) (result : U)
+    (checked : term.check (scalarUnits bindings) = .ok (some result)) :
+    ∃ value : Num, eval term.ast (scalarInputs bindings) = .ok (.num value) ∧
+      eval term.ast (canonicalInputs bindings) = .ok (.num (scaleValue result.scale.real value)) := by
+  induction term generalizing result with
+  | var name =>
+    simp only [ScalarTerm.check, scalarUnits, lookup_map_value, Except.ok.injEq] at checked
+    cases found : bindings.lookup name with
+    | none => simp [found] at checked
+    | some entry =>
+      obtain ⟨unit, value⟩ := entry
+      simp [found] at checked
+      subst result
+      refine ⟨value, ?_, ?_⟩
+      · simp only [ScalarTerm.ast, eval, scalarInputs]
+        rw [lookup_map_value (fun pair : U × Num => Val.num pair.2), found]
+        rfl
+      · simp only [ScalarTerm.ast, eval, canonicalInputs]
+        rw [lookup_map_value (fun pair : U × Num => Val.num (scaleValue pair.1.scale.real pair.2)),
+          found]
+        rfl
+  | unary op arg ih =>
+    cases h : arg.check (scalarUnits bindings) with
+    | error e => simp [ScalarTerm.check, h, Except.map] at checked
+    | ok child =>
+      cases child with
+      | none => simp [ScalarTerm.check, h, Except.map] at checked
+      | some unit =>
+        simp [ScalarTerm.check, h, Except.map] at checked
+        subst result
+        obtain ⟨x, hx, sx⟩ := ih unit h
+        obtain ⟨value, hv⟩ := unary_evaluates op x
+        have dispatch : Op.ofString op.spelling = .strict op.op := by cases op <;> rfl
+        refine ⟨value, ?_, ?_⟩
+        · rw [ScalarTerm.ast, eval_strict_one _ _ _ _ dispatch x hx, hv]
+          rfl
+        · rw [ScalarTerm.ast, eval_strict_one _ _ _ _ dispatch _ sx, unary_scale, hv]
+          rfl
+  | binary op left right il ir =>
+    cases hl : left.check (scalarUnits bindings) <;> cases hr : right.check (scalarUnits bindings) <;>
+      simp only [ScalarTerm.check, hl, hr, bind, Except.bind] at checked <;> try contradiction
+    rename_i l r
+    cases l <;> cases r <;> simp at checked
+    rename_i lu ru
+    obtain ⟨x, hx, sx⟩ := il lu hl
+    obtain ⟨y, hy, sy⟩ := ir ru hr
+    obtain ⟨value, hv⟩ := binary_evaluates op x y
+    have dispatch : Op.ofString op.spelling = .strict op.op := by cases op <;> rfl
+    refine ⟨value, ?_, ?_⟩
+    · rw [ScalarTerm.ast, eval_strict_two _ _ _ _ _ dispatch x y hx hy, hv]
+      rfl
+    · rw [ScalarTerm.ast, eval_strict_two _ _ _ _ _ dispatch _ _ sx sy,
+        binary_scale op lu ru result x y checked, hv]
+      rfl
+  | ifelse condition yes no ic iy ino =>
+    cases hc : condition.check (scalarUnits bindings) <;> cases hy : yes.check (scalarUnits bindings) <;>
+      cases hn : no.check (scalarUnits bindings) <;>
+      simp only [ScalarTerm.check, hc, hy, hn, bind, Except.bind] at checked <;> try contradiction
+    rename_i c y n
+    cases c <;> cases y <;> cases n <;> simp at checked
+    rename_i cu yu nu
+    change checkKnown [yu, nu] = .ok (some result) at checked
+    obtain ⟨sc, sy⟩ := compatible_scales checked
+    obtain ⟨cond, hcond, scond⟩ := ic cu hc
+    obtain ⟨yv, hyv, syv⟩ := iy yu hy
+    obtain ⟨nv, hnv, snv⟩ := ino nu hn
+    refine ⟨if truthy cond then yv else nv, ?_, ?_⟩
+    · by_cases truth : truthy cond = true <;>
+        simp [ScalarTerm.ast, eval, Op.ofString, evalIfelse, hcond, hyv, hnv, asNum,
+          bind, Except.bind, truth]
+    · by_cases truth : truthy cond = true <;>
+        simp [ScalarTerm.ast, eval, Op.ofString, evalIfelse, scond, syv, snv, asNum,
+          bind, Except.bind, truthy_scaled _ (Scale.real_pos _), sc, sy, truth]
+
+/-! A bare additive literal can pass dimensional checking without specifying
+how that literal must change when the surrounding expression is converted. -/
+
+theorem unscaled_literal_breaks_rescaling (s x : ℝ) (h : s ≠ 1) :
+    eval (.node "+" [.var "x", .num 1 0]) [("x", .num (Num.fin (s * x)))] ≠
+      .ok (.num (Num.fin (s * (x + 1)))) := by
+  let env : Env Num := [("x", .num (.fin (s * x)))]
+  have hv : eval (.var "x") env = .ok (.num (.fin (s * x))) := by
+    simp [eval, env]
+  have hn : eval (.num 1 0) env = .ok (.num (.fin 1)) := by
+    simp [eval, Lits.ofDec]
+  change eval (.node "+" [.var "x", .num 1 0]) env ≠ _
+  rw [eval_strict_two "+" .add _ _ env rfl _ _ hv hn]
+  simp [applyStrict, asNum, bind, Except.bind, pure, Except.pure, Except.map, Scalar.add, Num.lift₂]
+  intro eq
+  apply h
+  linarith only [eq, mul_add s x 1]
+
 /-! Checker controls. These compute the verdicts with the exact scale comparison. -/
 
 example :
@@ -258,6 +595,14 @@ example :
 example :
     (match checkIfelse (.ok none) (.ok (some (.base .rad))) (.ok (some .one)) with
     | .ok (some u) => decide (u.dim = 0)
+    | _ => false) = true := by decide +kernel
+
+example :
+    (match (.ifelse (.binary .lt (.var "x") (.var "y"))
+        (.unary .abs (.var "x")) (.binary .sub (.var "y") (.var "x")) : ScalarTerm).check
+        [("x", (U.base .m).mul (.ofScale [(.pi, 1)])),
+          ("y", (U.base .m).mul (.ofScale [(.pi, 1)]))] with
+    | .ok (some u) => decide (u.Agree ((U.base .m).mul (.ofScale [(.pi, 1)])))
     | _ => false) = true := by decide +kernel
 
 end Esm.Units.ScalarCheck

@@ -1,0 +1,20 @@
+{
+  "properties": [
+    {
+      "id": "P-faq-empty-contraction-range",
+      "clauses": ["conf.5.6.3.empty-reduction-registry-identity"],
+      "statement": "If the outer contracted range is empty, the query's fold preserves its seeded identity without inspecting the body or any inner bound.",
+      "lean_statement": "∀ {α : Type} [Esm.Expr.Lits α] (reverse : Bool) (step : Esm.Expr.Val α → Esm.Expr.Env α → Except Esm.Expr.EvalError (Esm.Expr.Val α)) (name : String) (bounds : Esm.Expr.Env α → Except Esm.Expr.EvalError (List Int)) (rest : List (Esm.Expr.FaqRange α)) (env : Esm.Expr.Env α) (identity : Esm.Expr.Val α), bounds env = .ok [] → Esm.Expr.faqFold reverse step ((name, bounds) :: rest) env identity = .ok identity",
+      "status": "proven",
+      "theorem": "Esm.Expr.faqFold_empty_range"
+    },
+    {
+      "id": "P-faq-reverse-window-fold",
+      "clauses": ["spec.4.3.1.scan-direction-without-accumulator"],
+      "statement": "A reverse window with one contracted axis visits its declared indices from highest to lowest, applying the cell's fold step sequentially without reassociating it.",
+      "lean_statement": "∀ {α : Type} [Esm.Expr.Lits α] (step : Esm.Expr.Val α → Esm.Expr.Env α → Except Esm.Expr.EvalError (Esm.Expr.Val α)) (name : String) (bounds : Esm.Expr.Env α → Except Esm.Expr.EvalError (List Int)) (env : Esm.Expr.Env α) (identity : Esm.Expr.Val α) (values : List Int), bounds env = .ok values → Esm.Expr.faqFold true step [(name, bounds)] env identity = (values.mergeSort (fun a b => decide (b ≤ a))).foldlM (fun acc i => step acc ((name, .num (Esm.Expr.Lits.ofDec i 0)) :: env)) identity",
+      "status": "proven",
+      "theorem": "Esm.Expr.faqFold_reverse"
+    }
+  ]
+}

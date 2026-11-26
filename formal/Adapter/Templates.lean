@@ -93,6 +93,11 @@ partial def astOf (j : Json) : Except String Ast := do
       (if op == "const" then ["op", "args", "value", "units"]
       else if op == "apply_operator" || op == "apply_expression_template" then ["op", "args", "name", "bindings"]
       else if op == "faq" then ["op", "args", "output_idx", "reduce", "semiring", "ranges", "expr", "filter"]
+      else if op == "reshape" then ["op", "args", "shape"]
+      else if op == "transpose" then ["op", "args", "perm"]
+      else if op == "concat" then ["op", "args", "axis"]
+      else if op == "broadcast" then ["op", "args", "fn"]
+      else if op == "makearray" then ["op", "args", "regions", "values"]
       else ["op", "args"])
     for f in fields do
       unless allowed.contains f do throw s!"{op} node field {f} is outside the modelled slice"
@@ -106,9 +111,39 @@ partial def astOf (j : Json) : Except String Ast := do
       let binds ← bs.toArray.toList.foldrM (fun (k, v) acc => do
         return Binds.cons k (← astOf v) acc) Binds.nil
       return .apply (← j.getObjValAs? String "name") binds
+    else if op == "reshape" then
+      let dims ← (← (← j.getObjVal? "shape").getArr?).toList.mapM fun d =>
+        match d with
+        | .str name => pure (Sum.inr name)
+        | _ => Sum.inl <$> d.getNat?
+      return .array (.reshape dims) args
+    else if op == "transpose" then
+      let perm ← match j.getObjVal? "perm" with
+        | .error _ => pure none
+        | .ok p => some <$> (← p.getArr?).toList.mapM (·.getNat?)
+      return .array (.transpose perm) args
+    else if op == "concat" then
+      return .array (.concat (← j.getObjValAs? Nat "axis")) args
+    else if op == "broadcast" then
+      let fn ← (j.getObjValAs? String "fn").mapError (fun _ => "invalid_broadcast_fn")
+      unless broadcastArity fn args.length do throw "invalid_broadcast_fn"
+      return .array (.broadcast fn) args
+    else if op == "makearray" then
+      let regions ← (← (← j.getObjVal? "regions").getArr?).toList.mapM fun r => do
+        (← r.getArr?).toList.mapM fun b => do
+          let #[lo, hi] ← b.getArr? | throw "makearray bound is not a pair"
+          return (← lo.getInt?, ← hi.getInt?)
+      if regions.any ArrayData.invertedRegion then throw "makearray_region_inverted"
+      let values ← (← (← j.getObjVal? "values").getArr?).toList.mapM astOf
+      return .array (.makearray regions) values
     else if op == "faq" then
       let out ← match j.getObjVal? "output_idx" with
-        | .ok (.arr a) => a.toList.mapM (fun o => o.getStr?)
+        | .ok (.arr a) => a.toList.mapM fun o =>
+          match o with
+          | .str sym => pure (OutputIndex.symbol sym)
+          | _ => match o.getNat? with
+            | .ok 1 => pure OutputIndex.singleton
+            | _ => throw "faq output index is neither a symbol nor a singleton"
         | _ => pure []
       let semiring ← match j.getObjVal? "semiring" with
         | .ok field => some <$> field.getStr?

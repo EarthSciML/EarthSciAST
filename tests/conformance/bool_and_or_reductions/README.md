@@ -19,7 +19,7 @@ Before this tier the four evaluators disagreed: Julia rejected every
 kinds; Rust's native compiler refused both; Python's interpreter ran both and its
 native refused a filtered scalar one.
 
-## The fixture
+## Fixtures
 
 `fixtures/scalar_bool_and_or.esm`: `u` decays from five distinct values, so
 `any_hot` (one contracted index) and `spread` (two, with a filter excluding the
@@ -27,6 +27,12 @@ diagonal) are 1 at t = 0 and 0 at t = 1, and `never` is 0 throughout. Every
 binding runs it under `interpreter` and `native`; the golden is the Julia
 interpreter's.
 
+`fixtures/static_bool_and_or.esm` evaluates a negative admitted term, a
+nonempty reduction over zeros, and an empty range. A parameter override
+excludes every term of the first reduction. Lean scores these static
+assertions alongside the binding checks.
+
 ## Named exclusions
 
-None.
+Lean excludes `scalar_bool_and_or` because its observations depend on
+an integrated state trajectory.

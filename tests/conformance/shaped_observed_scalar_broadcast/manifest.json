@@ -148,7 +148,11 @@
           "expected": 1.5
         }
       ],
-      "golden": "golden/scalar_rhs_broadcast.json"
+      "golden": "golden/scalar_rhs_broadcast.json",
+      "lean_assertion_exclusions": {
+        "state_folded": "The selected branch reads an integrated state.",
+        "u": "An integrated state requires a trajectory."
+      }
     }
   ]
 }

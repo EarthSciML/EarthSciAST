@@ -640,6 +640,9 @@ lexicographically:
    no extraneous whitespace).
 
 The output argument list is stable, total, and deterministic.
+This ordering compares expression structure. An IEEE binary64 left fold can
+evaluate the reordered expression differently. For example, the authored
+order `+(2^54, -2^54, 1)` gives `1`, while `+(-2^54, 1, 2^54)` gives `0`.
 
 #### 5.4.3 N-ary flattening
 
@@ -673,6 +676,10 @@ elimination would effectively demote the type and is forbidden).
 Zero-annihilation `*(0, ...) → 0` **preserves the numeric type of the
 zero**: `*(0.0, x) → 0.0`, `*(0, x) → 0`. Signed zero is preserved:
 `*(-0.0, x) → -0.0` (see §5.4.6 for NaN/Inf/signed-zero handling).
+Canonicalize the children first, flatten the product, and take the first
+literal zero in left-to-right order before sorting its factors. For example,
+`*(0, -0.0)` emits `0` and `*(-0.0, 0)` emits `-0.0`. Permuting zeros of
+different types or signs can therefore change the canonical bytes.
 
 #### 5.4.5 String-vs-number in variable references
 

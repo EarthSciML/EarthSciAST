@@ -168,7 +168,12 @@
           "expected": 7.5
         }
       ],
-      "golden": "golden/observed_indexed_lhs.json"
+      "golden": "golden/observed_indexed_lhs.json",
+      "lean_assertion_exclusions": {
+        "ws": "The observed depends on an integrated state.",
+        "u": "An integrated state requires a trajectory.",
+        "v": "An integrated state requires a trajectory."
+      }
     },
     {
       "id": "observed_bare_index_lhs",
@@ -289,7 +294,13 @@
           "expected": 7.5
         }
       ],
-      "golden": "golden/observed_bare_index_lhs.json"
+      "golden": "golden/observed_bare_index_lhs.json",
+      "lean_assertion_exclusions": {
+        "wbs": "The observed depends on an integrated state.",
+        "z": "An integrated state requires a trajectory.",
+        "u": "An integrated state requires a trajectory.",
+        "v": "An integrated state requires a trajectory."
+      }
     }
   ],
   "refusals": [

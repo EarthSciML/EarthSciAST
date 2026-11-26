@@ -1,0 +1,82 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "Static Boolean reductions",
+    "description": "Scalar Boolean reductions over a finite box, a filter, and an empty range. The admitted negative term is true, and overriding cutoff excludes it.",
+    "authors": ["EarthSciML Authors and Contributors"],
+    "license": "MIT"
+  },
+  "models": {
+    "StaticBooleanReduction": {
+      "variables": {
+        "cutoff": {"type": "parameter", "units": "1", "default": 1},
+        "has_negative": {"type": "unknown", "units": "1"},
+        "all_zero": {"type": "unknown", "units": "1"},
+        "empty": {"type": "unknown", "units": "1"},
+        "probe": {"type": "unknown", "units": "s", "default": 0}
+      },
+      "equations": [
+        {
+          "lhs": "has_negative",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {"i": [1, 3], "j": [1, 3]},
+            "semiring": "bool_and_or",
+            "filter": {
+              "op": "and",
+              "args": [
+                {"op": ">", "args": ["i", "cutoff"]},
+                {"op": "<", "args": ["i", "j"]}
+              ]
+            },
+            "expr": {"op": "-", "args": ["i", "j"]}
+          }
+        },
+        {
+          "lhs": "all_zero",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {"i": [1, 3]},
+            "semiring": "bool_and_or",
+            "expr": {"op": "-", "args": ["i", "i"]}
+          }
+        },
+        {
+          "lhs": "empty",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {"i": [1, 0]},
+            "semiring": "bool_and_or",
+            "expr": "i"
+          }
+        },
+        {"lhs": {"op": "D", "args": ["probe"], "wrt": "t"}, "rhs": "has_negative"}
+      ],
+      "tests": [
+        {
+          "id": "default_cutoff",
+          "time_span": {"start": 0, "end": 1},
+          "tolerance": {"rel": 0, "abs": 0},
+          "assertions": [
+            {"variable": "has_negative", "time": 0, "expected": 1},
+            {"variable": "all_zero", "time": 0, "expected": 0},
+            {"variable": "empty", "time": 0, "expected": 0}
+          ]
+        },
+        {
+          "id": "all_terms_excluded",
+          "parameter_overrides": {"cutoff": 2},
+          "time_span": {"start": 0, "end": 1},
+          "tolerance": {"rel": 0, "abs": 0},
+          "assertions": [{"variable": "has_negative", "time": 0, "expected": 0}]
+        }
+      ]
+    }
+  }
+}

@@ -8,12 +8,11 @@ import Mathlib.Tactic.NormNum
 /-!
 # Exact FAQ semiring operations and laws
 
-The nominal carrier of the `max_product` row omits its specified empty
-sentinel. The exact algebra adjoins that sentinel to the nonnegative reals,
-and its product with any term is again the sentinel (the semiring zero law).
-This construction documents the distinction between the carrier of admitted
-finite terms and that of the reduction. Q-114 records the unresolved format
-policy for a negative term, and for reusing the sentinel in a product.
+The exact `max_product` algebra adjoins a bottom to the nonnegative reals.
+The product of the bottom with any term is again the bottom (the semiring
+zero law). In document evaluation, `max_product` selects the maximum
+reduction with empty result `−∞`, and authored multiplication uses the
+ordinary numeric operations, as specified in CONFORMANCE_SPEC §5.6.1.
 -/
 
 namespace Esm.Semiring
@@ -56,6 +55,9 @@ noncomputable def maxProductMul : MaxProduct → MaxProduct → MaxProduct
   | (a : ℝ≥0), (b : ℝ≥0) => ↑(a * b)
   | _, _ => ⊥
 
+theorem maxProductMul_finite (a b : ℝ≥0) :
+    maxProductMul (↑a) (↑b) = ↑(a * b) := rfl
+
 /-- The exact carrier of each row, including its empty-reduction value. -/
 abbrev Carrier : Name → Type
   | .sumProduct => ℝ
@@ -82,7 +84,7 @@ private theorem maxProductMul_comm (a b : MaxProduct) :
 private theorem one_maxProductMul (a : MaxProduct) : maxProductMul ↑(1 : ℝ≥0) a = a := by
   cases a <;> simp only [maxProductMul, one_mul] <;> rfl
 
-private theorem bot_maxProductMul (a : MaxProduct) : maxProductMul ⊥ a = ⊥ := by
+theorem bot_maxProductMul (a : MaxProduct) : maxProductMul ⊥ a = ⊥ := by
   cases a <;> rfl
 
 private theorem maxProductMul_monotone (a : MaxProduct) : Monotone (maxProductMul a) := by

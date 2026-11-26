@@ -1,0 +1,37 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "ScalarProbe",
+    "description": "Reordering the same finite terms in a binary64 left fold changes its value."
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "authored": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Sum in authored argument order"
+        },
+        "canonical": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Sum in RFC section 5.4.2 argument order"
+        }
+      },
+      "equations": [
+        {"lhs": "authored", "rhs": {"op": "+", "args": [18014398509481984, -18014398509481984, 1]}},
+        {"lhs": "canonical", "rhs": {"op": "+", "args": [-18014398509481984, 1, 18014398509481984]}}
+      ],
+      "tests": [
+        {
+          "id": "probe",
+          "time_span": {"start": 0, "end": 1},
+          "assertions": [
+            {"variable": "authored", "time": 0, "expected": 1},
+            {"variable": "canonical", "time": 0, "expected": 0}
+          ]
+        }
+      ]
+    }
+  }
+}
