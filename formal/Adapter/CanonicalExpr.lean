@@ -1,6 +1,8 @@
-import Adapter.Doc
+import Lean.Data.Json
+import Adapter.Decimal
 import Adapter.JsonString
 import Esm.Expr.Canonical
+import Esm.Units.Canonical
 
 /-! The discretization RFC §5.4 `canonical_json` expression format. Its typed
 float tokens, signed zeros and algebraic rewrites are specific to this API.
