@@ -290,6 +290,15 @@ theorem good_nameToks (c : Ctx) (hc : c.sf = .typst) (s : String) :
     exact good_sepBy_names _ (by simpa using splitDots_ne s.toList)
       (fun x hx => by obtain ⟨g, -, rfl⟩ := List.mem_map.1 hx; exact good_segToks g)
 
+theorem good_setToks (c : Ctx) (hc : c.sf = .typst) (s : String) :
+    Good (setToks c s) ∧ Nice (setToks c s) ∧ LastCall (setToks c s) := by
+  unfold setToks
+  split
+  · have hu : tokOK (.ups [(s, "")]) := ⟨(by simp), fun p hp => by simp at hp; subst hp; left; rfl⟩
+    exact ⟨good_single hu, nice_cons _ (by simp) rfl, (by simp),
+      fun t ht => by simp at ht; subst ht; exact callEnd_ups _ hu⟩
+  · exact good_nameToks c hc s
+
 /-! ## Printer pieces -/
 
 theorem nice_of_head {c : Ctx} {ts : List Tok} (h : HeadOK c ts) : Nice ts ∧ ts ≠ [] := by
@@ -518,10 +527,10 @@ theorem good_faqOut (c : Ctx) (hc : c.sf = .typst) (F : FaqForm) (P : Json → O
         (nice_cons _ (by simp) rfl)) (nice_append _ hN2 hN3.1)
       exact ⟨good_append hA1 hT (nice_cons _ (by simp) rfl), nice_append _ hA2 hA3⟩
     · rename_i s _
-      obtain ⟨hS1, hS2, -⟩ := good_nameToks c hc s
+      obtain ⟨hS1, hS2, -⟩ := good_setToks c hc s
       exact ⟨good_append hN1 (good_cons rfl hS1 hS2) (nice_cons _ (by simp) rfl), nice_append _ hN2 hN3.1⟩
     · rename_i s ps _
-      obtain ⟨hS1, hS2, hS3⟩ := good_nameToks c hc s
+      obtain ⟨hS1, hS2, hS3⟩ := good_setToks c hc s
       have hL := good_sepBy .comma rfl (by simp) (ps.map fun (p : Json) => match p with
           | .str q => nameToks c q | _ => []) (fun y hy => by
         obtain ⟨p, -, rfl⟩ := List.mem_map.1 hy
@@ -536,7 +545,7 @@ theorem good_faqOut (c : Ctx) (hc : c.sf = .typst) (F : FaqForm) (P : Json → O
           | .str q => nameToks c q | _ => []) = []
         · rw [he]; exact nice_cons _ (by simp) rfl
         · exact nice_append _ hL.2 he
-      have hT : Good (nameToks c s ++ .kw .lp :: (sepBy [.kw .comma] (ps.map fun (p : Json) => match p with
+      have hT : Good (setToks c s ++ .kw .lp :: (sepBy [.kw .comma] (ps.map fun (p : Json) => match p with
           | .str q => nameToks c q | _ => []) ++ [.kw .rp])) := good_append_lp hS1 hS3 hR.1 hR.2
       simp only [List.cons_append, List.append_assoc] at hT ⊢
       refine ⟨good_append hN1 ?_ (nice_cons _ (by simp) rfl), nice_append _ hN2 hN3.1⟩

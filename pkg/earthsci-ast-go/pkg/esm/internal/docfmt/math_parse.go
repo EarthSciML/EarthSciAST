@@ -1864,6 +1864,18 @@ func psPEulerExp(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 	return prNode("exp", []Json{y}), r, true
 }
 
+// psPSet is `Math.pSet`: an index set's name: a name, or in Typst one upright
+// word.
+func psPSet(sf Sf, ts []Tok) (string, []Tok, bool) {
+	if s, r, ok := psPName(sf, ts); ok {
+		return s, r, true
+	}
+	if sf == SfTypst && len(ts) > 0 && ts[0].K == TUps && len(ts[0].Ups) == 1 && ts[0].Ups[0].B == "" {
+		return ts[0].Ups[0].A, ts[1:], true
+	}
+	return "", nil, false
+}
+
 // psPRange is `Math.pRange`: a range row: `k \in S`, `k \in S(i, j)`,
 // `a \le k \le b`.
 func psPRange(c Ctx, f int, ts []Tok) (Row, []Tok, bool) {
@@ -1876,7 +1888,7 @@ func psPRange(c Ctx, f int, ts []Tok) (Row, []Tok, bool) {
 		return Row{}, nil, false
 	}
 	if k, isStr := x.(string); isStr && at(r, 0, KwInn) {
-		s, r2, ok := psPName(c.sf, r[1:])
+		s, r2, ok := psPSet(c.sf, r[1:])
 		if !ok {
 			return Row{}, nil, false
 		}

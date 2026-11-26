@@ -1058,6 +1058,18 @@ function faq_ok(f::FaqForm)
     end
 end
 
+"""`Math.upSet`: an index set's name prints upright in a Typst range row when it
+would otherwise print `italic("…")`."""
+function up_set(sf::Sf, s::AbstractString)
+    g = collect(Char, s)
+    return sf == SF_TYPST && !('.' in g) && !is_single(g) && sub_parts(g) === nothing &&
+        !is_formula(g)
+end
+
+"""`Math.setToks`: the tokens of an index set's name in a range row."""
+set_toks(c::Ctx, s::AbstractString) =
+    up_set(c.sf, s) ? Tok[TUps([(String(s), "")])] : name_toks(c, s)
+
 """`Math.rowToks`: a range row: `a \\le k \\le b`, `k \\in S`, `k \\in S(i, j)`."""
 function row_toks(c::Ctx, k::AbstractString, v)
     if v isa JArr && length(v.xs) == 2
@@ -1065,11 +1077,11 @@ function row_toks(c::Ctx, k::AbstractString, v)
     elseif v isa JObj
         kvs = v.kvs
         if length(kvs) == 1 && kvs[1].first == "from" && kvs[1].second isa String
-            return tc(name_toks(c, k), (kw(KInn),), name_toks(c, kvs[1].second))
+            return tc(name_toks(c, k), (kw(KInn),), set_toks(c, kvs[1].second))
         elseif length(kvs) == 2 && kvs[1].first == "from" && kvs[1].second isa String &&
                 kvs[2].first == "of" && kvs[2].second isa JArr
             return tc(
-                name_toks(c, k), (kw(KInn),), name_toks(c, kvs[1].second), (kw(KLp),),
+                name_toks(c, k), (kw(KInn),), set_toks(c, kvs[1].second), (kw(KLp),),
                 sep_by(
                     (kw(KComma),),
                     [p isa String ? name_toks(c, p) : Tok[] for p in kvs[2].second.xs]

@@ -114,9 +114,24 @@ theorem of_strs : ∀ (ps : List Json), ps.all (fun p => match p with | .str q =
   | .null :: _, h | .bool _ :: _, h | .num _ :: _, h | .arr _ :: _, h | .obj _ :: _, h
   | .math _ :: _, h => by simp at h
 
+/-- **Set names read back.** An upright set name is no name (it is no formula), so it
+reads as the word it spells. -/
+theorem pSet_setToks (c : Ctx) (s : String) (hs : nameOK s = true) (R : List Tok)
+    (hR : NameStop c.sf R) : pSet c.sf (setToks c s ++ R) = some (s, R) := by
+  unfold setToks
+  split
+  · rename_i h
+    simp only [upSet, Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at h
+    obtain ⟨⟨⟨⟨hsf, -⟩, -⟩, -⟩, hf⟩ := h
+    have hn : pName c.sf (.ups [(s, "")] :: R) = none := by
+      simp [pName, pSeg, formulaOf, hsf, hf]
+    rw [hsf] at hn
+    simp only [List.cons_append, List.nil_append, pSet, hsf, hn]
+  · simp only [pSet, pName_nameToks c s hs R hR]
+
 theorem rowToks_fromOf (c : Ctx) (P : Json → Out) (k s : String) (qs : List String) :
     rowToks c P (k, .obj [("from", .str s), ("of", .arr (qs.map .str))]) =
-      nameToks c k ++ .kw .inn :: nameToks c s ++ .kw .lp :: (sepBy [.kw .comma] (qs.map (nameToks c)) ++ [.kw .rp]) := by
+      nameToks c k ++ .kw .inn :: setToks c s ++ .kw .lp :: (sepBy [.kw .comma] (qs.map (nameToks c)) ++ [.kw .rp]) := by
   simp [rowToks, List.map_map, Function.comp_def]
 
 /-- A printed range row reads back as that range. -/
@@ -151,18 +166,18 @@ theorem pRow_range (c : Ctx) (P : Json → Out) (k : String) (v : Json) (hk : na
     rw [hK (g + 3) (by unfold need; omega)]; simp only
     rw [hB]
   · rename_i s
-    have ht : rowToks c P (k, .obj [("from", .str s)]) = nameToks c k ++ .kw .inn :: nameToks c s := by
+    have ht : rowToks c P (k, .obj [("from", .str s)]) = nameToks c k ++ .kw .inn :: setToks c s := by
       simp [rowToks]
     rw [ht] at hf ⊢
     simp only [List.length_append, List.length_cons] at hf
     simp only [List.append_assoc, List.cons_append]
     have hK := fun n (hn : need 4 (nameToks c k).length ≤ n) =>
-      pAdd_name c k hk (.kw .inn :: (nameToks c s ++ .kw E :: R)) (fol4_kw _ .inn (Or.inr (Or.inl rfl)) _) n hn
+      pAdd_name c k hk (.kw .inn :: (setToks c s ++ .kw E :: R)) (fol4_kw _ .inn (Or.inr (Or.inl rfl)) _) n hn
     have hor := pOr_noncmp c g _ _ (.str k) .inn (hK (g + 1) (by unfold need; omega)) rfl (by decide) (by decide)
     rw [pRow, hor]; simp only [hin, Bool.false_eq_true, ↓reduceIte]
     rw [pRange, hK (g + 3) (by unfold need; omega)]
     simp only
-    rw [pName_nameToks c s hv _ (endTok_stop hE R)]
+    rw [pSet_setToks c s hv _ (endTok_stop hE R)]
     split
     · rename_i heq; simp only [Option.some.injEq, Prod.mk.injEq, List.cons.injEq, Tok.kw.injEq] at heq
       exact absurd heq.2.1 (endTok_ne_lp hE)
@@ -178,13 +193,13 @@ theorem pRow_range (c : Ctx) (P : Json → Out) (k : String) (v : Json) (hk : na
     simp only [List.length_append, List.length_cons] at hf
     simp only [List.append_assoc, List.cons_append, List.nil_append]
     have hK := fun n (hn : need 4 (nameToks c k).length ≤ n) =>
-      pAdd_name c k hk (.kw .inn :: (nameToks c s ++ .kw .lp :: (sepBy [.kw .comma] (qs.map (nameToks c)) ++
+      pAdd_name c k hk (.kw .inn :: (setToks c s ++ .kw .lp :: (sepBy [.kw .comma] (qs.map (nameToks c)) ++
         .kw .rp :: .kw E :: R))) (fol4_kw _ .inn (Or.inr (Or.inl rfl)) _) n hn
     have hor := pOr_noncmp c g _ _ (.str k) .inn (hK (g + 1) (by unfold need; omega)) rfl (by decide) (by decide)
     rw [pRow, hor]; simp only [hin, Bool.false_eq_true, ↓reduceIte]
     rw [pRange, hK (g + 3) (by unfold need; omega)]
     simp only
-    rw [pName_nameToks c s hs _ (nameStop_kw c.sf .lp (by decide) (by decide) _)]
+    rw [pSet_setToks c s hs _ (nameStop_kw c.sf .lp (by decide) (by decide) _)]
     simp only
     have hlen := length_le_sepBy [.kw .comma] (by simp) (qs.map (nameToks c)) (by
       intro x hx; obtain ⟨q, _, rfl⟩ := List.mem_map.1 hx

@@ -968,13 +968,23 @@ def pEulerExp (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
     | some (y, r') => some (node "exp" [y], r')
     | none => none
 
+/-- An index set's name: a name, or in Typst one upright word (`upright("lev")`, see
+`upSet`). -/
+def pSet (sf : Sf) (ts : List Tok) : Option (String × List Tok) :=
+  match pName sf ts with
+  | some p => some p
+  | none =>
+    match sf, ts with
+    | .typst, .ups [(s, "")] :: r => some (s, r)
+    | _, _ => none
+
 /-- A range row: `k \in S`, `k \in S(i, j)`, `a \le k \le b`. -/
 def pRange (c : Ctx) : Nat → List Tok → Option (Row × List Tok)
   | 0, _ => none
   | f + 1, ts =>
     match pAdd c f ts with
     | some (.str k, .kw .inn :: r) =>
-      match pName c.sf r with
+      match pSet c.sf r with
       | some (s, .kw .lp :: r2) =>
         match pNames c.sf (r2.length + 1) r2 with
         | some (ps, .kw .rp :: r3) => some (.rng k (.obj [("from", .str s), ("of", .arr (ps.map .str))]), r3)

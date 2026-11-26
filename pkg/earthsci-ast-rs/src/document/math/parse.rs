@@ -1779,11 +1779,24 @@ pub fn p_euler_exp<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
     Some((node("exp", vec![y]), r))
 }
 
+/// `Math.pSet`: an index set's name: a name, or in Typst one upright word.
+pub fn p_set(sf: Sf, ts: &[Tok]) -> P<'_, String> {
+    if let Some(r) = p_name(sf, ts) {
+        return Some(r);
+    }
+    match ts {
+        [Tok::Ups(ps), r @ ..] if sf == Sf::Typst && ps.len() == 1 && ps[0].1.is_empty() => {
+            Some((ps[0].0.clone(), r))
+        }
+        _ => None,
+    }
+}
+
 /// `Math.pRange`: a range row: `k \in S`, `k \in S(i, j)`, `a \le k \le b`.
 pub fn p_range<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Row> {
     let f = f.checked_sub(1)?;
     match p_add(c, f, ts) {
-        Some((Json::Str(k), [Tok::Kw(Kw::Inn), r @ ..])) => match p_name(c.sf, r) {
+        Some((Json::Str(k), [Tok::Kw(Kw::Inn), r @ ..])) => match p_set(c.sf, r) {
             Some((s, [Tok::Kw(Kw::Lp), r2 @ ..])) => match p_names(c.sf, r2) {
                 Some((ps, [Tok::Kw(Kw::Rp), r3 @ ..])) => Some((
                     Row::Rng(

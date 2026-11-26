@@ -1359,6 +1359,17 @@ def _p_euler_exp(c: Ctx, f: int, ts: list, i: int):
     return None if r is None else (node("exp", [r[0]]), r[1])
 
 
+def _p_set(sf: str, ts: list, i: int):
+    """``Math.pSet``: a name, or in Typst one upright word."""
+    r = p_name(sf, ts, i)
+    if r is not None:
+        return r
+    t = _at(ts, i)
+    if sf == K.TYPST and _tag(t) == "ups" and len(t[1]) == 1 and t[1][0][1] == "":
+        return t[1][0][0], i + 1
+    return None
+
+
 def _p_range(c: Ctx, f: int, ts: list, i: int):
     """``Math.pRange``: ``k \\in S``, ``k \\in S(i, j)``, ``a \\le k \\le b``.
     A row is ``("rng", k, value)`` or ``("filt", value)``."""
@@ -1371,7 +1382,7 @@ def _p_range(c: Ctx, f: int, ts: list, i: int):
     x, j = r
     tj = _at(ts, j)
     if type(x) is str and tj == K.INN:
-        r2 = p_name(c.sf, ts, j + 1)
+        r2 = _p_set(c.sf, ts, j + 1)
         if r2 is None:
             return None
         s, k = r2

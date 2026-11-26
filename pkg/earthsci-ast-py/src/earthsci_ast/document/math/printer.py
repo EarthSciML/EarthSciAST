@@ -1006,6 +1006,23 @@ def faq_ok(f: FaqForm) -> bool:
     return True
 
 
+def up_set(sf: str, s: str) -> bool:
+    """``Math.upSet``: an index set's name prints upright in a Typst range row when
+    it would otherwise print ``italic("…")``."""
+    return (
+        sf == K.TYPST
+        and "." not in s
+        and not is_single(s)
+        and sub_parts(s) is None
+        and not is_formula(s)
+    )
+
+
+def set_toks(c: Ctx, s: str) -> list:
+    """``Math.setToks``: the tokens of an index set's name in a range row."""
+    return [("ups", ((s, ""),))] if up_set(c.sf, s) else name_toks(c, s)
+
+
 def row_toks(c: Ctx, k: str, v: Any) -> list:
     """``Math.rowToks``: ``a \\le k \\le b``, ``k \\in S``, ``k \\in S(i, j)``."""
     t = type(v)
@@ -1013,7 +1030,7 @@ def row_toks(c: Ctx, k: str, v: Any) -> list:
         return [*pa(c, 4, v[0]), K.LE, *name_toks(c, k), K.LE, *pa(c, 4, v[1])]
     if t is Obj:
         if len(v) == 1 and v[0][0] == "from" and type(v[0][1]) is str:
-            return [*name_toks(c, k), K.INN, *name_toks(c, v[0][1])]
+            return [*name_toks(c, k), K.INN, *set_toks(c, v[0][1])]
         if (
             len(v) == 2
             and v[0][0] == "from"
@@ -1025,7 +1042,7 @@ def row_toks(c: Ctx, k: str, v: Any) -> list:
             return [
                 *name_toks(c, k),
                 K.INN,
-                *name_toks(c, v[0][1]),
+                *set_toks(c, v[0][1]),
                 K.LP,
                 *sep_by([K.COMMA], ps),
                 K.RP,

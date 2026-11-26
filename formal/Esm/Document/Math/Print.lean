@@ -866,13 +866,27 @@ def faqOK (F : FaqForm) : Bool :=
     ((outNames F.out).contains kv.1 || occursJ kv.1 F.expr ||
       (match F.filter with | some x => occursJ kv.1 x | none => false)))
 
+/-- An index set's name in a Typst range row is set upright, `k in upright("lev")`: a set
+is named, as a function's name is (`upright("op")`), not a quantity, and an italic `lev`
+reads as the product l·e·v (decided 2026-11-26). Only a name that would otherwise print
+`italic("…")` is: one segment of two or more characters, neither the `x_i` shape nor a
+formula. A letter, a Greek name, those shapes and a dotted name print as names, and LaTeX
+prints every set name as a name. -/
+def upSet (sf : Sf) (s : String) : Bool :=
+  sf == .typst && !s.toList.contains '.' && !isSingle s.toList && subParts s.toList == none &&
+    !isFormula s.toList
+
+/-- The tokens of an index set's name in a range row. -/
+def setToks (c : Ctx) (s : String) : List Tok :=
+  if upSet c.sf s then [.ups [(s, "")]] else nameToks c s
+
 /-- A range row: `a \le k \le b`, `k \in S`, `k \in S(i, j)`. -/
 def rowToks (c : Ctx) (P : Json → Out) (kv : String × Json) : List Tok :=
   match kv.2 with
   | .arr [a, b] => (P a).at c.sf 4 ++ .kw .le :: nameToks c kv.1 ++ .kw .le :: (P b).at c.sf 4
-  | .obj [("from", .str s)] => nameToks c kv.1 ++ .kw .inn :: nameToks c s
+  | .obj [("from", .str s)] => nameToks c kv.1 ++ .kw .inn :: setToks c s
   | .obj [("from", .str s), ("of", .arr ps)] =>
-    nameToks c kv.1 ++ .kw .inn :: nameToks c s ++ .kw .lp ::
+    nameToks c kv.1 ++ .kw .inn :: setToks c s ++ .kw .lp ::
       (sepBy [.kw .comma] (ps.map fun p => match p with | .str q => nameToks c q | _ => []) ++ [.kw .rp])
   | _ => []
 

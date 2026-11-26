@@ -1464,6 +1464,17 @@ export function pEulerExp(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
   return r && [node('exp', [r[0]]), r[1]]
 }
 
+/** `Math.pSet`: an index set's name: a name, or in Typst one upright word. */
+export function pSet(sf: Sf, ts: Toks, i: number): P<string> {
+  const r = pName(sf, ts, i)
+  if (r !== undefined) return r
+  const t = ts[i]
+  if (sf === 'typst' && t !== undefined && t.t === 'ups' && t.ps.length === 1 && t.ps[0][1] === '') {
+    return [t.ps[0][0], i + 1]
+  }
+  return undefined
+}
+
 /** `Math.pRange`: a range row: `k \in S`, `k \in S(i, j)`, `a \le k \le b`. */
 export function pRange(c: Ctx, f: number, ts: Toks, i: number): P<Row> {
   if (f === 0) return undefined
@@ -1472,7 +1483,7 @@ export function pRange(c: Ctx, f: number, ts: Toks, i: number): P<Row> {
   if (r === undefined) return undefined
   const [x, j] = r
   if (x.t === 'str' && isKwTok(ts[j], 'Inn')) {
-    const s = pName(c.sf, ts, j + 1)
+    const s = pSet(c.sf, ts, j + 1)
     if (s === undefined) return undefined
     if (isKwTok(ts[s[1]], 'Lp')) {
       const ps = pNames(c.sf, ts, s[1] + 1)

@@ -1382,6 +1382,17 @@ function p_euler_exp(c::Ctx, f::Int, ts::Toks)
     return node("exp", Any[y[1]]), y[2]
 end
 
+"""`Math.pSet`: an index set's name: a name, or in Typst one upright word."""
+function p_set(sf::Sf, ts::Toks)
+    y = p_name(sf, ts)
+    y === nothing || return y
+    t = tk(ts)
+    if sf == SF_TYPST && t isa TUps && length(t.ps) == 1 && t.ps[1][2] == ""
+        return t.ps[1][1], tdrop(ts)
+    end
+    return nothing
+end
+
 """`Math.pRange`: a range row: `k \\in S`, `k \\in S(i, j)`, `a \\le k \\le b`."""
 function p_range(c::Ctx, f::Int, ts::Toks)
     f == 0 && return nothing
@@ -1390,7 +1401,7 @@ function p_range(c::Ctx, f::Int, ts::Toks)
     x === nothing && return nothing
     v, r = x
     if v isa String && kat(r, 1, KInn)
-        y = p_name(c.sf, tdrop(r))
+        y = p_set(c.sf, tdrop(r))
         y === nothing && return nothing
         s, r2 = y
         if kat(r2, 1, KLp)

@@ -534,6 +534,24 @@
       "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  R: (\n    kind: \"ragged\",\n    of: (\n      \"S\",\n    ),\n    offsets: \"off\",\n    values: \"vals\",\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in S \\ k in R(i) \\ 0 <= m <= 2) w_(i, k, m) $\n"
     },
     {
+      "id": "faq_set_upright",
+      "kind": "print",
+      "description": "A word-named index set is upright in Typst (k in upright(\"lev\")), as is the set of a ragged range; an output index's range row too. LaTeX prints it as a name.",
+      "esm": {"esm": "2.4.0", "index_sets": {"bins": {"kind": "ragged", "of": ["lev"], "offsets": "off", "values": "vals"}, "lev": {"kind": "interval", "size": 3}, "tracer": {"kind": "interval", "size": 2}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": [{"args": ["u", "k", "s"], "op": "index"}, {"args": ["q", "k", "m"], "op": "index"}], "op": "*"}, "op": "faq", "output_idx": ["s"], "ranges": {"k": {"from": "lev"}, "m": {"from": "bins", "of": ["k"]}, "s": {"from": "tracer"}}}}], "variables": {"q": {"type": "parameter"}, "u": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = \\left[\\sum_{\\substack{k \\in \\mathit{lev} \\\\ m \\in \\mathit{bins}(k)}} u_{k, s} q_{k, m}\\right]_{s \\in \\mathit{tracer}}", "typst": "y = lr([sum_(k in upright(\"lev\") \\ m in upright(\"bins\")(k)) u_(k, s) q_(k, m)])_(s in upright(\"tracer\"))"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nbins:\n  kind: \"ragged\"\n  of:\n    - \"lev\"\n  offsets: \"off\"\n  values: \"vals\"\nlev:\n  kind: \"interval\"\n  size: 3\ntracer:\n  kind: \"interval\"\n  size: 2\n```\n\n::model[M]\n\n:param[$q$]{}\n\n:param[$u$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum_{\\substack{k \\in \\mathit{lev} \\\\ m \\in \\mathit{bins}(k)}} u_{k, s} q_{k, m}\\right]_{s \\in \\mathit{tracer}}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  bins: (\n    kind: \"ragged\",\n    of: (\n      \"lev\",\n    ),\n    offsets: \"off\",\n    values: \"vals\",\n  ),\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n  tracer: (\n    kind: \"interval\",\n    size: 2,\n  ),\n))\n\n#model(\"M\")\n\n#param($q$)\n\n#param($u$)\n\n#var($y$)\n\n$ y = lr([sum_(k in upright(\"lev\") \\ m in upright(\"bins\")(k)) u_(k, s) q_(k, m)])_(s in upright(\"tracer\")) $\n"
+    },
+    {
+      "id": "faq_set_shapes",
+      "kind": "print",
+      "description": "A set named by a subscript shape (x_i) or a formula (NO) prints as that name, not upright text.",
+      "esm": {"esm": "2.4.0", "index_sets": {"NO": {"kind": "interval", "size": 2}, "x_i": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "x_i"}}}, {"args": [], "expr": {"args": ["w", "j"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"j": {"from": "NO"}}}], "op": "+"}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = \\sum_{i \\in x_{\\mathrm{i}}} w_{i} + \\sum_{j \\in \\mathrm{NO}} w_{j}", "typst": "y = sum_(i in x_(upright(\"i\"))) w_i + sum_(j in upright(\"NO\")) w_j"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\n\"NO\":\n  kind: \"interval\"\n  size: 2\nx_i:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{i \\in x_{\\mathrm{i}}} w_{i} + \\sum_{j \\in \\mathrm{NO}} w_{j}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  NO: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  x_i: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in x_(upright(\"i\"))) w_i + sum_(j in upright(\"NO\")) w_j $\n"
+    },
+    {
       "id": "faq_call_semiring",
       "kind": "print",
       "description": "A faq with a semiring other than sum_product prints in the call form, its fields as named arguments.",

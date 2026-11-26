@@ -725,6 +725,34 @@ def operators(g):
         ),
     )
     E(
+        "faq_set_upright",
+        "A word-named index set is upright in Typst (k in upright(\"lev\")), as is the set "
+        "of a ragged range; an output index's range row too. LaTeX prints it as a name.",
+        faq(
+            op("*", idx("u", "k", "s"), idx("q", "k", "m")),
+            {"k": {"from": "lev"}, "m": {"from": "bins", "of": ["k"]}, "s": {"from": "tracer"}},
+            output_idx=["s"],
+        ),
+        names=("u", "q"),
+        index_sets={
+            "lev": {"kind": "interval", "size": 3},
+            "tracer": {"kind": "interval", "size": 2},
+            "bins": {"kind": "ragged", "of": ["lev"], "offsets": "off", "values": "vals"},
+        },
+    )
+    E(
+        "faq_set_shapes",
+        "A set named by a subscript shape (x_i) or a formula (NO) prints as that name, not "
+        "upright text.",
+        op(
+            "+",
+            faq(idx("w", "i"), {"i": {"from": "x_i"}}),
+            faq(idx("w", "j"), {"j": {"from": "NO"}}),
+        ),
+        names=("w",),
+        index_sets={"x_i": {"kind": "interval", "size": 3}, "NO": {"kind": "interval", "size": 2}},
+    )
+    E(
         "faq_call_semiring",
         "A faq with a semiring other than sum_product prints in the call form, its fields "
         "as named arguments.",

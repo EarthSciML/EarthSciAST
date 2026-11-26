@@ -1433,6 +1433,22 @@ func prFaqOk(f FaqForm) bool {
 	return true
 }
 
+// prUpSet is `Math.upSet`: an index set's name prints upright in a Typst range
+// row when it would otherwise print `italic("…")`.
+func prUpSet(sf Sf, s string) bool {
+	g := []rune(s)
+	_, _, sub := exprSubParts(g)
+	return sf == SfTypst && !slices.Contains(g, '.') && !exprIsSingle(g) && !sub && !exprIsFormula(g)
+}
+
+// prSetToks is `Math.setToks`: the tokens of an index set's name in a range row.
+func prSetToks(c Ctx, s string) []Tok {
+	if prUpSet(c.sf, s) {
+		return []Tok{tUps([]UpsPair{{A: s, B: ""}})}
+	}
+	return prNameToks(c, s)
+}
+
 // prRowToks is `Math.rowToks`: a range row: `a \le k \le b`, `k \in S`,
 // `k \in S(i, j)`.
 func prRowToks(c Ctx, k string, v Json) []Tok {
@@ -1444,7 +1460,7 @@ func prRowToks(c Ctx, k string, v Json) []Tok {
 	case Obj:
 		if len(x) == 1 && x[0].K == "from" {
 			if s, ok := x[0].V.(string); ok {
-				return cat(prNameToks(c, k), kws(KwInn), prNameToks(c, s))
+				return cat(prNameToks(c, k), kws(KwInn), prSetToks(c, s))
 			}
 		}
 		if len(x) == 2 && x[0].K == "from" && x[1].K == "of" {
@@ -1457,7 +1473,7 @@ func prRowToks(c Ctx, k string, v Json) []Tok {
 						items[i] = prNameToks(c, q)
 					}
 				}
-				return cat(prNameToks(c, k), kws(KwInn), prNameToks(c, s), kws(KwLp),
+				return cat(prNameToks(c, k), kws(KwInn), prSetToks(c, s), kws(KwLp),
 					prSepBy(kws(KwComma), items), kws(KwRp))
 			}
 		}
