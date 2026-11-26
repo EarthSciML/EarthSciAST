@@ -1016,14 +1016,24 @@ impl TapeBuilder<'_> {
         // Few candidate cells (the pairs a join matches, of a source x target
         // box): the body runs over those only (`lower_pointwise_compacted`),
         // when that lowers.
+        let candidates = if ranges.is_empty() {
+            None
+        } else {
+            pointwise_keep(idx_names, ranges, &gates, true)?.map(Arc::new)
+        };
         let mut compact_decline = None;
-        if !ranges.is_empty()
-            && let Some(cand) = pointwise_keep(idx_names, ranges, &gates, true)?
-        {
+        if let Some(cand) = &candidates {
             let kept = cand.iter().filter(|&&k| k != 0.0).count();
             if kept > 0 && kept * COMPACT_KEEP_DENOM <= cand.len() {
                 match self.attempt(|b| {
-                    b.lower_pointwise_compacted(idx_names, ranges, cand, body, filter, identity)
+                    b.lower_pointwise_compacted(
+                        idx_names,
+                        ranges,
+                        Arc::clone(cand),
+                        body,
+                        filter,
+                        identity,
+                    )
                 }) {
                     Ok(v) => return Ok(v),
                     Err(e) => compact_decline = Some(e),
@@ -1031,7 +1041,13 @@ impl TapeBuilder<'_> {
             }
         }
         let dense = |this: &mut Self| -> LResult<LV> {
-            let keep = pointwise_keep(idx_names, ranges, &gates, false)?;
+            // The dense path leaves gates already tested by the filter to
+            // that filter. Otherwise its mask is the compaction mask.
+            let keep = if ranges.is_empty() || gates.iter().any(|g| g.in_filter) {
+                pointwise_keep(idx_names, ranges, &gates, false)?.map(Arc::new)
+            } else {
+                candidates
+            };
             if keep.as_ref().is_some_and(|k| k.iter().all(|&k| k == 0.0)) {
                 return Ok(if ranges.is_empty() {
                     LV::Lit(identity)
@@ -1052,7 +1068,7 @@ impl TapeBuilder<'_> {
             if ranges.is_empty() {
                 bail_tape!("aggregate: a rank-0 join gate");
             }
-            let mask_slot = this.emit_const_data(&shape, &lo, Arc::new(keep), false)?;
+            let mask_slot = this.emit_const_data(&shape, &lo, keep, false)?;
             this.fault.lazy_depth += 1;
             this.push_scope();
             let term = this.lower_filtered(body, filter, &bx, LV::Lit(identity));
@@ -1081,7 +1097,7 @@ impl TapeBuilder<'_> {
         &mut self,
         idx_names: &[String],
         ranges: &[(i64, i64)],
-        keep: Vec<f64>,
+        keep: Arc<Vec<f64>>,
         body: &Expr,
         filter: Option<&Expr>,
         identity: f64,
@@ -1189,7 +1205,7 @@ impl TapeBuilder<'_> {
             self.emit(instr, sec);
             LV::Arr(out)
         };
-        let mask_slot = self.emit_const_data(&bx.shape, &bx.lo, Arc::new(keep), false)?;
+        let mask_slot = self.emit_const_data(&bx.shape, &bx.lo, keep, false)?;
         self.emit_select(LV::Arr(mask_slot), gathered, LV::Lit(identity))
     }
 

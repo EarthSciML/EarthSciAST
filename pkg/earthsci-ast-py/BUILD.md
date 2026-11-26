@@ -141,7 +141,6 @@ The project includes GitHub Actions workflows:
 ### Workflow Features
 - Tests on Python 3.8-3.12
 - Code quality checks (flake8)
-- Coverage reporting (codecov)
 - Automatic publishing with trusted publishing (no tokens needed)
 
 ## Version Management

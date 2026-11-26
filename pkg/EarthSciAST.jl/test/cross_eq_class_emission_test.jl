@@ -321,25 +321,39 @@ _xq_directmerge(t) = get(t, :classmerge_round1_merge, 0) +
         built = 0
         skipped = 0
         repair_total = 0
-        direct_total = 0
+        load_ns = UInt64(0)
+        build_ns = UInt64(0)
+        slowest_build_ns = UInt64(0)
+        slowest_fixture = ""
         for path in esms
+            started = time_ns()
             file = try
                 ESM.load_path(path)
             catch e
                 corpus_is_resource_error(e) && rethrow()
+                nothing
+            end
+            load_ns += time_ns() - started
+            if file === nothing || file.models === nothing
                 skipped += 1
                 continue
             end
-            file.models === nothing && (skipped += 1; continue)
+            started = time_ns()
             ron = corpus_build(file)
+            elapsed = time_ns() - started
+            build_ns += elapsed
+            if elapsed > slowest_build_ns
+                slowest_build_ns = elapsed
+                slowest_fixture = relpath(path, TESTUTILS_REPO_ROOT)
+            end
             if ron === nothing
                 skipped += 1
                 continue
             end
             built += 1
             repair_total += _xq_repair(ron.tally)
-            direct_total += _xq_directmerge(ron.tally)
         end
+        @info "Class-merge corpus sweep" built skipped load_seconds = load_ns / 1e9 build_seconds = build_ns / 1e9 slowest_fixture slowest_build_seconds = slowest_build_ns / 1e9
         # The sweep is real (a corpus regression that stops fixtures building
         # would otherwise pass this vacuously) …
         @test built >= 40
