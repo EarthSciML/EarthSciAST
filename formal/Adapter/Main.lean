@@ -14,7 +14,7 @@ def usage : String :=
   "usage: esm-lean <mode> <args>…\n" ++
   "modes:\n" ++
   "  templates <document.esm> [model [case.json]] evaluate the apply_operator equations of a document\n" ++
-  "  rewrite-templates [--expanded] <document.esm> <component> lower its local expression roots\n" ++
+  "  rewrite-templates [--expanded|--emitted] <document.esm> <component> lower its expression roots\n" ++
   "  static-assertions <doc.esm> <model> evaluate requested static assertions (JSON on stdin)\n" ++
   "  static-assertions-jsonl <model> evaluate static assertions for a stream of ESM documents\n" ++
   "  units <unit_verdicts.json> resolve every unit string in a unit-registry golden\n" ++

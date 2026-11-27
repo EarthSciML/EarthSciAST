@@ -83,6 +83,9 @@ def subst (σ : Bindings) : Ast → Ast
   | .faqWhere out red rs p body args =>
     .faqWhere (out.map (fun i => i.mapSymbol (fieldSub σ))) (fieldSub σ red) (substRanges σ rs) (subst σ p)
       (subst σ body) (substList σ args)
+  | .faqJoin out red rs pairs p body args =>
+    .faqJoin (out.map (fun i => i.mapSymbol (fieldSub σ))) (fieldSub σ red) (substRanges σ rs)
+      (pairs.map (JoinPair.mapNames (fieldSub σ))) (subst σ p) (subst σ body) (substList σ args)
   | .apply n bs => .apply n (substBinds σ bs)
 
 def substList (σ : Bindings) : List Ast → List Ast
@@ -140,6 +143,9 @@ def walkRefs (f : String → Binds → Except ExpandError Ast) : Ast → Except 
     return .faq out red (← walkRefsRanges f rs) (← walkRefs f body) (← walkRefsList f args)
   | .faqWhere out red rs p body args => do
     return .faqWhere out red (← walkRefsRanges f rs) (← walkRefs f p) (← walkRefs f body)
+      (← walkRefsList f args)
+  | .faqJoin out red rs pairs p body args => do
+    return .faqJoin out red (← walkRefsRanges f rs) pairs (← walkRefs f p) (← walkRefs f body)
       (← walkRefsList f args)
   | .apply n bs => do f n (← walkRefsBinds f bs)
 

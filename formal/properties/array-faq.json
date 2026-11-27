@@ -9,6 +9,14 @@
       "theorem": "Esm.Expr.raggedPositions_of_count"
     },
     {
+      "id": "P-faq-ragged-value-invention-members",
+      "clauses": ["conf.5.6.4.ragged-binds-positions"],
+      "statement": "When value invention visits a ragged row of length n, it reads the members stored at the selected parent's first n positions, in order.",
+      "lean_statement": "∀ {α : Type} [Esm.Expr.Lits α] (lengths values : Esm.Expr.Val α) (parents : List Int) (entry : α) (n : Nat), Esm.Expr.indexCell lengths parents = .ok (.num entry) → Esm.Expr.Lits.toInt? entry = some (n : Int) → Esm.Expr.raggedMembers lengths values parents = ((List.range n).map (fun i : Nat => 1 + (i : Int))).mapM (fun i => Esm.Expr.indexCell values (parents ++ [i]))",
+      "status": "proven",
+      "theorem": "Esm.Expr.raggedMembers_of_count"
+    },
+    {
       "id": "P-faq-empty-contraction-range",
       "clauses": ["conf.5.6.3.empty-reduction-registry-identity"],
       "statement": "If the outer contracted range is empty, the query's fold preserves its seeded identity without inspecting the body or any inner bound.",

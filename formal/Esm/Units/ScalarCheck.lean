@@ -1,4 +1,4 @@
-import Esm.Expr.Core
+import Esm.Expr.ArrayConformance
 import Esm.Units.Laws
 
 /-!
@@ -614,23 +614,26 @@ private theorem binary_evaluates (op : Binary) (x y : Num) :
   cases op <;> exact ⟨_, rfl⟩
 
 private theorem eval_strict_one (name : String) (op : StrictOp) (arg : Ast) (env : Env Num)
-    (dispatch : Op.ofString name = .strict op) (x : Num) (h : eval arg env = .ok (.num x)) :
+    (dispatch : Op.ofString name = .strict op) (x : Num) (h : eval arg env = .ok (.num x))
+    (notGather : op ≠ .index) :
     eval (.node name [arg]) env = (applyStrict op [.num x]).map Val.num := by
-  simp [eval, evalList, dispatch, h, Val.arrayData, hasInf, bind, Except.bind,
-    pure, Except.pure, Except.map]
+  exact eval_strict_numbers env name [arg] op [x] dispatch notGather
+    (by simp [evalList, h, bind, Except.bind, pure, Except.pure])
 
 private theorem eval_strict_two (name : String) (op : StrictOp) (left right : Ast) (env : Env Num)
     (dispatch : Op.ofString name = .strict op) (x y : Num)
-    (hl : eval left env = .ok (.num x)) (hr : eval right env = .ok (.num y)) :
+    (hl : eval left env = .ok (.num x)) (hr : eval right env = .ok (.num y))
+    (notGather : op ≠ .index := by decide) :
     eval (.node name [left, right]) env = (applyStrict op [.num x, .num y]).map Val.num := by
-  simp [eval, evalList, dispatch, hl, hr, Val.arrayData, hasInf, bind, Except.bind,
-    pure, Except.pure, Except.map]
+  exact eval_strict_numbers env name [left, right] op [x, y] dispatch notGather
+    (by simp [evalList, hl, hr, bind, Except.bind, pure, Except.pure])
 
 theorem eval_rationalExponent (q : ℚ) (env : Env Num) :
     eval (rationalExponent q) env = .ok (.num (.fin (q : ℝ))) := by
   have nonzero : (q.den : ℝ) ≠ 0 := by exact_mod_cast (Rat.den_ne_zero q)
-  simp [rationalExponent, eval, evalList, Op.ofString, Val.arrayData, hasInf, bind, Except.bind,
-    pure, Except.pure, Lits.ofDec, applyStrict, asNum, Scalar.div, Num.div, nonzero, Rat.cast_def]
+  simp [rationalExponent, eval, evalList, Op.ofString, applyWholeStrict, elementwiseResult,
+    Val.arrayData, hasInf, bind, Except.bind, pure, Except.pure, Lits.ofDec, applyStrict, asNum,
+    Scalar.div, Num.div, nonzero, Rat.cast_def]
 
 /-- For any expression in the resolved scalar fragment, checking fixes the
 conversion scale of the result. Converting all of its declared inputs before
@@ -670,10 +673,12 @@ theorem checked_scalar_rescaling (bindings : ScalarBindings) (term : ScalarTerm)
         obtain ⟨x, hx, sx⟩ := ih unit h
         obtain ⟨value, hv⟩ := unary_evaluates op x
         have dispatch : Op.ofString op.spelling = .strict op.op := by cases op <;> rfl
+        have notGather : op.op ≠ .index := by cases op <;> decide
         refine ⟨value, ?_, ?_⟩
-        · rw [ScalarTerm.ast, eval_strict_one _ _ _ _ dispatch x hx, hv]
+        · rw [ScalarTerm.ast, eval_strict_one _ _ _ _ dispatch x hx notGather, hv]
           rfl
-        · rw [ScalarTerm.ast, eval_strict_one _ _ _ _ dispatch _ sx, unary_scale op unit result x checked, hv]
+        · rw [ScalarTerm.ast, eval_strict_one _ _ _ _ dispatch _ sx notGather,
+            unary_scale op unit result x checked, hv]
           rfl
   | binary op left right il ir =>
     cases hl : left.check (scalarUnits bindings) <;> cases hr : right.check (scalarUnits bindings) <;>
@@ -685,10 +690,11 @@ theorem checked_scalar_rescaling (bindings : ScalarBindings) (term : ScalarTerm)
     obtain ⟨y, hy, sy⟩ := ir ru hr
     obtain ⟨value, hv⟩ := binary_evaluates op x y
     have dispatch : Op.ofString op.spelling = .strict op.op := by cases op <;> rfl
+    have notGather : op.op ≠ .index := by cases op <;> decide
     refine ⟨value, ?_, ?_⟩
-    · rw [ScalarTerm.ast, eval_strict_two _ _ _ _ _ dispatch x y hx hy, hv]
+    · rw [ScalarTerm.ast, eval_strict_two _ _ _ _ _ dispatch x y hx hy notGather, hv]
       rfl
-    · rw [ScalarTerm.ast, eval_strict_two _ _ _ _ _ dispatch _ _ sx sy,
+    · rw [ScalarTerm.ast, eval_strict_two _ _ _ _ _ dispatch _ _ sx sy notGather,
         binary_scale op lu ru result x y checked, hv]
       rfl
   | power base exponent ih =>

@@ -78,17 +78,25 @@ elementwise gathers, named-axis alias permutation, and whole-array transpose.
 Run `python3 formal/scripts/test_ragged_faq.py` for ragged parent tuples, empty
 reductions, and scoped backing factors.
 
-Phase 3 still needs document-level `faq` joins, including multiple and overlap
-gates, and value invention over ragged members (§4.3.1). The closed template
-adapter can score integer-key `distinct` FAQs over whole interval sets with
-`join.on`. Ordinary ragged contractions bind positions and gather the values
-array explicitly. Value invention must bind the members directly and use the
-result to materialize a derived index set for downstream evaluation.
+Static `faq.join.on` gates resolve local loop symbols, interval and categorical
+index sets, and rank-one key columns, including constant computed columns.
+Self-joins honor the default side order and explicit `syms`. The evaluator
+intersects matching partners across gates while keeping the contraction order
+and the authored filter. Overlap joins and gates on ragged or derived axes
+remain open.
 
-The gather-distribution proof assumes successful materialization of the full
-elementwise expression. The whole-expression evaluator can still fault in a
-different output cell. For example, gathering the first cell of a two-cell
-`broadcast(ifelse, ...)` can fault if the second cell selects an invalid gather.
+The static adapter materializes derived extents and named member-factor arrays
+from top-level `distinct: true` Boolean FAQs with integer keys. Ordinary ragged
+contractions bind positions and gather the values array explicitly. A ragged
+value-invention range binds each member directly (§4.3.1). Nested and imported
+producers, provider-backed data, and broader producer join forms remain open.
+
+A full gather of an elementwise expression with known extents checks every
+subscript and uses the per-cell evaluator at the selected coordinate. An
+elementwise conditional chooses its branch at that coordinate. The array
+proofs cover both this dispatch and the checked gather on successfully
+materialized values. Whole-array operands keep their evaluation scopes.
+Partial gathers keep the trailing axes and use the materialized slice path.
 
 The `static-assertions` executable mode also accepts a JSON array
 of `{test_id, assertion_idx}` requests on stdin and returns binary64 bit
@@ -259,17 +267,31 @@ products over typed numeric literals and references, the kernel checks exact
 value preservation and idempotence of the resulting expression tree. The
 shared byte fixtures cover JSON decoding, emission, and the other operators.
 
-## Component-local rewrite conformance
+## Rewrite and operator import conformance
 
 `esm-lean rewrite-templates <document.esm> <component>` prints the lowered
-equation or reaction roots from a component with local operator definitions.
-The walk preserves operator declaration order, filters `where` constraints
-before selection, and writes opaque references for non-leaf replacements.
-`--expanded` prints the explicit expansion after rewriting reachable bodies
-with their argument context and counting rewrite depth through each reference.
+equation or reaction roots. The loader resolves local paths and `esm:std/`
+imports, preserves the effective declaration order, and merges the renamed
+index sets before checking `where` constraints. It carries symbolic edge
+bindings through nested imports and folds structural bounds at document close.
+
+`--emitted` adds the merged index sets and the component's operator registry
+to the expression projection. It keeps authored order, registers rewritten
+body variants in canonical order, and repoints each affected reference.
+`--expanded` prints the explicit expansion of the reachable bodies and counts
+rewrite depth through each reference.
 
 From the repository root, run `python3 scripts/run-lean-rewrite-conformance.py`
 to check those expression roots against the shared `expression_templates`
-fixtures and their load-time diagnostics. The runner covers the component-local
-slice. Import and metaparameter resolution and reference registry emission,
-including variant names, belong to the document-level loader milestone.
+fixtures and their load-time diagnostics. For emitted projections, the check
+also compares registry order and reloads the projected result byte for byte.
+The adapter covers a single selected component. URL resolution, library-local
+`enum` calls, subsystem mounts, coupling-level injection, and generated
+time-derivative entries remain separate loader work.
+
+`Esm/Expr/ExpansionProofs.lean` proves that successful runs of the typed
+`expandRefs` traversal are invariant under extra fuel and equivalent name
+lookups. The JSON adapter is checked against the shared fixtures. General
+confluence needs a scope-aware rule for declaration preprocessing. For
+example, eagerly inlining `inner()` with free name `p` into `outer(p)` can
+capture that name when `outer` is later instantiated.

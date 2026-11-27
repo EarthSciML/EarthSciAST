@@ -1,0 +1,204 @@
+{
+ "esm": "2.4.0",
+ "metadata": {
+  "name": "static_join_self",
+  "description": "Default self-join side selection uses output indices before contracted indices. It reads predecessors and returns zero where there is no match.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ]
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": 5
+  }
+ },
+ "models": {
+  "StaticSelfJoin": {
+   "variables": {
+    "prior": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "id": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "payload": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "default_sum": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "predecessor": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "prior",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       0,
+       1,
+       2,
+       3,
+       4
+      ]
+     }
+    },
+    {
+     "lhs": "id",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1,
+       2,
+       3,
+       4,
+       5
+      ]
+     }
+    },
+    {
+     "lhs": "payload",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1,
+       10,
+       100,
+       1000,
+       10000
+      ]
+     }
+    },
+    {
+     "lhs": "default_sum",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "a": {
+        "from": "rows"
+       },
+       "b": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "b"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "prior",
+          "id"
+         ]
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "predecessor",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "b"
+      ],
+      "ranges": {
+       "a": {
+        "from": "rows"
+       },
+       "b": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "a"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "prior",
+          "id"
+         ]
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "tolerance": {
+    "rel": 0,
+    "abs": 0
+   },
+   "tests": [
+    {
+     "id": "probe",
+     "time_span": {
+      "start": 0,
+      "end": 1
+     },
+     "assertions": [
+      {
+       "variable": "default_sum",
+       "time": 0,
+       "expected": 1111
+      },
+      {
+       "variable": "predecessor",
+       "time": 0,
+       "coords": {
+        "rows": 1
+       },
+       "expected": 0
+      },
+      {
+       "variable": "predecessor",
+       "time": 0,
+       "coords": {
+        "rows": 5
+       },
+       "expected": 1000
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

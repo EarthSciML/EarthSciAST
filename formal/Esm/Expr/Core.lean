@@ -1,6 +1,7 @@
 import Esm.Closed.Interp.Template
 import Esm.Float64.Decimal
 import Esm.Expr.Array
+import Esm.Expr.Join
 import Mathlib.Analysis.SpecialFunctions.Complex.Arg
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
 
@@ -47,8 +48,9 @@ The evaluator covers the scalar operations and the array operations below:
   results and NaN counted as a nonzero admitted term.
 
 The model infers an omitted range from a bare subscript into a known array.
-Ragged contractions visit each parent's positions in order. Join nodes are
-outside the modelled slice. Signed zeros are
+Ragged contractions visit each parent's positions in order. Resolved equality
+joins admit only matching positions and preserve the FAQ's visiting order.
+Signed zeros are
 preserved at `Float`. The exact `Num` and `Bin64` types do not distinguish the
 zero signs.
 -/
@@ -66,6 +68,8 @@ class Lits (α : Type) where
   ofDec : Int → Nat → α
   /-- `some k` when the value is the finite integer `k`. -/
   toInt? : α → Option Int
+  /-- Sign of infinities encoded directly in the scalar type. -/
+  infinitySign : α → Option Bool := fun _ => none
 
 noncomputable instance : Lits Num where
   ofDec m e := .fin ((m : ℝ) / 10 ^ e)
@@ -85,6 +89,7 @@ instance : Lits Float where
     if x.isFinite && x.floor == x && x.abs < 9.0e15 then
       some (if x < 0 then -((-x).toUInt64.toNat : Int) else (x.toUInt64.toNat : Int))
     else none
+  infinitySign x := if x.isInf then some (x < 0) else none
 
 /-! ## Elementary functions -/
 
@@ -206,6 +211,9 @@ inductive Ast where
   `args`. -/
   | faqWhere (outputIdx : List OutputIndex) (reduce : String) (ranges : Ranges) (filter : Ast)
       (expr : Ast) (args : List Ast)
+  /-- `faq` with resolved equality joins and a separate authored filter. -/
+  | faqJoin (outputIdx : List OutputIndex) (reduce : String) (ranges : Ranges)
+      (pairs : List JoinPair) (filter expr : Ast) (args : List Ast)
   /-- `apply_operator`: the template `name` with its `bindings`
   (§9.6.2). It denotes its expansion (§9.6.4 rule 2); `eval` refuses it, and
   `Esm.Expr.expandRefs` replaces it by that expansion. -/
@@ -361,6 +369,12 @@ def indexOffset (offset : Nat) : List Nat → List Int → Except EvalError Nat
     if 1 ≤ i ∧ i ≤ (dim : Int) then indexOffset (offset * dim + (i - 1).toNat) dims is
     else .error .outOfRange
   | _, _ => .error (.typeError "index: operand rank and index count disagree")
+
+/-- Validate every axis of a complete gather before selecting its zero-based
+cell. The same axis checks are used when reading stored arrays. -/
+def gatherCoordinate (dims : List Nat) (subscripts : List Int) : Except EvalError (List Nat) := do
+  let _ ← indexOffset 0 dims subscripts
+  return subscripts.map fun i => (i - 1).toNat
 
 /-- Check leading coordinates and read a cell or a trailing slice from a
 rectangular array's row-major storage. -/
@@ -675,6 +689,23 @@ theorem raggedPositions_of_count (lengths : Val α) (parents : List Int) (entry 
   simp [raggedPositions, located, asNum, asInt, count, bind, Except.bind, pure, Except.pure,
     indices, nonnegative]
 
+/-- A value-invention range instead binds the member at each valid position
+(§4.3.1). A zero-length row does not inspect its padding. -/
+def raggedMembers (lengths values : Val α) (parents : List Int) :
+    Except EvalError (List (Val α)) := do
+  let positions ← raggedPositions lengths parents
+  positions.mapM (fun i => indexCell values (parents ++ [i]))
+
+omit [Scalar α] [Elem α] in
+theorem raggedMembers_of_count (lengths values : Val α) (parents : List Int) (entry : α) (n : Nat)
+    (located : indexCell lengths parents = .ok (.num entry))
+    (count : Lits.toInt? entry = some (n : Int)) :
+    raggedMembers lengths values parents =
+      ((List.range n).map (fun i : Nat => 1 + (i : Int))).mapM
+        (fun i => indexCell values (parents ++ [i])) := by
+  simp [raggedMembers, raggedPositions_of_count lengths parents entry n located count,
+    bind, Except.bind]
+
 mutual
 
 /-- Inspect a read for the ragged values constraint. An unexpanded application
@@ -685,7 +716,7 @@ private def readsRaggedValues (values : String) (bound : List String) : Ast → 
   | .node _ args | .array _ args => readsRaggedValuesIn values bound args
   | .faq out _ ranges body _ =>
     readsRaggedValues values (outputNames out ++ ranges.names ++ bound) body
-  | .faqWhere out _ ranges filter body _ =>
+  | .faqWhere out _ ranges filter body _ | .faqJoin out _ ranges _ filter body _ =>
     let bound := outputNames out ++ ranges.names ++ bound
     readsRaggedValues values bound filter || readsRaggedValues values bound body
   | .apply _ _ => true
@@ -888,18 +919,98 @@ private def faqCells (cell : Env α → Except EvalError (Val α)) :
       faqCells cell rest env')
     return parts.flatten
 
+/-- Read the keys of one gated range in its original visiting order. -/
+private def joinRows (side : JoinSide) (ranges : List (FaqRange α)) (env : Env α) :
+    Except EvalError (List (Int × JoinKey α)) := do
+  let some bounds := ranges.lookup side.symbol
+    | throw (.typeError s!"join has no range for {side.symbol}")
+  let positions ← bounds env
+  match side.source with
+  | .position => return positions.map fun i => (i, .number (Lits.ofDec i 0))
+  | .members members =>
+    positions.mapM fun i => do
+      let some key := if i > 0 then members[i.toNat - 1]? else none | throw .outOfRange
+      return (i, match key with
+        | .integer value => .number (Lits.ofDec value 0)
+        | .category value => .category value)
+  | .column name declaredData =>
+    let some value := env.lookup name | throw (.unbound name)
+    if declaredData && (env.lookup (joinColumnPrecisionKey name)).isSome then
+      throw (.unsupported s!"integer key in {name} is not exactly representable in binary64")
+    let some ([_], cells) := value.arrayData
+      | throw (.typeError s!"join key column {name} is not rank one")
+    let cells := cells.toArray
+    positions.filterMapM fun i => do
+      let some value := if i > 0 then cells[i.toNat - 1]? else none | throw .outOfRange
+      let key ← match value with
+        | .num x => do
+          let infinity := Lits.infinitySign x
+          if declaredData && (infinity.isSome || !(le x (Elem.floor x))) then
+            throw (.typeError s!"float_join_key: column {name} at {i} is not a finite integer")
+          if isNaN x then pure none
+          else pure (some (match infinity with
+            | some sign => .infinity sign
+            | none => .number x))
+        | .inf sign =>
+          if declaredData then throw (.typeError s!"float_join_key: column {name} at {i} is infinite")
+          else pure (some (.infinity sign))
+        | _ => throw (.typeError s!"join key column {name} has a non-scalar cell")
+      return key.map fun key => (i, key)
+
+private def joinPartners (pairs : List JoinPair) (ranges : List (FaqRange α)) (env : Env α) :
+    Except EvalError (List JoinPartners) :=
+  pairs.mapM fun p => do
+    return JoinPartners.ofKeys le p (← joinRows p.left ranges env) (← joinRows p.right ranges env)
+
+private def boundPosition (env : Env α) (name : String) : Except EvalError Int := do
+  let some v := env.lookup name | throw (.unbound name)
+  asInt (← asNum v)
+
+/-- Once one side is bound, its partner list supplies the later range. Each
+list follows that range's original order, so intersecting lists retains the
+same order as the undriven product. -/
+private def driveJoinRanges (gates : List JoinPartners) (bound : List String) :
+    List (FaqRange α) → List (FaqRange α)
+  | [] => []
+  | (name, bounds) :: rest =>
+    let partners := gates.filterMap fun gate =>
+      if name == gate.left && bound.contains gate.right then some (gate.right, gate.leftByRight)
+      else if name == gate.right && bound.contains gate.left then some (gate.left, gate.rightByLeft)
+      else none
+    let next := match partners with
+      | [] => bounds
+      | (first, firstTable) :: others => fun env => do
+        let candidates := (firstTable.getD (← boundPosition env first) {}).order
+        others.foldlM (fun keep (other, table) => do
+          let allowed := (table.getD (← boundPosition env other) {}).members
+          return keep.filter allowed.contains) candidates
+    (name, next) :: driveJoinRanges gates (name :: bound) rest
+
+private def joinGateMatches (gates : List JoinPartners) (env : Env α) :
+    Except EvalError Bool :=
+  gates.allM fun gate => do
+    let left ← boundPosition env gate.left
+    let right ← boundPosition env gate.right
+    return (gate.rightByLeft.getD left {}).members.contains right
+
 /-- Evaluate a rectangular output box in output-axis order. Each cell folds
 its admitted contracted tuples using the same evaluator as the scalar case. -/
 private def evalFaq (output : List OutputIndex) (red : String) (ranges : List (FaqRange α))
     (isReverse : List String → List String → Bool)
     (passesFilter : Env α → Except EvalError Bool) (term : Env α → Except EvalError (Val α))
-    (env : Env α) (atCell : Option (List Nat) := none) (ragged : List RaggedUse := []) :
+    (env : Env α) (atCell : Option (List Nat) := none) (ragged : List RaggedUse := [])
+    (joins : List JoinPartners := []) :
     Except EvalError (Val α) := do
   let outputs := outputNames output
   let contracted := (ranges.filter (fun r => !outputs.contains r.1)).mergeSort
     (fun a b => decide (a.1 ≤ b.1))
   let contracted ← if ragged.isEmpty then pure contracted
     else parentFirstRanges ragged contracted contracted.length
+  let contracted := if joins.isEmpty then contracted else driveJoinRanges joins outputs contracted
+  let localGates := joins.filter fun gate =>
+    gate.left == gate.right || (outputs.contains gate.left && outputs.contains gate.right)
+  let passesFilter := if localGates.isEmpty then passesFilter else fun e => do
+    if ← joinGateMatches localGates e then passesFilter e else pure false
   if red == "bool_and_or" then
     if output.isEmpty then
       let result ← foldBoolRanges (fun e => do
@@ -970,6 +1081,44 @@ def broadcastArity (fn : String) (arity : Nat) : Bool :=
     | .div | .pow | .le | .ge | .lt | .gt | .eq | .ne | .atan2 => arity == 2
     | _ => arity == 1
 
+/-- Whole-array operators and scalar-only nodes are gather barriers. A bare
+scalar `ifelse` can return its branch unchanged; explicit broadcast conditionals
+and strict elementwise primitives have a coordinate-wise result. -/
+def isElementwiseGatherBase : Ast → Bool
+  | .node op args =>
+    match Op.ofString op with
+    | .strict _ => broadcastArity op args.length
+    | _ => false
+  | .array (.broadcast fn) args => broadcastArity fn args.length
+  | _ => false
+
+/-- An elementwise result that passes through a literal-array value still
+uses the rectangular result representation of the other elementwise paths. -/
+def elementwiseResult (value : Val α) : Except EvalError (Val α) :=
+  match value with
+  | .arr1 _ | .arr2 _ | .arr3 _ =>
+    match value.arrayData with
+    | some (dims, cells) => pure (.shaped dims cells)
+    | none => throw (.typeError "ragged array")
+  | _ => pure value
+
+def gatherSubscripts (values : List (Val α)) : Except EvalError (List Int) :=
+  values.mapM (fun value => do asInt (← asNum value))
+
+def applyWholeStrict (op : StrictOp) (values : List (Val α)) : Except EvalError (Val α) := do
+  let broadcast := do
+    let data ← values.mapM shapeData
+    fromShape (← ArrayData.broadcast (applyCell op) .shapeMismatch data)
+  match values with
+  | (.shaped dims cells) :: is =>
+    if op = .index then indexCell (.shaped dims cells) (← gatherSubscripts is)
+    else broadcast
+  | base :: is =>
+    if is.length < base.rank && op == .index then indexCell base (← gatherSubscripts is)
+    else if values.any (fun v => v.arrayData.isSome) && op != .index then broadcast
+    else if hasInf values then strictWithInf op values else return .num (← applyStrict op values)
+  | [] => return .num (← applyStrict op [])
+
 private def reshapeDims (shape : List (Nat ⊕ String)) (env : Env α) :
     Except EvalError (List Nat) :=
   shape.mapM fun d => match d with
@@ -1032,29 +1181,17 @@ def eval : Ast → Env α → Except EvalError (Val α)
     evalShape (.makearray regions) (← evalRegions regions args env) env
   | .array (.broadcast fn) args, env => do
     unless broadcastArity fn args.length do throw (.typeError "invalid_broadcast_fn")
-    if fn == "ifelse" then evalBroadcastIfelse args env
-    else evalShape (.broadcast fn) (← evalList args env) env
+    let value ← if fn == "ifelse" then evalBroadcastIfelse args env
+      else evalShape (.broadcast fn) (← evalList args env) env
+    elementwiseResult value
   | .array op args, env => do
     evalShape op (← evalList args env) env
   | .node op args, env =>
     match Op.ofString op with
     | .ifelse => evalIfelse args env
     | .strict o => do
-      let vs ← evalList args env
-      let broadcast := do
-        let data ← vs.mapM shapeData
-        fromShape (← ArrayData.broadcast (applyCell o) .shapeMismatch data)
-      match vs with
-      | (.shaped dims cells) :: is =>
-        if o = .index then
-          indexCell (.shaped dims cells) (← is.mapM (fun v => do asInt (← asNum v)))
-        else broadcast
-      | base :: is =>
-        if is.length < base.rank && o == .index then
-          indexCell base (← is.mapM (fun v => do asInt (← asNum v)))
-        else if vs.any (fun v => v.arrayData.isSome) && o != .index then broadcast
-        else if hasInf vs then strictWithInf o vs else return .num (← applyStrict o vs)
-      | [] => return .num (← applyStrict o [])
+      if o = .index then evalIndex args env
+      else elementwiseResult (← applyWholeStrict o (← evalList args env))
     | .other s => .error (.unsupported s)
   | .faq [] "bool_and_or" rs body _, env => do
     let ranges ← checkedFaqRanges [] rs.raggedUses (← faqRanges rs) body none env
@@ -1115,6 +1252,12 @@ def eval : Ast → Env α → Except EvalError (Val α)
     let ranges ← checkedFaqRanges out rs.raggedUses (← faqRanges rs) body (some p) env
     evalFaq out red ranges (fun outputs contracted => reverseFaqWindow outputs contracted (some p))
       (fun e => do return truthy (← asNum (← eval p e))) (eval body) env (ragged := rs.raggedUses)
+  | .faqJoin out red rs pairs p body _, env => do
+    let ranges ← checkedFaqRanges out rs.raggedUses (← faqRanges rs) body (some p) env
+    let joins ← joinPartners pairs ranges env
+    evalFaq out red ranges (fun outputs contracted => reverseFaqWindow outputs contracted (some p))
+      (fun e => do return truthy (← asNum (← eval p e))) (eval body) env
+      (ragged := rs.raggedUses) (joins := joins)
   | .apply n _, _ => .error (.unsupported s!"apply_operator {n}: not expanded")
 
 /-- Resolve declared bounds in the environment where the range is visited. -/
@@ -1158,41 +1301,68 @@ def evalList : List Ast → Env α → Except EvalError (List (Val α))
     let vs ← evalList es env
     return v :: vs
 
-/-- Infer extents from the AST and shape bindings without reading operand cells. -/
-def expressionDims : Ast → Env α → Except EvalError (Option (List Nat))
+/-- Full-rank scalar subscripts can select an elementwise result without
+materializing its other cells. A partial gather keeps the existing slice path. -/
+def evalIndex : List Ast → Env α → Except EvalError (Val α)
+  | [], _ => throw (.typeError "operand count")
+  | base :: subscripts, env => do
+    if isElementwiseGatherBase base then
+      if let .ok (some dims) := expressionDims base env (forGather := true) then
+        if !dims.isEmpty && dims.length == subscripts.length then
+          let indices ← gatherSubscripts (← evalList subscripts env)
+          return ← evalCell base env (← gatherCoordinate dims indices)
+    let value ← eval base env
+    let indices ← evalList subscripts env
+    applyWholeStrict .index (value :: indices)
+
+/-- Infer extents without reading operand cells. A gather requires a bare
+scalar conditional's branches to agree because it keeps the selected shape. -/
+def expressionDims (ast : Ast) (env : Env α) (forGather : Bool := false) :
+    Except EvalError (Option (List Nat)) :=
+  match ast, env with
   | .num _ _, _ => return some []
   | .var name, env => return variableDims env name
   | .const c, _ => return some (valueDims (← constVal (α := α) c))
   | .node "index" (base :: subscripts), env => do
-    return (← expressionDims base env).map (·.drop subscripts.length)
+    return (← expressionDims base env forGather).map (·.drop subscripts.length)
+  | .node "ifelse" [condition, yes, no], env => do
+    let shapes := [← expressionDims condition env forGather, ← expressionDims yes env forGather,
+      ← expressionDims no env forGather]
+    if !forGather then return ← expressionBroadcastDims shapes
+    match shapes with
+    | [some [], some a, some b] => return if a == b then some a else none
+    | _ => return none
   | .node op args, env =>
-    if broadcastArity op args.length then do expressionBroadcastDims (← expressionDimsList args env)
+    if broadcastArity op args.length then do
+      expressionBroadcastDims (← expressionDimsList args env forGather)
     else return some []
-  | .array (.broadcast _) args, env => do expressionBroadcastDims (← expressionDimsList args env)
+  | .array (.broadcast _) args, env => do
+    expressionBroadcastDims (← expressionDimsList args env forGather)
   | .array (.reshape dims) _, env => some <$> reshapeDims dims env
   | .array (.transpose perm) [a], env => do
-    let some dims ← expressionDims a env | return none
+    let some dims ← expressionDims a env forGather | return none
     let order ← shapeResult (ArrayData.transposeOrder perm dims.length)
     return order.mapM (fun i => dims[i]?)
   | .array (.concat axis) args, env => do
-    let some shapes := (← expressionDimsList args env).mapM id | return none
+    let some shapes := (← expressionDimsList args env forGather).mapM id | return none
     some <$> shapeResult (ArrayData.concatDims axis shapes)
   | .array (.makearray regions) _, _ =>
     some <$> shapeResult ((ArrayData.regionBounds regions).map (List.map ArrayData.extent))
-  | .faq [] _ _ _ _, _ | .faqWhere [] _ _ _ _ _, _ => return some []
+  | .faq [] _ _ _ _, _ | .faqWhere [] _ _ _ _ _, _ | .faqJoin [] _ _ _ _ _ _, _ => return some []
   | .faq out _ rs body _, env => do
     if rs.raggedUses.any (fun range => (outputNames out).contains range.name) then
       throw (.unsupported "faq ragged output index")
     queryDims out (← faqRanges rs) body none env
-  | .faqWhere out _ rs p body _, env => do
+  | .faqWhere out _ rs p body _, env | .faqJoin out _ rs _ p body _, env => do
     if rs.raggedUses.any (fun range => (outputNames out).contains range.name) then
       throw (.unsupported "faq ragged output index")
     queryDims out (← faqRanges rs) body (some p) env
   | _, _ => return none
 
-def expressionDimsList : List Ast → Env α → Except EvalError (List (Option (List Nat)))
-  | [], _ => pure []
-  | a :: rest, env => do return (← expressionDims a env) :: (← expressionDimsList rest env)
+def expressionDimsList : List Ast → Env α → Bool → Except EvalError (List (Option (List Nat)))
+  | [], _, _ => pure []
+  | a :: rest, env, forGather => do
+    return (← expressionDims a env forGather) :: (← expressionDimsList rest env forGather)
 
 /-- Interpret each selected branch at a broadcast coordinate. Scalar gathers
 and whole-array operators keep their operand scopes. -/
@@ -1205,10 +1375,7 @@ def evalCell : Ast → Env α → List Nat → Except EvalError (Val α)
   | .node op args, env, ix =>
     match Op.ofString op with
     | .ifelse => evalConditionalCell args env ix
-    | .strict .index => do
-      let a :: is ← evalList args env | throw (.typeError "operand count")
-      let value ← indexCell a (← is.mapM (fun v => do asInt (← asNum v)))
-      projectCell value ix
+    | .strict .index => do projectCell (← evalIndex args env) ix
     | .strict o => do applyCell o (← evalCellList args env ix)
     | .other s => throw (.unsupported s)
   | .array (.broadcast fn) args, env, ix => do
@@ -1229,6 +1396,11 @@ def evalCell : Ast → Env α → List Nat → Except EvalError (Val α)
     let ranges ← checkedFaqRanges out rs.raggedUses (← faqRanges rs) body (some p) env
     evalFaq out red ranges (fun outputs contracted => reverseFaqWindow outputs contracted (some p))
       (fun e => do return truthy (← asNum (← eval p e))) (eval body) env (some ix) rs.raggedUses
+  | .faqJoin out red rs pairs p body _, env, ix => do
+    let ranges ← checkedFaqRanges out rs.raggedUses (← faqRanges rs) body (some p) env
+    let joins ← joinPartners pairs ranges env
+    evalFaq out red ranges (fun outputs contracted => reverseFaqWindow outputs contracted (some p))
+      (fun e => do return truthy (← asNum (← eval p e))) (eval body) env (some ix) rs.raggedUses joins
   | .apply n _, _, _ => .error (.unsupported s!"apply_operator {n}: not expanded")
 
 def evalCellList : List Ast → Env α → List Nat → Except EvalError (List (Val α))

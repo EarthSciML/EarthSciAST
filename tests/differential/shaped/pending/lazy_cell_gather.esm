@@ -1,0 +1,87 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "static_lazy_cell_gather",
+    "description": "A full-cell gather reads only the selected cell of a conditional broadcast. The other cell would fault if it were read.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {},
+  "models": {
+    "Probe": {
+      "variables": {
+        "selected": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "selected",
+          "rhs": {
+            "op": "index",
+            "args": [
+              {
+                "op": "broadcast",
+                "args": [
+                  {
+                    "op": "const",
+                    "args": [],
+                    "value": [
+                      1,
+                      0
+                    ]
+                  },
+                  {
+                    "op": "const",
+                    "args": [],
+                    "value": [
+                      7,
+                      8
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          9
+                        ]
+                      },
+                      0
+                    ]
+                  }
+                ],
+                "fn": "ifelse"
+              },
+              1
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 0,
+        "abs": 0
+      },
+      "tests": [
+        {
+          "id": "probe",
+          "time_span": {
+            "start": 0,
+            "end": 1
+          },
+          "assertions": [
+            {
+              "variable": "selected",
+              "time": 0,
+              "expected": 7
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

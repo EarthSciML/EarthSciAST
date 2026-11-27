@@ -1,0 +1,13 @@
+{
+  "fixture": "ragged_distinct_extent",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "ragged_distinct",
+      "assertion_idx": 1,
+      "variable": "num_found",
+      "actual": 3.0
+    }
+  ]
+}

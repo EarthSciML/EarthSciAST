@@ -18,6 +18,20 @@ SPEC.loader.exec_module(ADAPTER)
 
 
 class StaticArrayAssertions(unittest.TestCase):
+    def request_static(self, model, documents):
+        request = [{"test_id": "probe", "assertion_idx": 1}]
+        payload = "".join(
+            json.dumps({"document": document, "requests": request}) + "\n" for document in documents
+        )
+        proc = subprocess.run(
+            [ADAPTER.BINARY, "static-assertions-jsonl", model],
+            input=payload,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        return [json.loads(line) for line in proc.stdout.splitlines()]
+
     def check_passes(self, manifest_path, fixture):
         result = ADAPTER.run_fixture(manifest_path, fixture)
         self.assertIn("assertions", result, result)
@@ -85,6 +99,127 @@ class StaticArrayAssertions(unittest.TestCase):
             ADAPTER.run_fixture(manifest_path, fixture),
             {"error": "unbound: missingFactor"},
         )
+
+    def test_lazy_cell_gather(self):
+        path = ROOT / "tests/differential/shaped/pending/lazy_cell_gather.esm"
+        selected = json.loads(path.read_text())
+        rejected = json.loads(path.read_text())
+        rejected["models"]["Probe"]["equations"][0]["rhs"]["args"][1] = 2
+        success, fault = self.request_static("Probe", [selected, rejected])
+        self.assertEqual([ADAPTER.decode_float_bits(v) for v in success["values"]], [7.0])
+        self.assertEqual(fault, {"error": "E_TREEWALK_CONSTARRAY_OOB"})
+
+    def test_gather_respects_scalar_conditional_shape(self):
+        def node(op, *args, **fields):
+            return {"op": op, "args": list(args), **fields}
+
+        branch = node("ifelse", node("true"), 7, node("const", value=[8, 9]))
+        base = node("+", branch, node("const", value=[10]))
+        lazy = node(
+            "broadcast",
+            node("const", value=[1, 0]),
+            node("const", value=[7, 8]),
+            node("index", node("const", value=[9]), 0),
+            fn="ifelse",
+        )
+        stable = node("+", lazy, node("ifelse", node("true"), 10, 20))
+        equations = [
+            {
+                "lhs": name,
+                "rhs": node(
+                    "faq",
+                    output_idx=["i"],
+                    ranges={"i": {"from": "cells"}},
+                    expr=node("index", operand, subscript),
+                ),
+            }
+            for name, operand, subscript in (
+                ("valid", base, 1),
+                ("invalid", base, 2),
+                ("lazy", stable, 1),
+            )
+        ]
+        document = {
+            "esm": "2.4.0",
+            "metadata": {"name": "ScalarConditionalGather"},
+            "index_sets": {"cells": {"kind": "interval", "size": 1}},
+            "models": {"Probe": {"variables": {}, "equations": equations}},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gather.esm"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            proc = subprocess.run(
+                [ADAPTER.BINARY, "templates", path],
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+        valid, invalid, lazy = json.loads(proc.stdout)["results"]
+        self.assertEqual(valid["value"], 17)
+        self.assertEqual(invalid["skipped"], "E_TREEWALK_CONSTARRAY_OOB")
+        self.assertEqual(lazy["value"], 17)
+
+    def test_join_rejects_rounded_declared_integer_keys(self):
+        path = CONFORMANCE / "static_array_semantics/fixtures/static_join_single_axis.esm"
+        documents = []
+        for source in ("exact", "const", "override"):
+            document = json.loads(path.read_text())
+            model = document["models"]["SingleAxisJoin"]
+            equations = {eq["lhs"]: eq["rhs"] for eq in model["equations"]}
+            equations["id"]["value"][0] = 2**53 + 4
+            key_values = equations["selected_key"]["value"]
+            key_values[0] = 2**53 + 4 if source == "exact" else 2**53 + 3
+            if source == "override":
+                model["equations"] = [
+                    eq for eq in model["equations"] if eq["lhs"] != "selected_key"
+                ]
+                model["variables"]["selected_key"].update(type="parameter", default=[1, 2, 99, 4, 99])
+                model["tests"][0]["parameter_overrides"] = {"selected_key": key_values}
+            documents.append(document)
+        exact, const, override = self.request_static("SingleAxisJoin", documents)
+        self.assertEqual(ADAPTER.decode_float_bits(exact["values"][0]), 1011)
+        for result in (const, override):
+            self.assertEqual(
+                result,
+                {
+                    "error": "unsupported_construct: integer key in selected_key "
+                    "is not exactly representable in binary64"
+                },
+            )
+
+    def test_join_side_diagnostics(self):
+        sources = ROOT / "tests/invalid/faq/build_time"
+        cases = {
+            "self_join_index_set_key_ambiguous": "join_side_ambiguous",
+            "self_join_three_ranges_ambiguous": "join_side_ambiguous",
+            "self_join_syms_unknown_symbol": "join_syms_unknown_symbol",
+        }
+        documents = []
+        for fixture in cases:
+            document = json.loads((sources / f"{fixture}.esm").read_text())
+            [model] = document["models"].values()
+            document["models"] = {"Probe": model}
+            # Use a static assertion to request the same RHS as the corpus
+            # fixture. Its join scope and expected structural fault are intact.
+            model["equations"][-1]["lhs"] = "count"
+            model["tests"] = [
+                {"id": "probe", "assertions": [{"variable": "count", "time": 0, "expected": 0}]}
+            ]
+            documents.append(document)
+        results = self.request_static("Probe", documents)
+        for (fixture, code), result in zip(cases.items(), results, strict=True):
+            with self.subTest(fixture=fixture):
+                self.assertEqual(result["error"].split(":", 1)[0], code)
+
+    def test_pending_join_replays(self):
+        manifest = CONFORMANCE / "static_array_semantics" / "manifest.json"
+        source = ROOT / "tests/differential/shaped/pending"
+        for path in sorted(source.glob("join_*.esm")):
+            with self.subTest(fixture=path.name):
+                self.check_passes(
+                    manifest,
+                    {"id": path.stem, "path": str(path), "model": "Probe"},
+                )
 
     def test_static_faq(self):
         fixture = {

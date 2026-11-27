@@ -336,10 +336,10 @@ theorem op_not : Op.ofString "not" = .strict .not := rfl
 variable {env : Env α}
 
 theorem ev_un {op : String} {o : StrictOp} (hop : Op.ofString op = .strict o) {a : Ast} {u : α}
-    (ha : eval a env = .ok (.num u)) :
+    (ha : eval a env = .ok (.num u)) (notGather : o ≠ .index := by decide) :
     eval (.node op [a]) env = (applyStrict o [.num u]).map Val.num := by
-  simp only [eval, hop, evalList, ha, bind, Except.bind, pure, Except.pure]
-  cases h : applyStrict o [.num u] <;> rfl
+  exact eval_strict_numbers env op [a] o [u] hop notGather
+    (by simp [evalList, ha, bind, Except.bind, pure, Except.pure])
 
 theorem ev_lit (m : ℤ) (h : |m| ≤ 2 ^ 53) : IV env (lit m) m := by
   simp [IV, lit, eval, ExprLaws.ofDec_int (α := α) m h]

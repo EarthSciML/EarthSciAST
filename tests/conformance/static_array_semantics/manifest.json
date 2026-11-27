@@ -342,6 +342,242 @@
     ]
    },
    "named_exclusions": []
+  },
+  {
+   "id": "ragged_distinct_extent",
+   "path": "fixtures/ragged_distinct_extent.esm",
+   "model": "RaggedDistinctStatic",
+   "golden": "golden/ragged_distinct_extent.json",
+   "tags": [
+    "static",
+    "faq",
+    "ragged",
+    "value-invention"
+   ],
+   "note": "A distinct producer binds members directly. Duplicates, an empty parent, and padding do not add to the derived extent.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "join_on_computed_key_static",
+   "path": "conformance/native_model_shapes/fixtures/join_on_computed_key_static.esm",
+   "model": "JoinOnComputedKey",
+   "golden": "../native_model_shapes/golden/join_on_computed_key_static.json",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": [],
+   "tags": [
+    "static",
+    "faq",
+    "join"
+   ]
+  },
+  {
+   "id": "join_on_parameter_key_static",
+   "path": "conformance/native_model_shapes/fixtures/join_on_parameter_key_static.esm",
+   "model": "JoinOnParameterKey",
+   "golden": "../native_model_shapes/golden/join_on_parameter_key_static.json",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": [],
+   "tags": [
+    "static",
+    "faq",
+    "join"
+   ]
+  },
+  {
+   "id": "static_join_categorical",
+   "path": "fixtures/static_join_categorical.esm",
+   "model": "CategoricalJoin",
+   "golden": "golden/static_join_categorical.json",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": [],
+   "tags": [
+    "static",
+    "faq",
+    "join"
+   ]
+  },
+  {
+   "id": "static_join_composite",
+   "path": "fixtures/static_join_composite.esm",
+   "model": "CompositeJoin",
+   "golden": "golden/static_join_composite.json",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": [],
+   "tags": [
+    "static",
+    "faq",
+    "join"
+   ]
+  },
+  {
+   "id": "static_join_extra_range",
+   "path": "fixtures/static_join_extra_range.esm",
+   "model": "ExtraJoinRange",
+   "golden": "golden/static_join_extra_range.json",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": [],
+   "tags": [
+    "static",
+    "faq",
+    "join"
+   ]
+  },
+  {
+   "id": "static_join_self",
+   "path": "fixtures/static_join_self.esm",
+   "model": "StaticSelfJoin",
+   "golden": "golden/static_join_self.json",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": [],
+   "tags": [
+    "static",
+    "faq",
+    "join"
+   ]
+  },
+  {
+   "id": "static_join_single_axis",
+   "path": "fixtures/static_join_single_axis.esm",
+   "model": "SingleAxisJoin",
+   "golden": "golden/static_join_single_axis.json",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": [],
+   "tags": [
+    "static",
+    "faq",
+    "join"
+   ]
+  },
+  {
+   "id": "conditional_gather_control",
+   "path": "fixtures/conditional_gather_control.esm",
+   "model": "ConditionalGatherControl",
+   "golden": "golden/conditional_gather_control.json",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": [],
+   "tags": [
+    "static",
+    "gather",
+    "ifelse"
+   ]
   }
  ]
 }

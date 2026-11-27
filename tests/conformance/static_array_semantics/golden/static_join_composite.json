@@ -1,0 +1,55 @@
+{
+  "fixture": "static_join_composite",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "probe",
+      "assertion_idx": 1,
+      "variable": "ordered",
+      "actual": 16.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 2,
+      "variable": "split",
+      "actual": 16.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 3,
+      "variable": "reordered",
+      "actual": 16.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 4,
+      "variable": "filtered",
+      "actual": 2.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 5,
+      "variable": "matched",
+      "actual": 10.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 6,
+      "variable": "matched",
+      "actual": 20.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 7,
+      "variable": "matched",
+      "actual": 10.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 8,
+      "variable": "matched",
+      "actual": 0.0
+    }
+  ]
+}

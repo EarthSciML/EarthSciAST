@@ -1,0 +1,18 @@
+{
+  "esm": "2.4.0",
+  "metadata": {"name": "SymbolicImportBinding"},
+  "index_sets": {"deck.fine.cells": {"kind": "interval", "size": 5}},
+  "models": {
+    "Probe": {
+      "variables": {
+        "probe": {"type": "parameter", "units": "1", "shape": ["deck.fine.cells"], "default": [1, 2, 3, 4, 5]},
+        "width": {"type": "unknown", "units": "1"},
+        "value": {"type": "unknown", "units": "1"}
+      },
+      "equations": [
+        {"lhs": "width", "rhs": {"op": "faq", "args": [], "output_idx": [], "ranges": {"i": [1, 5]}, "expr": 1}},
+        {"lhs": "value", "rhs": 17}
+      ]
+    }
+  }
+}

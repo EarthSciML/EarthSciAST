@@ -682,7 +682,8 @@ theorem ev_bodyW {k red : String} {F P : Ast} {n : ℕ} {env : Env α} {u M : α
 theorem ev_min_inf {a b : Ast} {env : Env α} {u : α} (ha : eval a env = .ok (.inf false))
     (hb : eval b env = .ok (.num u)) : eval (.node "min" [a, b]) env = .ok (.num u) := by
   simp only [eval, op_min, evalList, ha, hb, bind, Except.bind, pure, Except.pure]
-  simp [hasInf, strictWithInf, infMinMax, List.filterMapM, List.filterMapM.loop]
+  simp [applyWholeStrict, hasInf, strictWithInf, infMinMax, List.filterMapM, List.filterMapM.loop,
+    bind, Except.bind]
   rfl
 
 theorem optFold_ne_none (f : α → α → α) (g : ℕ → α) {L : List ℕ} (h : L ≠ []) :
