@@ -668,11 +668,14 @@ function _geo_frame(faq, index_sets, derived_extents)
     )
 end
 
-# With a zero RHS codegen budget, avoid compiling tiny one-off setup sweeps in
-# non-strict builds. On large sweeps, walking each tuple can cost more than
-# compilation. Count the full loop product as an upper bound even with gates.
-function _geo_emit_setup_kernel(plan::CompilerPlan, fr::_GeoFrame)
-    (plan.strict || _codegen_node_budget() != 0) && return true
+# With a zero RHS codegen budget, a plan that licenses per-cell walks walks a
+# tiny one-off setup sweep rather than compiling it; a strict plan has no
+# license and always compiles. On large sweeps, walking each tuple can cost
+# more than compilation. Count the full loop product as an upper bound even
+# with gates.
+function _geo_emit_setup_kernel(fr::_GeoFrame)
+    _codegen_node_budget() != 0 && return true
+    _optional_percell_license() === nothing && return true
     limit = 64
     terms = 1
     for extent in Iterators.flatten((fr.exts, fr.cexts))
@@ -690,7 +693,7 @@ end
 # otherwise).
 function _geo_body_callable(body, filt, kernel_cache, fr::_GeoFrame)
     plan = _compiler_plan_now()
-    emit = plan.share_subtrees && _geo_emit_setup_kernel(plan, fr)
+    emit = plan.share_subtrees && _geo_emit_setup_kernel(fr)
     shape = emit && filt === nothing && kernel_cache !== nothing ? _geo_shape_key(body) : nothing
     known = shape === nothing ? missing : get(kernel_cache.byshape, shape[1], missing)
     if known isa Tuple
