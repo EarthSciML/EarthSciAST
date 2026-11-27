@@ -893,6 +893,161 @@ def _apply_scalar_op(op: str, vals: list[Any], *, where: str) -> Any:
     return kernel(vals)
 
 
+def _cell_operator(expr: Expr) -> str | None:
+    if not isinstance(expr, ExprNode):
+        return None
+    op = expr.fn if expr.op == "broadcast" else expr.op
+    if op is None or op not in _SCALAR_OP_APPLY:
+        return None
+    lo, hi = op_registry.effective_arity_bounds(op) or (1, None)
+    return op if len(expr.args) >= lo and (hi is None or len(expr.args) <= hi) else None
+
+
+def _has_cell_conditional(expr: Expr) -> bool:
+    op = _cell_operator(expr)
+    return op == "ifelse" or (
+        op is not None
+        and isinstance(expr, ExprNode)
+        and any(_has_cell_conditional(arg) for arg in expr.args)
+    )
+
+
+def _operand_frame(shape: Shape, rank: int, *, left: bool) -> Shape:
+    padding = (1,) * (rank - len(shape))
+    return shape + padding if left else padding + shape
+
+
+def _gather_operand_shape(expr: Expr, ctx: EvalContext) -> Shape | None:
+    """Infer an operand's extents without executing its expression."""
+    if not isinstance(expr, ExprNode):
+        if isinstance(expr, str):
+            try:
+                return np.shape(_resolve_symbol(expr, ctx))
+            except NumpyInterpreterError:
+                return None
+        return ()
+    op, args = expr.op, expr.args
+    if op == "const":
+        return np.shape(expr.value)
+    if op in ("true", "false"):
+        return ()
+    if op == "index" and args:
+        base_shape = _gather_operand_shape(args[0], ctx)
+        if base_shape is not None and all(_gather_operand_shape(a, ctx) == () for a in args[1:]):
+            return base_shape[len(args) - 1 :]
+        return None
+    if op == "reshape":
+        declared = expr.shape or []
+        shape = tuple(n for n in declared if isinstance(n, int) and n >= 0)
+        return shape if len(shape) == len(declared) else None
+    if op == "transpose" and len(args) == 1:
+        shape = _gather_operand_shape(args[0], ctx)
+        if shape is None:
+            return None
+        if expr.perm is None:
+            return (1, *shape) if len(shape) == 1 else shape[::-1]
+        if sorted(expr.perm) == list(range(len(shape))):
+            return tuple(shape[i] for i in expr.perm)
+        return None
+    if op == "faq" and not any(isinstance(i, str) for i in expr.output_idx or ()):
+        return ()
+    if op == "Pre" and len(args) == 1:
+        return _gather_operand_shape(args[0], ctx)
+    if _cell_operator(expr) is not None:
+        shapes = [_gather_operand_shape(arg, ctx) for arg in args]
+        if all(s is not None for s in shapes):
+            return _cell_output_shape([s for s in shapes if s is not None], op == "broadcast")
+    return None
+
+
+def _cell_output_shape(shapes: list[Shape], left: bool) -> Shape:
+    rank = max(map(len, shapes), default=0)
+    return np.broadcast_shapes(*(_operand_frame(s, rank, left=left) for s in shapes))
+
+
+@dataclass(frozen=True)
+class _SelectedCell:
+    shape: Shape
+    read: Callable[[Shape], Any]
+
+
+def _compile_selected_cell(expr: Expr) -> Callable[[EvalContext], _SelectedCell | None]:
+    """Compile a pointwise tree for a full scalar gather, with lazy conditionals."""
+    op = _cell_operator(expr)
+    if op is None or not isinstance(expr, ExprNode):
+        evaluate = _compile_expr(expr)
+
+        def leaf(ctx):
+            shape = _gather_operand_shape(expr, ctx)
+            if shape is None:
+                return None
+
+            def read(coordinate):
+                value = evaluate(ctx)
+                return value[coordinate] if coordinate else value
+
+            return _SelectedCell(shape, read)
+
+        return leaf
+
+    children = [_compile_selected_cell(arg) for arg in expr.args]
+    left = expr.op == "broadcast"
+
+    def bind(ctx):
+        plans = []
+        for child in children:
+            plan = child(ctx)
+            if plan is None:
+                return None
+            plans.append(plan)
+        shape = _cell_output_shape([plan.shape for plan in plans], left)
+
+        def operand(plan, coordinate):
+            # Match the leaf's broadcast frame, dropping any axes added by padding.
+            if not plan.shape:
+                value = plan.read(())
+                return _as_array(value)[()] if left else value
+            cell = coordinate[: len(plan.shape)] if left else coordinate[-len(plan.shape) :]
+            return plan.read(tuple(0 if n == 1 else i for i, n in zip(cell, plan.shape)))
+
+        def read(coordinate):
+            if op == "ifelse":
+                selected = plans[1] if operand(plans[0], coordinate) else plans[2]
+                result = operand(selected, coordinate)
+            else:
+                result = _apply_scalar_op(
+                    op,
+                    [operand(plan, coordinate) for plan in plans],
+                    where="indexed elementwise op",
+                )
+            return np.asarray(result, dtype=float)[()] if left else result
+
+        return _SelectedCell(shape, read)
+
+    return bind
+
+
+def _selected_coordinate(indices: list[Any], shape: Shape) -> Shape:
+    coordinate = []
+    for axis, (value, extent) in enumerate(zip(indices, shape)):
+        i = int(round(float(value))) - 1
+        if i < -extent or i >= extent:
+            raise IndexError(f"index {i} is out of bounds for axis {axis} with size {extent}")
+        coordinate.append(i % extent)
+    return tuple(coordinate)
+
+
+def _const_value(expr: ExprNode) -> float | np.ndarray:
+    value = expr.value
+    if isinstance(value, (list, tuple)):
+        return np.asarray(value, dtype=float)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    raise NumpyInterpreterError(
+        f"`const` op value must be a number or nested array, got {type(value).__name__}"
+    )
+
+
 def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
     """Recursively evaluate an ESM expression against ``ctx``.
 
@@ -924,14 +1079,7 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
         return _eval_index(expr, ctx)
     # --- inline constants and the load-time-lowered `enum` ---
     if op == "const":
-        v = expr.value
-        if isinstance(v, (list, tuple)):
-            return np.asarray(v, dtype=float)
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            return float(v)
-        raise NumpyInterpreterError(
-            f"`const` op value must be a number or nested array, got {type(v).__name__}"
-        )
+        return _const_value(expr)
     if op == "enum":
         raise _enum_not_lowered()
 
@@ -1098,6 +1246,7 @@ def refuse_unevaluable_operators(expr: Expr) -> None:
 #: is overwhelmingly made of.
 _COMPILED_OPS: frozenset = frozenset(
     {
+        "const",
         "index",
         "+",
         "-",
@@ -1177,6 +1326,9 @@ def _build_compiled_node(expr: ExprNode) -> Callable[[EvalContext], Any]:
         return _compile_delegate(expr)
     args = expr.args or []
 
+    if op == "const":
+        return lambda ctx: _const_value(expr)
+
     if op == "index":
         if not args:
             return _compile_delegate(expr)  # eval_expr raises the arity error
@@ -1191,11 +1343,16 @@ def _build_compiled_node(expr: ExprNode) -> Callable[[EvalContext], Any]:
         base = args[0]
         if not idx_c:
             return lambda ctx: _gather_index(arr_c(ctx), [])
+        select = _compile_selected_cell(base) if _has_cell_conditional(base) else None
 
         def f_index(ctx):
             idxs = [c(ctx) for c in idx_c]
             if ctx.recur is not None and arr_name == ctx.recur.name:
                 return ctx.recur.read(idxs)
+            if select is not None and all(np.ndim(i) == 0 for i in idxs):
+                cell = select(ctx)
+                if cell is not None and len(cell.shape) == len(idxs):
+                    return float(cell.read(_selected_coordinate(idxs, cell.shape)))
             return _gather_index(arr_c(ctx), idxs, _const_gather_name(base, ctx))
 
         return f_index
@@ -1389,6 +1546,7 @@ def _gather_index(
 def _eval_index(expr: ExprNode, ctx: EvalContext) -> float | np.ndarray:
     if not expr.args:
         raise NumpyInterpreterError("index requires at least 1 arg (the array)")
+    base = expr.args[0]
     # A CAUSAL SELF-READ (esm-spec §4.3.1.1), checked before every other channel
     # and before the array operand is evaluated at all: during the sweep the
     # array being defined exists nowhere else, so evaluating `args[0]` would only
@@ -1396,11 +1554,18 @@ def _eval_index(expr: ExprNode, ctx: EvalContext) -> float | np.ndarray:
     # out of range instead of resolving to the §5.5.5 zero ghost. ``ctx.recur``
     # is ``None`` on every path but a recurrence sweep, so this costs every other
     # document one ``is None`` test.
-    if ctx.recur is not None and expr.args[0] == ctx.recur.name:
+    if ctx.recur is not None and base == ctx.recur.name:
         return ctx.recur.read([eval_expr(a, ctx) for a in expr.args[1:]])
-    arr_val = eval_expr(expr.args[0], ctx)
+    if (
+        isinstance(base, ExprNode)
+        and len(expr.args) > 1
+        and not _compiler.every_tier_off()
+        and _has_cell_conditional(base)
+    ):
+        return _compile_expr(expr)(ctx)
+    arr_val = eval_expr(base, ctx)
     idxs = [eval_expr(a, ctx) for a in expr.args[1:]]
-    return _gather_index(arr_val, idxs, _const_gather_name(expr.args[0], ctx))
+    return _gather_index(arr_val, idxs, _const_gather_name(base, ctx))
 
 
 def _decompose_body_as_scaled_product(

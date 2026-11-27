@@ -91,6 +91,8 @@ struct _GeoCtx
     var_shapes::AbstractDict
 end
 
+_has_on_clause(expr) = expr.join !== nothing && any(c -> c isa AbstractVector, expr.join)
+
 # A node's `join` resolves ONCE per sweep through `_resolve_geo_join_gates` below
 # and then compiles to slot-addressed `_GeoSlotGate`s; the `filter` predicate
 # compiles to a `_Node` evaluated per cell. Key-equality broad phase per RFC §5.3 /
@@ -256,14 +258,16 @@ function _geom_sweep_contract!(
         u::Vector{Float64}, cidx::CartesianIndices{M},
         init::Float64, fold::F, ov = nothing
     ) where {N, M, F}
+    canonical = gates !== nothing && !isempty(gates)
+    contracted = canonical ? CartesianIndices(reverse(axes(cidx))) : cidx
     for I in CartesianIndices(arr)
         @inbounds for k in 1:N
             u[k] = Float64(I[k])
         end
         acc = init
-        for C in cidx
+        for C in contracted
             @inbounds for k in 1:M
-                u[N + k] = Float64(C[k])
+                u[N + k] = Float64(C[canonical ? M + 1 - k : k])
             end
             _geo_ov_ok(ov, u) || continue
             _geo_gate_ok(gates, filt, u) || continue
@@ -604,6 +608,7 @@ function _geom_sweep_restrict_contract!(
         cexts::NTuple{M, Int}, gc::Int, nout::Int,
         init::Float64, fold::F
     ) where {N, M, F}
+    canonical = gates !== nothing && !isempty(gates)
     for I in CartesianIndices(arr)
         @inbounds for k in 1:N
             u[k] = Float64(I[k])
@@ -618,9 +623,10 @@ function _geom_sweep_restrict_contract!(
         vals = _overlap_restrict(1:cexts[gc], parts)::Vector{Int}
         if !isempty(vals)
             dims = ntuple(d -> d == gc ? length(vals) : cexts[d], Val(M))
-            for C in CartesianIndices(dims)
+            for C in CartesianIndices(canonical ? reverse(dims) : dims)
                 @inbounds for k in 1:M
-                    u[nout + k] = Float64(k == gc ? vals[C[k]] : C[k])
+                    index = C[canonical ? M + 1 - k : k]
+                    u[nout + k] = Float64(k == gc ? vals[index] : index)
                 end
                 _geo_gate_ok(gates, filt, u) || continue
                 acc = fold(acc, _geo_body_eval(body, u))
@@ -655,6 +661,7 @@ function _geo_frame(faq, index_sets, derived_extents)
     out = String[v for v in faq.output_idx]
     exts = Int[_geo_index_extent(faq.ranges[v], index_sets, derived_extents) for v in out]
     contract = String[k for k in keys(faq.ranges) if !(k in out)]
+    _has_on_clause(faq) && sort!(contract)
     setof = Dict{String, String}()
     scope = Dict{String, Int}()
     for v in Iterators.flatten((out, contract))

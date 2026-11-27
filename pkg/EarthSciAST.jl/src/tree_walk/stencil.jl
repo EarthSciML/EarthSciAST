@@ -483,6 +483,9 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
     # any `_is_scalar_op` (registry categories applicable elementwise).
     if first_arg isa OpExpr && _is_scalar_op((first_arg::OpExpr).op)
         fa = first_arg::OpExpr
+        # Positional broadcasts need the native resolver's per-operand
+        # coordinate mapping and result-shape check.
+        _mentions_anonymous_array(fa) && return _decline(:positional_gather)
         # `_index_pushdown_arrayish` (build_helpers.jl) is the resolver's operand
         # test, shared verbatim: it looks THROUGH nested elementwise ops, so a
         # folded elementwise array observed (`index(1 + cos(pi*zc), j)`) pushes

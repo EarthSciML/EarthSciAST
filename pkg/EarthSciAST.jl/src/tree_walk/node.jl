@@ -152,6 +152,13 @@ struct _ConstGatherRef
     name::String          # its `const_arrays` registry name — diagnostics / identity
 end
 
+# A bounds-only read of an anonymous result. It shares the const-gather IR's
+# axis checks and uses a single true value with zero strides on every axis.
+struct _GatherBoundsRef
+    dims::Vector{Int}
+    name::String
+end
+
 # Resolve's marker for a live forcing gather whose subscripts are not all build
 # constants (a loop counter of a symbolic resolve): the `index` node's `args`
 # are the resolved subscripts, and `_compile` lowers it to a `_NK_LIVE_GATHER`

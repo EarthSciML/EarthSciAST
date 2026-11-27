@@ -160,7 +160,7 @@ function _index_target_kind(t::ASTExpr)::_IndexTarget
     _is_faq_op(o.op) && return _IT_FAQ
     o.op == "makearray" && return _IT_MAKEARRAY
     o.op in _SHAPE_REMAP_OPS && return _IT_SHAPE_OP
-    o.op == "const" && return o.value isa AbstractVector ? _IT_CONST_ARRAY : _IT_OTHER
+    _is_inline_const_array(o) && return _IT_CONST_ARRAY
     o.op == "index" && return _IT_INDEX
     _is_scalar_op(o.op) && return _IT_ELEMENTWISE
     return _IT_OTHER
@@ -185,6 +185,7 @@ _array_name(n::AbstractString, array_var_info, pgather, const_arrays) =
 )
 
 function _resolve_index_op(expr::OpExpr, rc::_ResolveCtx)
+    expr.value isa _GatherBoundsRef && return expr
     array_var_info, const_arrays, pgather = rc.array_var_info, rc.const_arrays, rc.pgather
     isempty(expr.args) &&
         throw(TreeWalkError("E_TREEWALK_INDEX_EMPTY", "index op requires at least one arg"))
@@ -259,22 +260,51 @@ function _resolve_index_of_elementwise(fa::OpExpr, subs::Vector{ASTExpr}, rc::_R
     _amemo = IdDict{OpExpr, Bool}()
     _arrayish(a) = _index_pushdown_arrayish(a, _leaf_is_array, _amemo)
     if _anyof(_arrayish, fa.args)
-        # A combination with a shape-op operand is anonymous, and its
-        # operands broadcast positionally (§4.3.4): each reads the
+        # A combination with an anonymous array operand broadcasts
+        # positionally (§4.3.4): each operand reads the
         # subscripts its own shape admits. A combination of variables
         # alone is left to the name-aligned lift, which has already
         # written each operand's own subscripts.
-        fshape = _mentions_shape_op(fa) ? _remap_operand_shape(fa, rc) : nothing
-        rext = fshape === nothing ? nothing : fshape[2]
-        _subs_for(a) = (rext === nothing || length(rext) != length(subs)) ? subs :
+        fshape = _mentions_anonymous_array(fa) ? _remap_operand_shape(fa, rc) : nothing
+        rext = fshape === nothing || length(fshape[2]) != length(subs) ? nothing : fshape[2]
+        check, always_faults = rext === nothing ? (nothing, false) :
+            _resolve_gather_bounds(fa.op, subs, rext, rc)
+        always_faults && return check
+        _subs_for(a) = rext === nothing ? subs :
             something(_broadcast_operand_subs(a, subs, rext, rc), subs)
         pushed = ASTExpr[
             _arrayish(a) ? OpExpr("index", ASTExpr[a, _subs_for(a)...]) : a
                 for a in fa.args
         ]
-        return _resolve_indices(reconstruct(fa; args = pushed), rc)
+        cell = reconstruct(fa; args = pushed)
+        check === nothing && return _resolve_indices(cell, rc)
+        push!(rc.guards, (check, true))
+        value = try
+            _resolve_indices(cell, rc)
+        finally
+            pop!(rc.guards)
+        end
+        return OpExpr("ifelse", ASTExpr[check, value, NumExpr(0.0)])
     end
     return nothing
+end
+
+# Validate the result coordinate even where the selected operand broadcasts a
+# scalar or a singleton. Symbolic checks use the existing const-gather IR. A
+# constant out-of-range coordinate under a lazy guard uses the same IR so the
+# error occurs only if that read is taken.
+function _resolve_gather_bounds(op::String, subs::Vector{ASTExpr}, ext::Vector{Int}, rc::_ResolveCtx)
+    if !_anyof(a -> _subscript_is_runtime(a, rc.const_arrays), subs)
+        indices = Int[_const_subscript_int(a, rc.const_arrays) for a in subs]
+        bad = findfirst(d -> !(1 <= indices[d] <= ext[d]), eachindex(ext))
+        bad === nothing && return (nothing, false)
+        name = "$(op) result"
+        _guarded_oob_deferred(rc) || _resolve_const_index_oob(:computed, name, bad, indices[bad], ext[bad])
+        rc.memo === nothing || (rc.memo.deferrals[] += 1)
+        return (OpExpr("index", ASTExpr[IntExpr(Int64(i)) for i in indices]; value = _GatherBoundsRef(ext, name)), true)
+    end
+    indices = ASTExpr[_resolve_indices(a, rc) for a in subs]
+    return (OpExpr("index", indices; value = _GatherBoundsRef(ext, "$(op) result")), false)
 end
 
 # Expression-position INLINE `const` array literal:

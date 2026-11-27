@@ -170,6 +170,33 @@ fn wholesale_const_gather_out_of_range() {
     assert_eq!(opcount(&prog, "Fault"), 1);
 }
 
+#[test]
+fn wholesale_elementwise_gather_reads_only_its_selected_cell() {
+    let select = json!({"op": "broadcast", "fn": "ifelse", "args": [
+        lit(&[1.0, 0.0]), plus(json!("s"), lit(&[7.0, 8.0])), idx(lit(&[9.0]), &[json!(0)])
+    ]});
+    for (position, expected) in [(1, Some(7.0)), (2, None), (3, Some(0.0))] {
+        let compiled = compile(doc(
+            json!({"s": {"type": "unknown", "default": 0.0}}),
+            vec![json!({
+                "lhs": {"op": "D", "args": ["s"], "wrt": "t"},
+                "rhs": idx(select.clone(), &[json!(position)])
+            })],
+        ));
+        ab(&compiled, &no_params());
+        crate::simulate_array::take_const_array_oob();
+        let (dy, _) = compiled.debug_eval_rhs(&[0.0], 0.0, &HashMap::new());
+        let fault = crate::simulate_array::take_const_array_oob();
+        if let Some(expected) = expected {
+            assert_eq!(dy, vec![expected]);
+            assert!(fault.is_none());
+        } else {
+            assert!(dy[0].is_nan());
+            assert!(fault.is_some_and(|message| message.contains("index 0 out of range 1..1")));
+        }
+    }
+}
+
 /// `index(p, i)` on a 0-D parameter is the oracle's `E_TREEWALK_INDEX_ON_SCALAR`
 /// with `NaN`; in a filtered rank-0 reduction (the `join_filter.esm` shape)
 /// the filter's fault at the first tuple settles which one latches, so the

@@ -3,9 +3,52 @@
 //! a recurrence body makes of its own cells.
 
 use super::*;
+use crate::simulate_array::index_cell::ElementwiseCell;
 
 impl<'m> TapeBuilder<'m> {
     // -- index (gather) -------------------------------------------------------
+
+    pub(super) fn fixed_elementwise_index(
+        &self,
+        node: &ExpressionNode,
+        bx: Option<&LBox>,
+    ) -> Option<Expr> {
+        let (base, indices) = node.args.split_first()?;
+        let raw: Option<DimI> = indices
+            .iter()
+            .map(|i| match i {
+                Expr::Integer(i) => Some(crate::precision::round(*i as f64).round() as i64),
+                Expr::Number(i) => Some(crate::precision::round(*i).round() as i64),
+                _ => None,
+            })
+            .collect();
+        let raw = raw?;
+        let plan = self.elementwise_index_plan(base, indices.len(), bx)?;
+        Some(plan.select(&raw))
+    }
+
+    pub(super) fn elementwise_index_plan<'e>(
+        &self,
+        base: &'e Expr,
+        rank: usize,
+        bx: Option<&LBox>,
+    ) -> Option<ElementwiseCell<'e>> {
+        ElementwiseCell::plan(base, rank, &|name| {
+            if name == "t"
+                || self.param_ix.contains_key(name)
+                || bx.is_some_and(|bx| bx.syms.iter().chain(bx.cnames).any(|n| n == name))
+            {
+                return Some(DimU::new());
+            }
+            if let Some(&i) = self.state_ix.get(name) {
+                return Some(self.state_vars[i].shape.clone());
+            }
+            if let Some(ObsVal::Taped(v)) = self.obs_defined.get(name) {
+                return Some(self.lv_box(v).map_or_else(DimU::new, |(shape, _)| shape));
+            }
+            self.forcing_shapes.get(name).cloned()
+        })
+    }
 
     /// Lower an `index` gather, classifying each axis with the shared axis
     /// analyses ([`classify_axis_role`]). Everything is static except the
@@ -33,6 +76,14 @@ impl<'m> TapeBuilder<'m> {
         }
         if let Some(v) = self.lower_index_of_makearray(node, bx)? {
             return Ok(v);
+        }
+        if let Some(cell) = self.fixed_elementwise_index(node, Some(bx)) {
+            // The projection owns fresh AST nodes, so their addresses can
+            // only act as value-numbering keys while this scope is open.
+            self.push_scope();
+            let result = self.lower_expr(&cell, bx);
+            self.pop_scope();
+            return result;
         }
         // A const-array gather may not use the ghost-0 fill (§5.5.5).
         let const_base = self.const_arrays.is_const_base(&node.args[0]);

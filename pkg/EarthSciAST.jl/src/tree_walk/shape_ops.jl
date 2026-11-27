@@ -19,6 +19,7 @@
 # other symbolic remap needs integer division or a per-cell operand choice and
 # is refused by name.
 const _SHAPE_REMAP_OPS = Tuple(sort!(collect(_ops_with(:shape_remap))))
+_is_inline_const_array(o::OpExpr) = o.op == "const" && o.value isa AbstractVector
 
 _try_const_int(a::ASTExpr, const_arrays) =
 try
@@ -54,9 +55,19 @@ function _remap_operand_shape(e::ASTExpr, rc::_ResolveCtx; whole::Bool = false)
     end
     e isa OpExpr || return nothing
     o = e::OpExpr
-    if o.op == "const" && o.value isa AbstractVector
+    if _is_inline_const_array(o)
         ext = _const_op_dims(o.value)
         return (ones(Int, length(ext)), ext)
+    elseif o.op == "index"
+        # Infer the rank without evaluating a gather. A partial gather keeps
+        # its established lowering path and cannot be treated as a scalar.
+        isempty(o.args) && return nothing
+        source = _remap_operand_shape(o.args[1], rc; whole = true)
+        (source === nothing || length(source[2]) != length(o.args) - 1) && return nothing
+        return (Int[], Int[])
+    elseif o.op == "const" ||
+            (_is_faq_op(o.op) && isempty(_output_idx_strings(o)))
+        return (Int[], Int[])
     elseif o.op == "reshape"
         (o.shape === nothing || !all(s -> s isa Integer, o.shape)) && return nothing
         ext = Int[Int(s) for s in o.shape]
@@ -219,10 +230,10 @@ function _index_through_shape_op(o::OpExpr, subs::Vector{ASTExpr}, rc::_ResolveC
     return _shape_remap_refuse(o, "subscript $(kax) is past the joined axis")
 end
 
-# True iff a shape op is an operand of `e`, looking through elementwise ops.
-_mentions_shape_op(e::ASTExpr) = e isa OpExpr && (
-    (e::OpExpr).op in _SHAPE_REMAP_OPS ||
-        (_is_scalar_op((e::OpExpr).op) && _anyof(_mentions_shape_op, (e::OpExpr).args))
+# Anonymous arrays use positional broadcasting, through nested elementwise ops.
+_mentions_anonymous_array(e::ASTExpr) = e isa OpExpr && (
+    _is_inline_const_array(e) || (e::OpExpr).op in _SHAPE_REMAP_OPS ||
+        (_is_scalar_op((e::OpExpr).op) && _anyof(_mentions_anonymous_array, (e::OpExpr).args))
 )
 
 # The subscripts one operand of an elementwise combination is gathered at, under

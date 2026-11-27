@@ -96,8 +96,7 @@ function _foreach_aggregate_term(
     )
 end
 
-# The shared unroll: `Iterators.product` over `iters` (which vary
-# `contract_names[1]` FASTEST), join-gate rejection, contracted-index
+# The shared unroll: a Cartesian product over `iters`, join-gate rejection, contracted-index
 # substitution, filter guard, emit. `COUNT` is a compile-time flag so the
 # `:vi_enum_visits` count exists ONLY in the overlap-gated
 # specialisation — the ungated expansion, the engine's hottest loop, keeps
@@ -110,7 +109,7 @@ function _foreach_aggregate_product(
     body === nothing && iters isa AbstractVector && length(iters) == 1 &&
         return _foreach_keys1(emit!, contract_names[1], iters[1], gates, binding, Val(COUNT))
     nvisit = 0
-    for k_tuple in _agg_tuples(iters)
+    for k_tuple in _agg_tuples(iters, _has_equality_join(gates))
         if binding !== nothing
             COUNT && (nvisit += 1)
             for d in 1:length(contract_names)
@@ -136,10 +135,15 @@ function _foreach_aggregate_product(
     return nothing
 end
 
-# The contracted tuples `_foreach_aggregate_product` visits: the product of the
-# per-index iterators, or a nest's own list (`_ContractNest`).
-_agg_tuples(iters) = Iterators.product(iters...)
-_agg_tuples(nest::_ContractNest) = nest.tuples
+# An equality join admits a subsequence of the canonical range walk
+# (CONFORMANCE_SPEC §5.5.8): earlier names are outer loops. Reverse Julia's
+# first-axis-fastest product and restore the tuple's original name order.
+_has_equality_join(gates) = gates !== nothing &&
+    any(g -> !isempty(g.codes_l) || !isempty(g.codes_r), gates)
+_agg_tuples(iters, canonical::Bool) = canonical ?
+    (reverse(ks) for ks in Iterators.product(reverse(iters)...)) :
+    Iterators.product(iters...)
+_agg_tuples(nest::_ContractNest, ::Bool) = nest.tuples
 
 # Keys mode over one contracted index: the product above with a single
 # iterator, behind a function barrier so the loop is typed.
@@ -213,12 +217,29 @@ function _foreach_aggregate_term_gated(
             gates, filt, zerobar, binding, k_exprs, Val(true)
         )
     elseif kind === :pairs && length(contract_names) == 2
-        # `Iterators.product` varies `contract_names[1]` fastest, so the product
-        # ORDER over the surviving tuples is the pair list sorted by
-        # (contract_names[2] position, contract_names[1] position).
-        fast_is_l = plan[2] == contract_names[1]
-        prs = sort(plan[4]; by = fast_is_l ? (p -> (p[2], p[1])) : (p -> (p[1], p[2])))
-        cols = fast_is_l ? Any[Int[p[1] for p in prs], Int[p[2] for p in prs]] :
+        # Sort matches in the same axis order as the undriven product.
+        first_is_l = plan[2] == contract_names[1]
+        prs = if _has_equality_join(gates)
+            # The input iterators fix the order within each axis, including
+            # descending and stepped ranges. A match outside that frame is
+            # outside the product too.
+            rank1 = Dict(v => i for (i, v) in enumerate(contract_iters[1]))
+            rank2 = Dict(v => i for (i, v) in enumerate(contract_iters[2]))
+            ordered = first_is_l ? identity : reverse
+            pairs = filter(plan[4]) do p
+                a, b = ordered(p)
+                haskey(rank1, a) && haskey(rank2, b)
+            end
+            sort!(
+                pairs; by = p -> begin
+                    a, b = ordered(p)
+                    (rank1[a], rank2[b])
+                end
+            )
+        else
+            sort(plan[4]; by = first_is_l ? reverse : identity)
+        end
+        cols = first_is_l ? Any[Int[p[1] for p in prs], Int[p[2] for p in prs]] :
             Any[Int[p[2] for p in prs], Int[p[1] for p in prs]]
         return _foreach_aggregate_pairs(
             emit!, body, contract_names, cols,
@@ -296,29 +317,29 @@ function _contracted_parent_deps(contract_names, rspecs)
     return found ? deps : nothing
 end
 
-# The nest of one cell. Outer to inner it runs the product's own order (the
-# LAST contracted name outermost, `contract_names[1]` fastest), except that an
-# index moves inside every contracted index its range reads, stably; each level
-# is expanded under the values the outer levels bound, ascending.
+# The nest of one cell. An index moves inside every contracted index its range
+# reads. Among available indices, take the next one in the product's axis
+# order, including the canonical order for equality joins.
 function _contract_nest(
         contract_names, rspecs, deps, idx_env::Dict{String, Int},
-        const_arrays::AbstractDict
+        const_arrays::AbstractDict; canonical::Bool = false
     )
     tuples = Vector{Int}[]
-    _walk_contract_nest(contract_names, rspecs, deps, idx_env, const_arrays) do cur
+    _walk_contract_nest(contract_names, rspecs, deps, idx_env, const_arrays; canonical) do cur
         push!(tuples, copy(cur))
     end
     return _ContractNest(tuples)
 end
 
 # The nest's levels, outermost first (see `_contract_nest`).
-function _contract_nest_order(deps)
+function _contract_nest_order(deps; canonical::Bool = false)
     nc = length(deps)
     order = Int[]
     placed = falses(nc)
+    preferred = canonical ? (1:nc) : (nc:-1:1)
     while length(order) < nc
         nxt = 0
-        for d in nc:-1:1
+        for d in preferred
             if !placed[d] && all(j -> placed[j], deps[d])
                 nxt = d
                 break
@@ -337,9 +358,9 @@ end
 # one-pass scatter (scatter.jl) and the per-cell expansion see the same order.
 function _walk_contract_nest(
         emit::F, contract_names, rspecs, deps, idx_env::Dict{String, Int},
-        const_arrays::AbstractDict
+        const_arrays::AbstractDict; canonical::Bool = false
     ) where {F}
-    order = _contract_nest_order(deps)
+    order = _contract_nest_order(deps; canonical)
     env = Dict{String, Int}(idx_env)
     cur = zeros(Int, length(contract_names))
     _walk_contract_nest_level(emit, 1, order, cur, env, contract_names, rspecs, const_arrays)
@@ -370,11 +391,11 @@ end
 # `_ContractNest` when a range reads another contracted index.
 function _contract_iters_at(
         contract_names, rspecs, idx_env::Dict{String, Int},
-        const_arrays::AbstractDict, consts = nothing
+        const_arrays::AbstractDict, consts = nothing; canonical::Bool = false
     )
     deps = _contracted_parent_deps(contract_names, rspecs)
     deps === nothing ||
-        return _contract_nest(contract_names, rspecs, deps, idx_env, const_arrays)
+        return _contract_nest(contract_names, rspecs, deps, idx_env, const_arrays; canonical)
     return Vector{Int}[
         (consts !== nothing && consts[d] !== nothing) ? consts[d] :
             _expand_contract_range(rspecs[d], idx_env, const_arrays)
