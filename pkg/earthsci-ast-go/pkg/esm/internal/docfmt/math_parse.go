@@ -2397,11 +2397,54 @@ func psPEscArgs(c Ctx, f int, ts []Tok) ([]Json, []Tok, bool) {
 // read with at level l.
 func psNeed(l, n int) int { return 30*n + max(12-l, 0) }
 
-// psParseToks is `Math.parseToks` (Induct.lean): read a whole token list.
+// psParseToks is `Math.parseToks` (Induct.lean): read a whole token list: an
+// expression, or an equation in its defining form (`x_s = …, s ∈ S`,
+// prUnlift).
 func psParseToks(lim *Lim, sf Sf, s *Sym, ts []Tok) (Json, bool) {
-	e, r, ok := psPOr(Ctx{sf: sf, s: s, lim: lim}, psNeed(1, len(ts)), ts)
-	if !ok || len(r) != 0 {
+	c := Ctx{sf: sf, s: s, lim: lim}
+	f := psNeed(1, len(ts))
+	e, r, ok := psPOr(c, f, ts)
+	if !ok {
 		return nil, false
 	}
-	return e, true
+	if len(r) == 0 {
+		return e, true
+	}
+	if !at(r, 0, KwComma) {
+		return nil, false
+	}
+	rows, ok := psPTail(c, f, r[1:])
+	if !ok {
+		return nil, false
+	}
+	rg, _, hasFl, ok := psRowParts(rows)
+	if !ok || hasFl {
+		return nil, false
+	}
+	return prUnlift(e, rg)
+}
+
+// psPTail is `Math.pTail`: range rows separated by commas, to the end of the
+// input: the ranges of a defining equation's output indices.
+func psPTail(c Ctx, f int, ts []Tok) ([]Row, bool) {
+	var out []Row
+	isEnd := func(t Tok) bool { return t.isKw(KwComma) }
+	for {
+		if f == 0 {
+			return nil, false
+		}
+		f--
+		row, r, ok := psPRow(c, f, isEnd, ts)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, row)
+		if len(r) == 0 {
+			return out, true
+		}
+		if !at(r, 0, KwComma) {
+			return nil, false
+		}
+		ts = r[1:]
+	}
 }

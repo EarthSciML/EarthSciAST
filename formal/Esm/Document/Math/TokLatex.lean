@@ -741,9 +741,57 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
       rw [hpr]; simp only [mkOut, escToks, jsonToks]; constructor <;> aok
 
 /-- The LaTeX printer writes LaTeX tokens, and `\times` only before a bracket. -/
-theorem print_allOK (S : Sym) (e : Json) (he : isE e = true) : AllOK (print .latex S e) := by
+theorem allOK_pa (S : Sym) (e : Json) (he : isE e = true) (L : Nat) :
+    AllOK ((pr ⟨.latex, S⟩ e).at .latex L) := by
   have h := POK_all ⟨.latex, S⟩ rfl _ e (Nat.lt_succ_self _) he
-  exact POK_toks h 1
+  exact POK_toks h L
+
+/-- A range row's tokens are LaTeX tokens. -/
+theorem allOK_rowToks (c : Ctx) (hc : c.sf = .latex) (P : Json → Out) (kv : String × Json)
+    (hQ : ∀ a b, kv.2 = .arr [a, b] → AllOK ((P a).at .latex 4) ∧ AllOK ((P b).at .latex 4)) :
+    AllOK (rowToks c P kv) := by
+  unfold rowToks
+  split
+  · rename_i a b he
+    obtain ⟨hA, hB⟩ := hQ a b he
+    have hN := allOK_nameToks c hc kv.1
+    rw [hc]; aok
+  · have hN := allOK_nameToks c hc kv.1
+    have hS := allOK_setToks c hc ‹String›
+    aok
+  · rename_i s ps _
+    have hN := allOK_nameToks c hc kv.1
+    have hS := allOK_setToks c hc s
+    have hL := allOK_sepBy [.kw .comma] (allOK_cons2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
+      (allOK_map (fun (p : Json) => match p with | .str q => nameToks c q | _ => []) ps (fun p _ => by
+        split
+        · exact allOK_nameToks c hc _
+        · exact allOK_nil))
+    aok
+  · exact allOK_nil
+
+theorem print_allOK (S : Sym) (e : Json) (he : isE e = true) : AllOK (print .latex S e) := by
+  unfold print
+  split
+  · rename_i q rows _
+    split
+    · rename_i hok
+      unfold liftOK at hok
+      simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_eq_false_iff] at hok
+      obtain ⟨⟨⟨-, hq⟩, hrows⟩, -⟩ := hok
+      have hP := allOK_pa S q hq 1
+      have hT := allOK_sepBy [.kw .comma] (allOK_cons2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
+        (allOK_map (rowToks ⟨.latex, S⟩ (pr ⟨.latex, S⟩)) rows (fun kv hkv => by
+          have hc := List.all_eq_true.1 hrows kv hkv
+          refine allOK_rowToks _ rfl _ kv (fun a b hab => ?_)
+          rw [hab] at hc
+          simp only [Bool.and_eq_true] at hc
+          exact ⟨allOK_pa S a hc.2.1 4, allOK_pa S b hc.2.2 4⟩))
+      unfold pa defRowsToks
+      have hC : AllOK [Tok.kw .comma] := allOK_cons2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩
+      aok
+    · exact allOK_pa S e he 1
+  · exact allOK_pa S e he 1
 
 /-- Every token the LaTeX printer writes for a well-formed expression is a LaTeX token or a
 `\times` the lexer lemma allows. -/

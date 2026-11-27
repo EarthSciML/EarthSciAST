@@ -756,6 +756,23 @@ def operators(g):
         },
     )
     E(
+        "faq_defining_bare",
+        "An equation x = faq whose faq reduces nothing and carries nothing else: the defining "
+        "form is the body alone, y_i = w_i, i in S.",
+        faq(idx("w", "i"), {"i": {"from": "S"}}, output_idx=["i"]),
+        names=("w",),
+        index_sets=SETS,
+    )
+    E(
+        "faq_bracket_derivative",
+        "Output indices on a right side whose left side is not a name (here a derivative): "
+        "the bracket form, [ … ]_(i in S).",
+        faq(idx("w", "i", "j"), {"i": {"from": "S"}, "j": {"from": "C"}}, output_idx=["i"]),
+        names=("w",),
+        index_sets=SETS,
+        lhs=op("D", "y", wrt="t"),
+    )
+    E(
         "faq_set_shapes",
         "A set named by a subscript shape (x_i) or a formula (NO) prints as that name, not "
         "upright text.",
@@ -2742,6 +2759,8 @@ def refusals(g):
         ),
         ("w", "f"),
         index_sets=SETS,
+        # a derivative on the left keeps the bracket form (only `x = faq` has a defining form)
+        lhs=op("D", "y", wrt="t"),
     )
     R(
         "bracket_inner_set",
@@ -2790,6 +2809,8 @@ def refusals(g):
         ),
         ("w",),
         index_sets=SETS,
+        # a derivative on the left keeps the bracket form (only `x = faq` has a defining form)
+        lhs=op("D", "y", wrt="t"),
     )
     R(
         "bracket_set_limits",

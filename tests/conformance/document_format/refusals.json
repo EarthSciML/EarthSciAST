@@ -312,7 +312,7 @@
       "kind": "refusal",
       "description": "With output indices the set goes on the bracket only: a set on the reduction inside the bracket is refused, the bracket's own set beside it or not.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum_{j \\in C}^{\\{f\\}} w_{i, j}\\right]^{\\{f\\}}_{i \\in S}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\n\\frac{\\mathrm{d} y}{\\mathrm{d} t} = \\left[\\sum_{j \\in C}^{\\{f\\}} w_{i, j}\\right]^{\\{f\\}}_{i \\in S}\n$$\n",
       "error": "parse_error"
     },
     {
@@ -320,7 +320,7 @@
       "kind": "refusal",
       "description": "A set on the reduction inside the bracket, none on the bracket: refused.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum_{j \\in C}^{\\{f\\}} w_{i, j}\\right]_{i \\in S}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\n\\frac{\\mathrm{d} y}{\\mathrm{d} t} = \\left[\\sum_{j \\in C}^{\\{f\\}} w_{i, j}\\right]_{i \\in S}\n$$\n",
       "error": "parse_error"
     },
     {
@@ -328,7 +328,7 @@
       "kind": "refusal",
       "description": "A set on the reduction inside lr([…]) is refused.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([sum_(j in C)^({f}) w_(i, j)])^({f})_(i in S) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ (dif y)/(dif t) = lr([sum_(j in C)^({f}) w_(i, j)])^({f})_(i in S) $\n",
       "error": "parse_error"
     },
     {
@@ -336,7 +336,7 @@
       "kind": "refusal",
       "description": "A set on the reduction inside lr([…]), none on the bracket: refused.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([sum_(j in C)^({f}) w_(i, j)])_(i in S) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ (dif y)/(dif t) = lr([sum_(j in C)^({f}) w_(i, j)])_(i in S) $\n",
       "error": "parse_error"
     },
     {
@@ -344,7 +344,7 @@
       "kind": "refusal",
       "description": "A \\limits operator inside the bracket: no set on the bracket either.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum\\limits_{j \\in C} w_{i, j}\\right]^{\\{w\\}}_{i \\in S}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\n\\frac{\\mathrm{d} y}{\\mathrm{d} t} = \\left[\\sum\\limits_{j \\in C} w_{i, j}\\right]^{\\{w\\}}_{i \\in S}\n$$\n",
       "error": "parse_error"
     },
     {
@@ -352,7 +352,7 @@
       "kind": "refusal",
       "description": "limits(sum) inside lr([…]): no set on the bracket either.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([limits(sum)_(j in C) w_(i, j)])^({w})_(i in S) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ (dif y)/(dif t) = lr([limits(sum)_(j in C) w_(i, j)])^({w})_(i in S) $\n",
       "error": "parse_error"
     },
     {

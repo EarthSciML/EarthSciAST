@@ -25,6 +25,7 @@
 
 import {
   cmpCodePoints,
+  JNULL,
   jarr,
   jnum,
   jobj,
@@ -1983,7 +1984,174 @@ export function pa(c: Ctx, l: number, e: Json): Tok[] {
   return outAt(pr(c, e), c.sf, l)
 }
 
-/** `Math.print`: the tokens of a whole expression. */
+// ## The defining form of an equation
+//
+// An equation whose right side is a `faq` with output indices, `x = [body]_(s ∈ S)`,
+// prints with the output indices on its left side and their ranges after its right
+// side, `x_s = body, s ∈ S`. The right side is the reduction over the remaining ranges
+// (a `faq` with no output indices), or the body alone when the `faq` reduces nothing
+// and carries nothing else. The reader takes a trailing `, rows` after a whole
+// equation back to the `faq` ({@link unlift}); the printer uses the form only when
+// that gives back exactly the equation ({@link liftOk}), and the bracket form
+// otherwise.
+
+/** `Math.sortKVs`: sort bindings by key (insertion). */
+export function sortKvs(xs: readonly Kv[]): Kv[] {
+  let out: Kv[] = []
+  for (let i = xs.length - 1; i >= 0; i--) out = insKv(xs[i], out)
+  return out
+}
+
+/** `Math.isRedNode`: a `faq` node with no output indices. */
+export function isRedNode(j: Json): boolean {
+  if (j.t !== 'obj') return false
+  const o = look('op', j.kvs)
+  const oi = look('output_idx', j.kvs)
+  return o?.t === 'str' && o.s === 'faq' && oi?.t === 'arr' && oi.xs.length === 0
+}
+
+/** The equation node `{"args": [lhs, rhs], "op": op}` with exactly those two fields. */
+function binParts(j: Json, op: string): readonly Json[] | undefined {
+  if (j.t !== 'obj' || j.kvs.length !== 2) return undefined
+  const [[k1, a], [k2, o]] = j.kvs
+  if (k1 !== 'args' || k2 !== 'op' || a.t !== 'arr' || o.t !== 'str' || o.s !== op) return undefined
+  return a.xs
+}
+
+/**
+ * `Math.unlift`: the equation `x_(os) = rhs` with the ranges `rows` of its output
+ * indices, as the equation it writes: `x = faq` with the output indices `os` and the
+ * rows' ranges, over `rhs` read as the reduction (a `faq` with no output indices) or as
+ * the body.
+ */
+export function unlift(q: Json, rows: readonly Kv[]): Json | undefined {
+  const sides = binParts(q, '==')
+  if (sides === undefined || sides.length !== 2) return undefined
+  const [lhs, rhs] = sides
+  const ia = binParts(lhs, 'index')
+  if (ia === undefined || ia.length === 0 || ia[0].t !== 'str') return undefined
+  const x = ia[0].s
+  const os = ia.slice(1)
+  let f: Json
+  if (rhs.t === 'obj' && isRedNode(rhs)) {
+    const rs = look('ranges', rhs.kvs)
+    const rest: readonly Kv[] = rs?.t === 'obj' ? rs.kvs : []
+    f = jobj(
+      sortKvs([
+        ['output_idx', jarr(os)],
+        ['ranges', jobj(sortKvs([...rest, ...rows]))],
+        ...rhs.kvs.filter((kv) => kv[0] !== 'output_idx' && kv[0] !== 'ranges'),
+      ]),
+    )
+  } else {
+    f = jobj([
+      ['args', jarr([])],
+      ['expr', rhs],
+      ['op', jstr('faq')],
+      ['output_idx', jarr(os)],
+      ['ranges', jobj(sortKvs(rows))],
+    ])
+  }
+  return jobj([
+    ['args', jarr([jstr(x), f])],
+    ['op', jstr('==')],
+  ])
+}
+
+/**
+ * `Math.liftParts`: the parts of the defining form of an equation `x = faq`: the
+ * equation `x_(os) = rhs` and the ranges of the output indices, when the left side is
+ * a name that takes a subscript and the `faq` has output indices.
+ */
+export function liftParts(e: Json): [Json, Kv[]] | undefined {
+  const sides = binParts(e, '==')
+  if (sides === undefined || sides.length !== 2) return undefined
+  const [xj, r] = sides
+  if (xj.t !== 'str' || r.t !== 'obj') return undefined
+  const x = xj.s
+  const kvs = r.kvs
+  const o = look('op', kvs)
+  const osj = look('output_idx', kvs)
+  const rsj = look('ranges', kvs)
+  if (!(o?.t === 'str' && o.s === 'faq' && osj?.t === 'arr' && rsj?.t === 'obj')) return undefined
+  const os = osj.xs
+  const rs = rsj.kvs
+  if (os.length === 0 || !plainLast(x)) return undefined
+  const outs: string[] = []
+  for (const j of os) if (j.t === 'str') outs.push(j.s)
+  const rows: Kv[] = []
+  for (const k of outs) {
+    const v = look(k, rs)
+    if (v !== undefined) rows.push([k, v])
+  }
+  const rest = rs.filter((kv) => !outs.includes(kv[0]))
+  const bare =
+    rest.length === 0 &&
+    kvs.every(
+      ([k, v]) =>
+        k === 'expr' ||
+        k === 'op' ||
+        k === 'output_idx' ||
+        k === 'ranges' ||
+        (k === 'args' && v.t === 'arr' && v.xs.length === 0),
+    )
+  const body = look('expr', kvs) ?? JNULL
+  let rhs: Json = body
+  if (!(bare && !isRedNode(body))) {
+    const rk = sortKvs([
+      ['output_idx', jarr([])],
+      ...(rest.length === 0 ? [] : [['ranges', jobj(rest)] as Kv]),
+      ...kvs.filter((kv) => kv[0] !== 'output_idx' && kv[0] !== 'ranges'),
+    ])
+    // The reduction must have its native spelling (`faqForm` and `faqOK`).
+    const f = faqForm(rk)
+    if (f === undefined || !faqOk(f)) return undefined
+    rhs = jobj(rk)
+  }
+  const q = jobj([
+    [
+      'args',
+      jarr([
+        jobj([
+          ['args', jarr([jstr(x), ...os])],
+          ['op', jstr('index')],
+        ]),
+        rhs,
+      ]),
+    ],
+    ['op', jstr('==')],
+  ])
+  return [q, rows]
+}
+
+/** `Math.liftOK`: the defining form is used: it reads back as exactly `e`. */
+export function liftOk(e: Json, q: Json, rows: readonly Kv[]): boolean {
+  if (rows.length === 0 || !isE(q)) return false
+  for (const [k, v] of rows) {
+    if (!(nameOk(k) && rangeOk(v))) return false
+    if (v.t === 'arr' && v.xs.length === 2 && !(isE(v.xs[0]) && isE(v.xs[1]))) return false
+  }
+  const u = unlift(q, rows)
+  return u !== undefined && jbeq(u, e)
+}
+
+/** `Math.defRowsToks`: the range rows after a defining equation, separated by commas. */
+export function defRowsToks(c: Ctx, rows: readonly Kv[]): Tok[] {
+  return sepBy(
+    COMMA,
+    rows.map(([k, v]) => rowToks(c, k, v)),
+  )
+}
+
+/**
+ * `Math.print`: the tokens of a whole expression: an equation `x = faq` with output
+ * indices in its defining form when that reads back, otherwise as any expression.
+ */
 export function print(sf: Sf, s: Sym, e: Json): Tok[] {
-  return pa({ sf, s }, 1, e)
+  const c: Ctx = { sf, s }
+  const lp = liftParts(e)
+  if (lp !== undefined && liftOk(e, lp[0], lp[1])) {
+    return [...pa(c, 1, lp[0]), kw('Comma'), ...defRowsToks(c, lp[1])]
+  }
+  return pa(c, 1, e)
 }

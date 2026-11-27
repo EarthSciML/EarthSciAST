@@ -1035,6 +1035,16 @@ def pRows (c : Ctx) : Nat → Kw → Kw → List Tok → Option (List Row × Lis
       else if k = close then some ([row], r) else none
     | _ => none
 
+/-- Range rows separated by commas, to the end of the input: the ranges of a defining
+equation's output indices (`x_s = …, s \in S`). -/
+def pTail (c : Ctx) : Nat → List Tok → Option (List Row)
+  | 0, _ => none
+  | f + 1, ts =>
+    match pRow c f (isKw .comma) ts with
+    | some (row, []) => some [row]
+    | some (row, .kw .comma :: r) => (pTail c f r).map (row :: ·)
+    | _ => none
+
 /-- A reduction after its operator: the subscript rows (LaTeX: one row, a lone dense
 range `k=a` with `^{b}`, or `\substack`; Typst: rows in `_( … )`), then the body. -/
 def pRedBody (c : Ctx) : Nat → RedK → Bool → List Tok → Option (FaqForm × List Tok)

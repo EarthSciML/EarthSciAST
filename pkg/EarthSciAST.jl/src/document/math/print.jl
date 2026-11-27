@@ -1620,7 +1620,166 @@ end
 """`Math.pa`: the tokens of an expression for a position needing level `L`."""
 pa(c::Ctx, l::Int, e) = out_at(pr(c, e), c.sf, l)
 
-"""`Math.print`: the tokens of a whole expression."""
-print(sf::Sf, s::Sym, e) = pa(Ctx(sf, s), 1, e)
+# ## The defining form of an equation
+#
+# An equation whose right side is a `faq` with output indices, `x = [body]_(s ∈ S)`,
+# prints with the output indices on its left side and their ranges after its right
+# side, `x_s = body, s ∈ S`. The right side is the reduction over the remaining ranges
+# (a `faq` with no output indices), or the body alone when the `faq` reduces nothing
+# and carries nothing else. The reader takes a trailing `, rows` after a whole
+# equation back to the `faq` ([`unlift`](@ref)); the printer uses the form only when
+# that gives back exactly the equation ([`lift_ok`](@ref)).
+
+"""`Math.sortKVs`: sort bindings by key (insertion, from the end of the list)."""
+function sort_kvs(xs)
+    out = Kvs()
+    for kv in Iterators.reverse(xs)
+        out = ins_kv(kv, out)
+    end
+    return out
+end
+
+"""`Math.isRedNode`: a `faq` node with no output indices."""
+function is_red_node(j)
+    j isa JObj || return false
+    o = look("op", j.kvs)
+    oi = look("output_idx", j.kvs)
+    return o isa String && o == "faq" && oi isa JArr && isempty(oi.xs)
+end
+
+# The `.obj [("args", .arr [a, b]), ("op", .str "==")]` pattern: the two sides.
+function eq_sides(j)
+    j isa JObj || return nothing
+    kvs = j.kvs
+    (
+        length(kvs) == 2 && kvs[1].first == "args" && kvs[1].second isa JArr &&
+            kvs[2].first == "op" && kvs[2].second isa String && kvs[2].second == "=="
+    ) || return nothing
+    xs = kvs[1].second.xs
+    length(xs) == 2 || return nothing
+    return xs[1], xs[2]
+end
+
+# The `.obj [("args", .arr (.str x :: os)), ("op", .str "index")]` pattern.
+function index_parts(j)
+    j isa JObj || return nothing
+    kvs = j.kvs
+    (
+        length(kvs) == 2 && kvs[1].first == "args" && kvs[1].second isa JArr &&
+            kvs[2].first == "op" && kvs[2].second isa String && kvs[2].second == "index"
+    ) || return nothing
+    xs = kvs[1].second.xs
+    (!isempty(xs) && xs[1] isa String) || return nothing
+    return xs[1], Any[xs[2:end]...]
+end
+
+"""`Math.unlift`: the equation `x_(os) = rhs` with the ranges `rows` of its output
+indices, as the equation it writes: `x = faq` with the output indices `os` and the
+rows' ranges, over `rhs` read as the reduction or as the body."""
+function unlift(q, rows)
+    sd = eq_sides(q)
+    sd === nothing && return nothing
+    lhs, rhs = sd
+    ip = index_parts(lhs)
+    ip === nothing && return nothing
+    x, os = ip
+    f = if is_red_node(rhs)
+        kvs = rhs.kvs
+        rs = look("ranges", kvs)
+        rest = rs isa JObj ? collect(rs.kvs) : Pair{String, Any}[]
+        JObj(
+            sort_kvs(
+                vcat(
+                    Pair{String, Any}[
+                        "output_idx" => JArr(copy(os)),
+                        "ranges" => JObj(sort_kvs(vcat(rest, collect(rows)))),
+                    ],
+                    [kv for kv in kvs if kv.first != "output_idx" && kv.first != "ranges"],
+                )
+            )
+        )
+    else
+        JObj(
+            Kvs(
+                [
+                    "args" => JArr(Any[]), "expr" => rhs, "op" => "faq",
+                    "output_idx" => JArr(copy(os)), "ranges" => JObj(sort_kvs(rows)),
+                ]
+            )
+        )
+    end
+    return JObj(Kvs(["args" => JArr(Any[x, f]), "op" => "=="]))
+end
+
+"""`Math.liftParts`: the equation `x_(os) = rhs` and the ranges of the output
+indices of an equation `x = faq`, when the left side is a name that takes a
+subscript and the `faq` has output indices."""
+function lift_parts(e)
+    sd = eq_sides(e)
+    sd === nothing && return nothing
+    x, r = sd
+    (x isa String && r isa JObj) || return nothing
+    kvs = r.kvs
+    o, os, rs = look("op", kvs), look("output_idx", kvs), look("ranges", kvs)
+    (o isa String && o == "faq" && os isa JArr && rs isa JObj) || return nothing
+    (isempty(os.xs) || !plain_last(x)) && return nothing
+    outs = String[k for k in os.xs if k isa String]
+    rows = Kvs()
+    for k in outs
+        v = look(k, rs.kvs)
+        v === nothing || push!(rows, k => v)
+    end
+    rest = Kvs([kv for kv in rs.kvs if !(kv.first in outs)])
+    bare = isempty(rest) && all(kvs) do kv
+        kv.first in ("expr", "op", "output_idx", "ranges") ||
+            (kv.first == "args" && kv.second isa JArr && isempty(kv.second.xs))
+    end
+    body = something(look("expr", kvs), JNULL)
+    rhs = if bare && !is_red_node(body)
+        body
+    else
+        rk = sort_kvs(
+            vcat(
+                Pair{String, Any}["output_idx" => JArr(Any[])],
+                isempty(rest) ? Pair{String, Any}[] : Pair{String, Any}["ranges" => JObj(rest)],
+                [kv for kv in kvs if kv.first != "output_idx" && kv.first != "ranges"],
+            )
+        )
+        # The reduction must have its native spelling (`faqForm` and `faqOK`).
+        f = faq_form(rk)
+        (f === nothing || !faq_ok(f)) && return nothing
+        JObj(rk)
+    end
+    lhs = JObj(Kvs(["args" => JArr(Any[x, os.xs...]), "op" => "index"]))
+    q = JObj(Kvs(["args" => JArr(Any[lhs, rhs]), "op" => "=="]))
+    return q, rows
+end
+
+"""`Math.liftOK`: the defining form is used: it reads back as exactly `e`."""
+function lift_ok(e, q, rows)
+    (!isempty(rows) && is_e(q)) || return false
+    all(rows) do (k, v)
+        name_ok(k) && range_ok(v) &&
+            (!(v isa JArr && length(v.xs) == 2) || (is_e(v.xs[1]) && is_e(v.xs[2])))
+    end || return false
+    u = unlift(q, rows)
+    return u !== nothing && jbeq(u, e)
+end
+
+"""`Math.defRowsToks`: the range rows after a defining equation, separated by
+commas."""
+def_rows_toks(c::Ctx, rows) = sep_by((kw(KComma),), [row_toks(c, k, v) for (k, v) in rows])
+
+"""`Math.print`: the tokens of a whole expression: an equation `x = faq` with
+output indices in its defining form when that reads back, otherwise as any
+expression."""
+function print(sf::Sf, s::Sym, e)
+    c = Ctx(sf, s)
+    lp = lift_parts(e)
+    if lp !== nothing && lift_ok(e, lp[1], lp[2])
+        return tc(pa(c, 1, lp[1]), (kw(KComma),), def_rows_toks(c, lp[2]))
+    end
+    return pa(c, 1, e)
+end
 
 end # module MPrint
