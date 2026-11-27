@@ -129,7 +129,7 @@ function emit_fragment(
     # slices as the tile or lane capacity grows.
     return _StableHLOFragment{eltype, typeof(ir), typeof(buffers)}(
         ir, buffers, Vector{Float64}[values(host)...], names,
-        DirectEmitOptions(; read = :always, calls), eltype === Float64 && fold === :tree
+        DirectEmitOptions(; read = :always, calls), fold === :tree
     )
 end
 

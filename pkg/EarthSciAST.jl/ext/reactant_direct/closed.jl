@@ -135,7 +135,11 @@ _de_is_cgather(nd::_E._Node) =
     (nd.kind === _E._NK_CONST_GATHER || (nd.kind === _E._NK_OP && nd.op === Symbol("")))
 
 # `ev(child)` emits a subscript; `cached` as for `_de_subrange`.
-function _de_cgather(ctx::_DECtx, nd::_E._Node, ev::F, cached::G)::_DEVal where {F, G}
+# With `src` (a traced live-forcing tensor passed to a template function,
+# calls.jl) the read is a gather of `src` instead of the host table.
+function _de_cgather(
+        ctx::_DECtx, nd::_E._Node, ev::F, cached::G; src::Union{Nothing, _DEVal} = nothing
+    )::_DEVal where {F, G}
     cg = nd.payload::_E._ConstGatherArray
     nm = isempty(cg.name) ? "a const array" : "the const array `$(cg.name)`"
     subs = _DEVal[]
@@ -166,7 +170,7 @@ function _de_cgather(ctx::_DECtx, nd::_E._Node, ev::F, cached::G)::_DEVal where 
         push!(subs, _de_un(ctx, _hlo.round_nearest_even, _de_bcast_any(ev(ch))))
         push!(wraps, inside ? :none : pol)
     end
-    isempty(subs) && return _de_const(ctx, cg.flat[1])
+    isempty(subs) && src === nothing && return _de_const(ctx, cg.flat[1])
     # The rounded subscripts are integers in the working precision. Everything
     # after the rounding is index arithmetic, done in Int64: binary32 holds
     # integers exactly only up to 2^24, so a periodic wrap, a stride multiply
@@ -174,6 +178,18 @@ function _de_cgather(ctx::_DECtx, nd::_E._Node, ev::F, cached::G)::_DEVal where 
     # table.
     L = maximum(s -> s.len, subs)
     lanes = map(s -> _de_traced(_de_cast(_de_bcast(ctx, s, L), ctx.precision, Float64)), subs)
+    if src !== nothing
+        isempty(subs) && return _de_slice(ctx, src, 1, 1; why = :call_array)
+        L = maximum(x -> x.len, subs)
+        lanes = map(x -> _de_traced(_de_cast(_de_bcast(ctx, x, L), ctx.precision, Float64)), subs)
+        _de_tally!(ctx, :live_gather_traced)
+        return _de_untraced(
+            Reactant.call_with_reactant(
+                _de_cg_take_traced, _de_traced(src, ctx.precision), Tuple(cg.dims),
+                Tuple(cg.strides), Tuple(wraps), lanes...
+            )
+        )
+    end
     _de_tally!(ctx, :const_gather_computed)
     value = _de_untraced(
         Reactant.call_with_reactant(
@@ -205,6 +221,11 @@ _de_cg_take(flat::Vector{Float64}, dims, strides, wraps, subs::TracedRArray{Floa
     _rx_take(flat, _de_cg_linear(map(_rx_int, subs), dims, strides, wraps))
 
 _de_bcast_any(v::_DEVal) = v
+
+_de_cg_take_traced(src::TracedRArray, dims, strides, wraps, subs::TracedRArray{Float64, 1}...) =
+    let lin = _de_cg_linear(map(_rx_int, subs), dims, strides, wraps)
+    Reactant.Ops.gather_getindex(src, Reactant.Ops.reshape(lin, length(lin), 1))
+end
 
 # ---- the count ---------------------------------------------------------------
 

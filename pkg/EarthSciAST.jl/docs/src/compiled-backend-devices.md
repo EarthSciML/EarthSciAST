@@ -66,17 +66,25 @@ program = Reactant.@compile donated_args = :none frag(u, aux, p, t, ())
   tables of build-time-evaluable subexpressions) is refused with
   `float32_unsupported`, since those results would not be rounded per
   operation.
-- Float32 fragments round after each operation and accumulate in expression
-  order. For Float64 fragments, `fold = :tree` emits balanced binary folds
-  and evaluates constant subtrees on the host with the same grouping.
-  `fold = :reduce` uses the legacy emitter's reduction policy.
+- Float32 fragments round after each operation. `fold = :tree` (the default)
+  emits every fold as a fixed balanced tree of binary operations, in Float32
+  and in Float64, and Float64 fragments evaluate constant subtrees on the host
+  with the same grouping. A Float32 fragment only arises where the document
+  leaves precision unspecified, so the grouping is the emitter's to choose; it
+  is fixed, so results are reproducible run to run, but they need not match
+  the native evaluator bit for bit. `fold = :reduce` keeps expression order
+  in Float32 and uses the legacy reduction policy in Float64.
 - `calls = :functions` (the default) emits the operator once per trace as a
   private function and each fragment use as a `func.call`, so a leaf that
   evaluates the right-hand side at four stages holds it once. Each template
   instance the operator references is likewise one private function per
-  argument shape, called at every use; a template body that reads a state or
-  live-forcing array argument is placed at its use instead, and the emitter's
-  `call_inlined` tally counts those. `calls = :inline` places every body at its
+  argument shape, called at every use. A state or live-forcing array the
+  template reads is passed to the function as a tensor and read at traced
+  subscripts; a const table lives in the function. A body that reads a
+  parameter, a block array, an array a calling body passes on, a windowed
+  tile forcing buffer, or a state array with slots a later section writes is
+  placed at its use instead, and the emitter's `call_inlined` tally counts
+  those. `calls = :inline` places every body at its
   use, the baseline for measurement. XLA may inline the calls while it
   compiles; the emitted module keeps them.
 - `Tile(dec; owned, storage)` uses the native tile boxes. The output uses the
