@@ -3064,7 +3064,19 @@ fn build_observed_rules(
     shapes: &ShapeTable,
 ) -> Result<Vec<AlgebraicRule>, CompileError> {
     let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
-    let array_axes = declared_axis_names(model);
+    // Every variable's index-set axes as the build has them: declared, or
+    // inferred from its bare definition (esm-spec §4.3.4, "An undeclared
+    // result takes the union"). An operand declared without a `shape` then
+    // aligns by the index sets its definition spans, and a result declared
+    // without one is looped over the union of its operands'.
+    let mut array_axes = declared_axis_names(model);
+    for name in model.variables.keys() {
+        if !array_axes.contains_key(name)
+            && let Some(axes) = shapes.axes(name)
+        {
+            array_axes.insert(name.clone(), axes.to_vec());
+        }
+    }
     // Read only for a bare-index definition.
     let declared: std::cell::OnceCell<HashSet<String>> = std::cell::OnceCell::new();
 

@@ -432,3 +432,77 @@ fn shared_fixtures_are_bare_array_level_equations() {
         );
     }
 }
+
+/// An undeclared result takes the UNION of its operands' index sets (esm-spec
+/// §4.3.4), and an operand declared without a `shape` has the index sets its
+/// definition spans — here a `faq` over `lat`, whole (`w`) or nested
+/// (`v = k * faq`). With `c` over `lon`, `w + c` spans `[lat, lon]`, so its
+/// cells exist for an element-name assertion, and a declared `[lat, lon]` or
+/// `[lon, lat]` result places `w` and `v` on `lat` by name. The extents
+/// differ, so a positional reading cannot pass by accident.
+#[test]
+fn undeclared_operand_and_result_span_the_union() {
+    let faq = serde_json::json!({
+        "op": "faq", "args": [], "output_idx": ["i"],
+        "ranges": {"i": {"from": "lat"}},
+        "expr": {"op": "index", "args": ["q", "i"]}
+    });
+    let unknown = |shape: Option<[&str; 2]>| match shape {
+        Some(s) => serde_json::json!({"type": "unknown", "units": "1", "shape": s}),
+        None => serde_json::json!({"type": "unknown", "units": "1"}),
+    };
+    let (q, c) = ([5.0, 8.0], [3.0, 10.0, 20.0]);
+    let mut assertions = Vec::new();
+    for i in 1..=2 {
+        for j in 1..=3 {
+            let (sum, scaled) = (q[i - 1] + c[j - 1], 2.0 * q[i - 1] + c[j - 1]);
+            assertions.push(
+                serde_json::json!({"variable": format!("zw[{i},{j}]"), "time": 0, "expected": sum}),
+            );
+            assertions.push(serde_json::json!({"variable": format!("zv[{i},{j}]"), "time": 0, "expected": scaled}));
+            assertions.push(serde_json::json!({"variable": "zd", "time": 0, "expected": scaled, "coords": {"lat": i, "lon": j}}));
+            assertions.push(serde_json::json!({"variable": "zt", "time": 0, "expected": sum, "coords": {"lon": j, "lat": i}}));
+        }
+    }
+    let doc = serde_json::json!({
+        "esm": "2.3.0",
+        "metadata": {"name": "Union"},
+        "index_sets": {"lat": {"kind": "interval", "size": 2}, "lon": {"kind": "interval", "size": 3}},
+        "models": {"Union": {
+            "variables": {
+                "q": {"type": "parameter", "units": "1", "shape": ["lat"], "default": q},
+                "c": {"type": "parameter", "units": "1", "shape": ["lon"], "default": c},
+                "k": {"type": "parameter", "units": "1", "default": 2},
+                "w": unknown(None), "v": unknown(None), "zw": unknown(None), "zv": unknown(None),
+                "zd": unknown(Some(["lat", "lon"])), "zt": unknown(Some(["lon", "lat"]))
+            },
+            "equations": [
+                {"lhs": "w", "rhs": faq},
+                {"lhs": "v", "rhs": {"op": "*", "args": ["k", faq]}},
+                {"lhs": "zw", "rhs": {"op": "+", "args": ["w", "c"]}},
+                {"lhs": "zv", "rhs": {"op": "+", "args": ["v", "c"]}},
+                {"lhs": "zd", "rhs": {"op": "+", "args": ["v", "c"]}},
+                {"lhs": "zt", "rhs": {"op": "+", "args": ["w", "c"]}}
+            ],
+            "tests": [{"id": "union", "time_span": {"start": 0, "end": 1}, "assertions": assertions}]
+        }}
+    });
+    let file = load_string(&doc.to_string()).expect("document loads");
+    for compiler in [
+        earthsci_ast::Compiler::Interpreter,
+        earthsci_ast::Compiler::Native,
+    ] {
+        let results = earthsci_ast::run_inline_tests_with_options(
+            &file,
+            &earthsci_ast::InlineTestOptions {
+                solve: opts(),
+                compiler: Some(compiler),
+                ..Default::default()
+            },
+        );
+        assert_eq!(results.len(), 24, "{compiler:?}");
+        for r in &results {
+            assert!(r.passed, "{compiler:?} {}: {}", r.variable, r.message);
+        }
+    }
+}
