@@ -617,7 +617,11 @@ def lane_cases():
             "capacity": cap,
             "batches": [
                 {"id": "mixed_levels", "cells": perm[:cap], "n": cap},
-                {"id": "mixed_levels_padded", "cells": perm[cap : cap + 11] + [perm[cap]] * (cap - 11), "n": 11},
+                {
+                    "id": "mixed_levels_padded",
+                    "cells": perm[cap : cap + 11] + [perm[cap]] * (cap - 11),
+                    "n": 11,
+                },
             ],
             "negative_control": {"batch": "mixed_levels", "swap_lanes": [1, 2]},
             "covers": ["lanes", "makearray_region_along_lane_set"],
@@ -663,7 +667,11 @@ def lane_cases():
             "batches": [
                 {"id": "batch_1", "cells": perm[:cap], "n": cap},
                 {"id": "batch_2", "cells": perm[cap : 2 * cap], "n": cap},
-                {"id": "batch_3_padded", "cells": perm[2 * cap : 2 * cap + 7] + [perm[2 * cap]] * (cap - 7), "n": 7},
+                {
+                    "id": "batch_3_padded",
+                    "cells": perm[2 * cap : 2 * cap + 7] + [perm[2 * cap]] * (cap - 7),
+                    "n": 7,
+                },
             ],
             "negative_control": {"batch": "batch_2", "swap_lanes": [1, 2]},
             "covers": ["lanes", "forcing_only_contraction", "pre_gathered_computed_subscript"],
