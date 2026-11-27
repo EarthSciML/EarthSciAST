@@ -1,4 +1,6 @@
+import Adapter.Joins
 import Adapter.Templates
+import Adapter.ValueInvention
 import Esm.Units.Grammar
 
 /-! `esm-lean static-assertions <document.esm> <model>` reads a JSON array of
@@ -125,11 +127,16 @@ private partial def alignNamed (shapes : Shapes) (targetAxes : Option (List Stri
     let localShapes := faqScope shapes out ranges
     return .faqWhere out red ranges (← alignNamed localShapes none filter)
       (← alignNamed localShapes none body) args
+  | .faqJoin out red ranges pairs filter body args =>
+    let localShapes := faqScope shapes out ranges
+    return .faqJoin out red ranges pairs (← alignNamed localShapes none filter)
+      (← alignNamed localShapes none body) args
   | _ => pure ast
 
-private def lowerExpression (shapes : Shapes) (name : String) (expression : Json) :
+private def lowerExpression (scope : Joins.Scope) (name : String) (expression : Json) :
     Except String Ast := do
-  alignNamed shapes (shapes.lookup name) (← Templates.astOf expression)
+  alignNamed scope.shapes (scope.shapes.lookup name)
+    (← Templates.astOf expression (some (Joins.resolve scope)))
 
 private def operation (node : Json) : String :=
   (node.getObjValAs? String "op").toOption.getD ""
@@ -188,6 +195,7 @@ structure Model where
   parameters : List (String × Json)
   differentialStates : List String
   equations : List (String × Except String Ast)
+  invention : ValueInvention.Plan
   deriving Inhabited
 
 def readModel (doc component : Json) (modelName : String) : Except String Model := do
@@ -217,6 +225,7 @@ def readModel (doc component : Json) (modelName : String) : Except String Model 
       if (decl.getObjVal? "update").isOk then unsupported s!"parameter {name} has an update"
       parameters := (name, decl.getObjValD "default") :: parameters
   let mut equations := []
+  let mut producers := []
   let mut differentialStates := []
   for eq in (← (← component.getObjVal? "equations").getArr?) do
     let lhs ← eq.getObjVal? "lhs"
@@ -224,11 +233,22 @@ def readModel (doc component : Json) (modelName : String) : Except String Model 
       differentialStates := name :: differentialStates
     let rhs ← eq.getObjVal? "rhs"
     if let some (name, expr) ← staticDefinition lhs rhs then
-      if equations.any (fun e => e.1 == name) then throw s!"multiple equations for {name}"
+      if equations.any (fun e => e.1 == name) || producers.any (fun e => e.1 == name) then
+        throw s!"multiple equations for {name}"
       unless ((← (Json.obj vars).getObjVal? name).getObjValAs? String "type").toOption == some "unknown" do
         throw s!"{name} is not a declared unknown"
       checkConstantUnits s!"equation {name}" expr
-      equations := (name, lowerExpression shapes name expr) :: equations
+      if ValueInvention.isProducer expr then
+        producers := (name, expr) :: producers
+      else
+        equations := (name, expr) :: equations
+  let declaredData := parameters.map Prod.fst ++ equations.filterMap fun (name, expr) =>
+    if operation expr == "const" then some name else none
+  let nonconstant := Joins.nonconstantColumns sets (independent :: differentialStates) equations
+  let joinScope : Joins.Scope := ⟨sets, shapes, declaredData, nonconstant⟩
+  let loweredEquations := equations.reverse.map fun (name, rhs) =>
+    (name, lowerExpression joinScope name rhs)
+  let invention ← ValueInvention.read sets (.obj vars) (producers.reverse.map Prod.snd)
   return {
     name := modelName
     independent
@@ -238,13 +258,14 @@ def readModel (doc component : Json) (modelName : String) : Except String Model 
     shapes
     parameters
     differentialStates
-    equations := equations.reverse }
+    equations := loweredEquations
+    invention }
 
 private def Model.shape (model : Model) (name : String) : List String :=
   (model.shapes.lookup name).getD []
 
 private def environment (model : Model) (atTime : Float) (overrides : Json) :
-    Except String (Env Float) := do
+    Except String (List (String × Nat) × Env Float) := do
   let overrides ← if overrides.isNull then pure [] else (·.toArray.toList) <$> overrides.getObj?
   let mut resolved := []
   let modelPrefix := model.name ++ "."
@@ -254,17 +275,30 @@ private def environment (model : Model) (atTime : Float) (overrides : Json) :
     unless (model.parameters.lookup name).isSome do throw s!"unknown parameter override {key}"
     if (resolved.lookup name).isSome then throw s!"duplicate parameter override for {name}"
     resolved := (name, value) :: resolved
-  let mut env : Env Float := (model.independent, .num atTime) ::
-    model.indexBindings ++ model.sizes.map (fun (name, size) => (setKey name, .num (Float.ofNat size)))
-  for (name, defaultValue) in model.parameters do
-    let value := (resolved.lookup name).getD defaultValue
-    unless value.isNull do
-      let constant ← Templates.constOf value
-      let value ← evalResult (constVal constant)
-      env := (name, ← conformShape name (model.shapes.lookup name) model.sizes value) :: env
+  let parameters ← model.parameters.filterMapM fun (name, defaultValue) => do
+    let json := (resolved.lookup name).getD defaultValue
+    if json.isNull then return none
+    let value ← evalResult (constVal (← Templates.constOf json))
+    return some (name, value)
+  let indexEnv := model.indexBindings ++
+    model.sizes.map (fun (name, size) => (setKey name, .num (Float.ofNat size)))
+  let (newSizes, derivedEnv) ← if model.invention.producers.isEmpty then pure ([], []) else do
+    let constantArrays := model.equations.filterMap fun (name, rhs) => match rhs with
+      | .ok (.const (.arr arr)) => (constVal (.arr arr)).toOption.map (name, ·)
+      | _ => none
+    let data ← (parameters ++ constantArrays).filterMapM fun (name, value) => do
+      let shape := model.shapes.lookup name
+      if (dimensions (shape.getD []) model.sizes).isOk then
+        return some (name, ← conformShape name shape model.sizes value)
+      else return none
+    model.invention.materialize (data ++ indexEnv) (model.independent :: model.differentialStates)
+  let sizes := newSizes ++ model.sizes
+  let parameters ← parameters.mapM fun (name, value) => do
+    return (name, ← conformShape name (model.shapes.lookup name) sizes value)
+  let mut env : Env Float := (model.independent, .num atTime) :: derivedEnv ++ parameters ++ indexEnv
   -- Shape information can be needed even when an observed's value is never read.
   for (name, axes) in model.shapes do
-    if let .ok dims := dimensions axes model.sizes then
+    if let .ok dims := dimensions axes sizes then
       env := (shapeKey name, .shaped dims []) :: env
   let mut pending := model.equations
   for _ in [:pending.length] do
@@ -278,7 +312,7 @@ private def environment (model : Model) (atTime : Float) (overrides : Json) :
           next := (name, rhs) :: next
     if next.isEmpty || next.length == pending.length then break
     pending := next.reverse
-  return env
+  return (sizes, env)
 
 /-- Resolve dependencies only when the AST evaluator reads them, preserving
 lazy branches and surfacing a fault in a dependency at the requesting assertion. -/
@@ -305,7 +339,8 @@ private partial def resolve (model : Model) (visiting : List String) (env : Env 
 
 def Model.value (model : Model) (name : String) (atTime : Float) (overrides : Json) :
     Except String (Val Float) := do
-  let (value, _) ← resolve model [] (← environment model atTime overrides) name
+  let (sizes, env) ← environment model atTime overrides
+  let (value, _) ← resolve {model with sizes} [] env name
   return value
 
 private def scalar (name : String) : Val Float → Except String Float

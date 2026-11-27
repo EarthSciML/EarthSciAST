@@ -1,0 +1,25 @@
+{
+  "fixture": "static_join_self",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "probe",
+      "assertion_idx": 1,
+      "variable": "default_sum",
+      "actual": 1111.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 2,
+      "variable": "predecessor",
+      "actual": 0.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 3,
+      "variable": "predecessor",
+      "actual": 1000.0
+    }
+  ]
+}

@@ -1,0 +1,239 @@
+{
+ "esm": "2.4.0",
+ "metadata": {
+  "name": "static_join_extra_range",
+  "description": "Both joined symbols are contracted alongside an unrelated axis. The gate retains each season and canonical contracted order.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ]
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": 4
+  },
+  "chosen": {
+   "kind": "interval",
+   "size": 3
+  },
+  "season": {
+   "kind": "interval",
+   "size": 2
+  }
+ },
+ "models": {
+  "Probe": {
+   "variables": {
+    "left_group": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "right_group": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "chosen"
+     ]
+    },
+    "left_bucket": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "right_bucket": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "chosen"
+     ]
+    },
+    "payload": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "ordered": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "count": {
+     "type": "unknown",
+     "units": "1"
+    }
+   },
+   "equations": [
+    {
+     "lhs": "left_group",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       10,
+       20,
+       10,
+       90
+      ]
+     }
+    },
+    {
+     "lhs": "right_group",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       10,
+       20,
+       10
+      ]
+     }
+    },
+    {
+     "lhs": "left_bucket",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1,
+       1,
+       1,
+       2
+      ]
+     }
+    },
+    {
+     "lhs": "right_bucket",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1,
+       1,
+       2
+      ]
+     }
+    },
+    {
+     "lhs": "payload",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       10000000000000000,
+       1,
+       -10000000000000000,
+       2
+      ]
+     }
+    },
+    {
+     "lhs": "ordered",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "b": {
+        "from": "season"
+       },
+       "l": {
+        "from": "rows"
+       },
+       "r": {
+        "from": "chosen"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "l"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "left_group",
+          "right_group"
+         ],
+         [
+          "left_bucket",
+          "right_bucket"
+         ]
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "count",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "b": {
+        "from": "season"
+       },
+       "l": {
+        "from": "rows"
+       },
+       "r": {
+        "from": "chosen"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": "b",
+      "join": [
+       {
+        "on": [
+         [
+          "left_group",
+          "right_group"
+         ],
+         [
+          "left_bucket",
+          "right_bucket"
+         ]
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "tolerance": {
+    "rel": 0,
+    "abs": 0
+   },
+   "tests": [
+    {
+     "id": "probe",
+     "time_span": {
+      "start": 0,
+      "end": 1
+     },
+     "assertions": [
+      {
+       "variable": "ordered",
+       "time": 0,
+       "expected": 0
+      },
+      {
+       "variable": "count",
+       "time": 0,
+       "expected": 9
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

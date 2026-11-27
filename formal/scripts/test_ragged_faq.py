@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_static_array_assertions import ADAPTER
+from test_static_array_assertions import ADAPTER, CONFORMANCE
 
 
 def node(op, *args, **fields):
@@ -94,12 +94,13 @@ def document():
 
 class RaggedFaq(unittest.TestCase):
     def run_document(self, doc):
+        (model,) = doc["models"]
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
             path = directory / "ragged.esm"
             path.write_text(json.dumps(doc), encoding="utf-8")
             return ADAPTER.run_fixture(
-                directory / "manifest.json", {"id": "ragged", "path": path.name, "model": "M"}
+                directory / "manifest.json", {"id": "ragged", "path": path.name, "model": model}
             )
 
     def test_parent_tuples_and_empty_rows(self):
@@ -140,6 +141,87 @@ class RaggedFaq(unittest.TestCase):
         self.assertEqual(len(result["assertions"]), 9)
         for assertion in result["assertions"]:
             self.assertTrue(assertion["passed"], assertion)
+
+    def value_invention_document(self):
+        path = CONFORMANCE / "static_array_semantics/fixtures/ragged_distinct_extent.esm"
+        doc = json.loads(path.read_text())
+        model = doc["models"]["RaggedDistinctStatic"]
+        return doc, model
+
+    def test_distinct_members_and_derived_shape(self):
+        doc, model = self.value_invention_document()
+        doc["index_sets"]["found"]["member_factor"] = "found_ids"
+        doc["index_sets"]["selected"] = {"kind": "derived", "from_faq": "selected_ids"}
+        model["variables"]["found_ids"] = {"type": "parameter", "shape": ["found"]}
+        model["variables"]["rank"] = {"type": "unknown", "shape": ["found"]}
+        model["variables"]["selected_mask"] = {"type": "unknown", "shape": ["selected"]}
+        model["variables"]["num_selected"] = {"type": "unknown"}
+        from_found = {"z": {"from": "found"}}
+        member = node("index", "found_ids", "z")
+        model["equations"][:0] = [
+            {
+                "lhs": "rank",
+                "rhs": node("faq", output_idx=["z"], ranges=from_found, expr="z"),
+            },
+            {
+                "lhs": node("index", "selected_mask", "i"),
+                "rhs": node(
+                    "faq",
+                    id="selected_ids",
+                    semiring="bool_and_or",
+                    distinct=True,
+                    output_idx=["i"],
+                    ranges=from_found,
+                    key=member,
+                    filter=node(">", member, 3),
+                    expr=node("true"),
+                ),
+            },
+            {
+                "lhs": "num_selected",
+                "rhs": node("faq", output_idx=[], ranges={"i": {"from": "selected"}}, expr=1),
+            },
+        ]
+        extra_assertions = [
+            ("found_ids[1]", 3),
+            ("found_ids[2]", 4),
+            ("found_ids[3]", 9),
+            ("rank[3]", 3),
+            ("num_selected", 2),
+        ]
+        model["tests"][0]["assertions"].extend(
+            {"variable": name, "expected": expected, "time": 0}
+            for name, expected in extra_assertions
+        )
+        result = self.run_document(doc)
+        self.assertIn("assertions", result, result)
+        self.assertEqual(len(result["assertions"]), 6)
+        for assertion in result["assertions"]:
+            self.assertTrue(assertion["passed"], assertion)
+
+    def test_all_empty_ragged_producer_materializes_zero_extent(self):
+        doc, model = self.value_invention_document()
+        model["variables"]["lengths"].update(type="parameter", default=[0, 0, 0])
+        model["equations"] = [eq for eq in model["equations"] if eq["lhs"] != "lengths"]
+        model["tests"][0]["assertions"][0]["expected"] = 0
+        result = self.run_document(doc)
+        self.assertIn("assertions", result, result)
+        self.assertTrue(result["assertions"][0]["passed"], result)
+
+    def test_missing_backing_factor_is_not_an_empty_derived_set(self):
+        doc, model = self.value_invention_document()
+        model["equations"] = [eq for eq in model["equations"] if eq["lhs"] != "members"]
+        result = self.run_document(doc)
+        self.assertIn("derived_index_set_unmaterialized", str(result))
+        self.assertIn("members", str(result))
+
+    def test_noninteger_ragged_key_names_the_producing_node(self):
+        doc, model = self.value_invention_document()
+        members = next(eq["rhs"] for eq in model["equations"] if eq["lhs"] == "members")
+        members["value"][0][0] = 3.5
+        result = self.run_document(doc)
+        self.assertIn("value_invention_key_out_of_range", str(result))
+        self.assertIn("unique_neighbors", str(result))
 
 
 if __name__ == "__main__":

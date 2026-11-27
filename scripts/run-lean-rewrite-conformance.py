@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare Lean expression-root lowering with the shared template corpus."""
+"""Compare Lean rewrite projections with the shared operator corpus."""
 
 from __future__ import annotations
 
@@ -32,20 +32,65 @@ EXPANDED = (
     "two_div_two_meshes",
     "where_priority_declaration_order",
 )
-EMITTED = (
+ROOTS = (
     "placeholder_call",
     "reference_only_round_trip",
     "rewrite_in_template_body",
     "rule_writes_reference",
+)
+EMITTED = (
+    "emit_materialized_registry",
+    "emit_rename_dotted_keys",
+    "old_names",
+    "opacity_negative",
+    "opacity_priority_shadowing",
+    "opacity_rule_replacement",
+    "placeholder_call",
+    "reference_only_round_trip",
+    "rewrite_in_template_body",
+    "rewrite_shared_by_unreached_entry",
+    "rule_writes_reference",
+    "template_instance_variants",
+    "vector_calculus_import",
+)
+IMPORTS = (
+    "import_diamond",
+    "import_rebind_keyed_factors",
+    "import_rename_diamond",
+    "import_rename_integral_axis",
+    "import_rename_name_keyed_map_entries",
+    "import_rename_two_instances",
+    "import_smoke",
+    "import_symbolic_binding",
+    "import_where_rename_two_instances",
+    "metaparam_axis_name_collision",
+    "metaparam_structural_field_collision",
+    "rewrite_shared_by_unreached_entry",
 )
 ERRORS = (
     ("constraint_unknown_index_set", "fixture.esm", "error.json"),
     ("nonterminating_rewrite", "fixture.esm", "error.json"),
     ("operator_arity_mismatch", "fixture.esm", "error.json"),
     ("operator_defines_core_op", "fixture.esm", "error.json"),
+    ("import_where_rename_unknown_index_set", "fixture.esm", "error.json"),
     ("rewrite_depth_through_bodies", "chain_depth_65.esm", "error_chain_depth_65.json"),
 )
-INVALID_BODIES = ("body_apply_cycle.esm", "body_chain_too_deep.esm")
+INVALID_LOAD = (
+    "body_apply_cycle.esm",
+    "body_chain_too_deep.esm",
+    "import_cycle_a.esm",
+    "import_name_conflict.esm",
+    "import_not_library.esm",
+    "import_unknown_only.esm",
+    "index_set_conflict.esm",
+    "metaparameter_inexact_division.esm",
+    "metaparameter_unbound.esm",
+    "rebind_unknown_free_name.esm",
+    "rename_collision.esm",
+    "rename_invalid_identifier.esm",
+    "rename_unknown_name.esm",
+    "root_templates_with_models.esm",
+)
 COLLECTIONS = ("equations", "initialization_equations", "reactions", "constraint_equations")
 
 
@@ -61,27 +106,60 @@ def run(adapter, *args, timeout=None):
     )
 
 
-def rewrite(adapter, fixture, expanded):
-    name, _ = component(json.loads(fixture.read_bytes()))
-    options = ["--expanded"] if expanded else []
+def rewrite(adapter, fixture, mode):
+    document = json.loads(fixture.read_bytes())
+    name = component(document)[0] if "models" in document or "reaction_systems" in document else "_"
+    options = [f"--{mode}"] if mode != "roots" else []
     return run(adapter, "rewrite-templates", *options, fixture, name)
 
 
-def compare(adapter, directory, fixture, expected, expanded):
-    actual = rewrite(adapter, directory / fixture, expanded)
+def compare(adapter, directory, fixture, expected, mode):
+    actual = rewrite(adapter, directory / fixture, mode)
     if actual.returncode:
         raise AssertionError(actual.stderr.decode().strip())
     golden = run(adapter, "canon", directory / expected)
     if golden.returncode:
         raise AssertionError(golden.stderr.decode().strip())
-    _, authored = component(json.loads(golden.stdout))
+    normalized = json.loads(golden.stdout)
+    _, authored = component(normalized)
     projection = {key: authored[key] for key in COLLECTIONS if key in authored}
-    if json.loads(actual.stdout) != projection:
-        raise AssertionError(f"expected {projection!r}\nactual   {json.loads(actual.stdout)!r}")
+    result = json.loads(actual.stdout)
+    if mode == "emitted":
+        if "operators" in authored:
+            projection["operators"] = authored["operators"]
+        if "index_sets" in normalized:
+            projection["index_sets"] = normalized["index_sets"]
+    if result != projection:
+        raise AssertionError(f"expected {projection!r}\nactual   {result!r}")
+    if mode == "emitted":
+        check_emitted(adapter, directory / expected, result, actual.stdout)
+
+
+def check_emitted(adapter, golden, result, emitted_bytes):
+    document = json.loads(golden.read_bytes())
+    _, expected = component(document)
+    definitions = expected.get("operators", expected.get("expression_templates", {}))
+    names = list(result.get("operators", {}))
+    if names != list(definitions):
+        raise AssertionError(f"definition order: expected {list(definitions)}, got {names}")
+    # Reload the actual projection in the golden's resolved document envelope.
+    # The envelope supplies declarations whose projection this command omits.
+    expected.pop("expression_templates", None)
+    expected.update({key: value for key, value in result.items() if key != "index_sets"})
+    if "index_sets" in result:
+        document["index_sets"] = result["index_sets"]
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "emitted.esm"
+        path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+        reloaded = rewrite(adapter, path, "emitted")
+    if reloaded.returncode:
+        raise AssertionError(f"reload: {reloaded.stderr.decode().strip()}")
+    if reloaded.stdout != emitted_bytes:
+        raise AssertionError(f"reload changed emitted projection: {reloaded.stdout.decode()}")
 
 
 def compare_error(adapter, fixture, diagnostic):
-    actual = rewrite(adapter, fixture, True)
+    actual = rewrite(adapter, fixture, "expanded")
     if actual.returncode != 1 or json.loads(actual.stderr)["code"] != diagnostic:
         raise AssertionError(f"expected {diagnostic}, got {actual.stderr.decode().strip()}")
 
@@ -124,21 +202,26 @@ def main():
     parser.add_argument("--adapter", type=Path, default=DEFAULT_ADAPTER)
     args = parser.parse_args()
     cases = [
-        *((name, "fixture.esm", "expanded.esm", True) for name in EXPANDED),
-        *((name, "fixture.esm", "emitted.esm", False) for name in EMITTED),
+        *((name, "fixture.esm", "expanded.esm", "expanded") for name in EXPANDED + IMPORTS),
+        *((name, "fixture.esm", "emitted.esm", "roots") for name in ROOTS),
+        *((name, "fixture.esm", "emitted.esm", "emitted") for name in EMITTED),
+        *(
+            ("import_order_determinism", f"fixture_{case}.esm", f"expanded_{case}.esm", "expanded")
+            for case in ("import_order", "priority_override")
+        ),
         (
             "rewrite_depth_through_bodies",
             "chain_depth_64.esm",
             "expanded_chain_depth_64.esm",
-            True,
+            "expanded",
         ),
     ]
     failed = []
-    for name, fixture, expected, expanded in cases:
+    for name, fixture, expected, mode in cases:
         try:
-            compare(args.adapter, CORPUS / name, fixture, expected, expanded)
+            compare(args.adapter, CORPUS / name, fixture, expected, mode)
         except (AssertionError, ValueError) as error:
-            failed.append(f"{name}/{expected}: {error}")
+            failed.append(f"{name}/{expected} ({mode}): {error}")
     errors = [
         (CORPUS / name / fixture, json.loads((CORPUS / name / expected).read_bytes())["code"])
         for name, fixture, expected in ERRORS
@@ -146,7 +229,7 @@ def main():
     invalid_diagnostics = json.loads((INVALID / "expected_errors.json").read_bytes())
     errors.extend(
         (INVALID / "template_imports" / file, invalid_diagnostics[file]["resolver_error_code"])
-        for file in INVALID_BODIES
+        for file in INVALID_LOAD
     )
     for fixture, diagnostic in errors:
         try:

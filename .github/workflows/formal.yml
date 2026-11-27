@@ -22,6 +22,7 @@ on:
       - 'lib/calendar.esm'
       - 'lib/relational.esm'
       - 'lib/geometry.esm'
+      - 'lib/vector_calculus.esm'
       - 'esm-spec.md'
       - 'CONFORMANCE_SPEC.md'
       - 'scripts/formal-audit.py'
@@ -61,7 +62,7 @@ on:
       - 'scripts/run-canonical-lean.py'
       - 'scripts/run-lean-rewrite-conformance.py'
       - 'tests/conformance/expression_templates/**'
-      - 'tests/invalid/template_imports/body_*.esm'
+      - 'tests/invalid/template_imports/**'
       - 'tests/invalid/expected_errors.json'
       - 'tests/conformance/canonical/**'
       - '.github/workflows/formal.yml'
@@ -72,6 +73,7 @@ on:
       - 'lib/calendar.esm'
       - 'lib/relational.esm'
       - 'lib/geometry.esm'
+      - 'lib/vector_calculus.esm'
       - 'esm-spec.md'
       - 'CONFORMANCE_SPEC.md'
       - 'scripts/formal-audit.py'
@@ -111,7 +113,7 @@ on:
       - 'scripts/run-canonical-lean.py'
       - 'scripts/run-lean-rewrite-conformance.py'
       - 'tests/conformance/expression_templates/**'
-      - 'tests/invalid/template_imports/body_*.esm'
+      - 'tests/invalid/template_imports/**'
       - 'tests/invalid/expected_errors.json'
       - 'tests/conformance/canonical/**'
       - '.github/workflows/formal.yml'
@@ -262,7 +264,7 @@ jobs:
     - name: Score the model on the canonical expression byte fixtures
       run: python3 scripts/run-canonical-lean.py
 
-    - name: Check component-local rewrite conformance
+    - name: Check rewrite and operator import conformance
       run: python3 scripts/run-lean-rewrite-conformance.py
 
     - uses: julia-actions/setup-julia@v3

@@ -1,0 +1,14 @@
+{
+  "esm": "2.4.0",
+  "metadata": {"name": "SymbolicWrapper"},
+  "metaparameters": {"M": {"type": "integer", "default": 10}},
+  "operator_imports": [
+    {"ref": "grid.esm", "prefix": "fine", "bindings": {"N": {"op": "+", "args": ["M", 1]}}}
+  ],
+  "operators": {
+    "width": {
+      "params": [],
+      "body": {"op": "apply_operator", "args": [], "name": "fine.extent", "bindings": {}}
+    }
+  }
+}

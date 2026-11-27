@@ -1,0 +1,21 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "SymbolicImportBinding",
+    "description": "A child extent depends on an importer binding and the where shape follows both namespace prefixes."
+  },
+  "models": {
+    "Probe": {
+      "operator_imports": [{"ref": "wrapper.esm", "prefix": "deck", "bindings": {"M": 4}}],
+      "variables": {
+        "probe": {"type": "parameter", "units": "1", "shape": ["deck.fine.cells"], "default": [1, 2, 3, 4, 5]},
+        "width": {"type": "unknown", "units": "1"},
+        "value": {"type": "unknown", "units": "1"}
+      },
+      "equations": [
+        {"lhs": "width", "rhs": {"op": "apply_operator", "args": [], "name": "deck.width", "bindings": {}}},
+        {"lhs": "value", "rhs": {"op": "measure", "args": ["probe"]}}
+      ]
+    }
+  }
+}

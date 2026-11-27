@@ -1,3 +1,4 @@
+import Adapter.LibraryPath
 import Lean.Data.Json
 import Esm.Expr.Template
 
@@ -18,12 +19,12 @@ form the environment, together with every interval index set's `size` (so a
 whose output indices each range over a whole interval index set
 (`{"from": set}`, extent from `index_sets`), with no `join` or `filter` — its
 body, or the reduction over its remaining (contracted) ranges, evaluated at
-every output index tuple. A ragged range (`{"from": set, "of": [...]}`) is
-refused. An equation may be written `lhs ~ ...` or, for an array equation,
+every output index tuple. An equation may be written `lhs ~ ...` or, for an array equation,
 `index(lhs, i, ...) ~ faq(...)`. A `distinct` value-invention `faq` (the
 producer of a derived index set, `materialize`) is evaluated to its ascending
 integer members, which give the derived sets it produces their sizes and their
-`member_factor` arrays. Each result is bound for the equations after it. With
+`member_factor` arrays. A ragged range in a producer binds the actual members.
+Each result is bound for the equations after it. With
 a third argument, a caller-data case file (`{"params": {...}, "const_arrays":
 {...}}`, the relational rewrites tier's form), its values bind over the
 document's defaults. Prints
@@ -54,23 +55,8 @@ def floatJson (x : Float) : Json :=
       | .inl s => .str s
   Json.mkObj [("value", v), ("bits", .str (toString x.toBits))]
 
-/-- The file an `operator_imports` `ref` names. A standard-library
-ref `esm:std/<file>.esm` (esm-spec §4.7) names a file of the repository's
-top-level `lib/`, the library this model is checked against (the adapter runs
-from `formal/.lake/build/bin/`); its `<file>` is one path segment. Any other ref
-is a path relative to the document's directory. -/
-def libPath (dir : System.FilePath) (ref : String) : ExceptT String IO System.FilePath := do
-  let pre := "esm:std/"
-  unless ref.startsWith "esm:" do return dir / ref
-  let name := String.ofList (ref.toList.drop pre.length)
-  unless ref.startsWith pre && name.endsWith ".esm" && !name.contains '/' && name != ".esm" do
-    throw s!"template_import_unresolved: {ref}"
-  let app ← IO.appPath
-  let some root := app.parent >>= (·.parent) >>= (·.parent) >>= (·.parent) >>= (·.parent)
-    | throw s!"template_import_unresolved: {ref} (no repository root above {app})"
-  let path := root / "lib" / name
-  unless ← path.pathExists do throw s!"template_import_unresolved: {ref}"
-  return path
+/-- Resolve the bundled library or a path relative to the importing file. -/
+abbrev libPath := Adapter.LibraryPath.resolve
 
 partial def constOf (j : Json) : Except String Const :=
   match j with
@@ -80,7 +66,9 @@ partial def constOf (j : Json) : Except String Const :=
 
 /-- A JSON Expression (§4.1) as an `Ast`. A node field outside the modelled
 slice is refused, not dropped. -/
-partial def astOf (j : Json) : Except String Ast := do
+partial def astOf (j : Json) (resolveJoin : Option (Json → Except String (List JoinPair)) := none) :
+    Except String Ast := do
+  let parse := fun value => astOf value resolveJoin
   match j with
   | .num n => return .num n.mantissa n.exponent
   | .str s => return .var s
@@ -92,7 +80,7 @@ partial def astOf (j : Json) : Except String Ast := do
     let allowed : List String := ["id", "expect_cadence"] ++
       (if op == "const" then ["op", "args", "value", "units"]
       else if op == "apply_operator" || op == "apply_expression_template" then ["op", "args", "name", "bindings"]
-      else if op == "faq" then ["op", "args", "output_idx", "reduce", "semiring", "ranges", "expr", "filter"]
+      else if op == "faq" then ["op", "args", "output_idx", "reduce", "semiring", "ranges", "expr", "filter", "join"]
       else if op == "reshape" then ["op", "args", "shape"]
       else if op == "transpose" then ["op", "args", "perm"]
       else if op == "concat" then ["op", "args", "axis"]
@@ -102,14 +90,14 @@ partial def astOf (j : Json) : Except String Ast := do
     for f in fields do
       unless allowed.contains f do throw s!"{op} node field {f} is outside the modelled slice"
     let args ← match j.getObjVal? "args" with
-      | .ok (.arr a) => a.toList.mapM astOf
+      | .ok (.arr a) => a.toList.mapM parse
       | _ => pure []
     if op == "const" then
       return .const (← constOf (← j.getObjVal? "value"))
     else if op == "apply_operator" || op == "apply_expression_template" then
       let bs ← (← j.getObjVal? "bindings").getObj?
       let binds ← bs.toArray.toList.foldrM (fun (k, v) acc => do
-        return Binds.cons k (← astOf v) acc) Binds.nil
+        return Binds.cons k (← parse v) acc) Binds.nil
       return .apply (← j.getObjValAs? String "name") binds
     else if op == "reshape" then
       let dims ← (← (← j.getObjVal? "shape").getArr?).toList.mapM fun d =>
@@ -134,7 +122,7 @@ partial def astOf (j : Json) : Except String Ast := do
           let #[lo, hi] ← b.getArr? | throw "makearray bound is not a pair"
           return (← lo.getInt?, ← hi.getInt?)
       if regions.any ArrayData.invertedRegion then throw "makearray_region_inverted"
-      let values ← (← (← j.getObjVal? "values").getArr?).toList.mapM astOf
+      let values ← (← (← j.getObjVal? "values").getArr?).toList.mapM parse
       return .array (.makearray regions) values
     else if op == "faq" then
       let out ← match j.getObjVal? "output_idx" with
@@ -154,7 +142,7 @@ partial def astOf (j : Json) : Except String Ast := do
         | .ok (.obj rs) =>
           rs.toArray.toList.foldrM (fun (k, t) acc => do
             match t with
-              | .arr a => return Ranges.cons k (← a.toList.mapM astOf) acc
+              | .arr a => return Ranges.cons k (← a.toList.mapM parse) acc
               | _ =>
                 let o ← t.getObj?
                 for (f, _) in o.toArray do
@@ -167,9 +155,16 @@ partial def astOf (j : Json) : Except String Ast := do
                   if parents.isEmpty then throw s!"faq range {k}: `of` must name a parent"
                   return Ranges.fromRagged k set parents acc) Ranges.nil
         | _ => pure Ranges.nil
-      match j.getObjVal? "filter" with
-      | .ok p => return .faqWhere out red ranges (← astOf p) (← astOf (← j.getObjVal? "expr")) args
-      | .error _ => return .faq out red ranges (← astOf (← j.getObjVal? "expr")) args
+      let body ← parse (← j.getObjVal? "expr")
+      let filter ← (j.getObjVal? "filter").toOption.mapM parse
+      if (j.getObjVal? "join").isOk then
+        let some resolve := resolveJoin | throw "faq node field join is outside the modelled slice"
+        let pairs ← resolve j
+        if !pairs.isEmpty then
+          return .faqJoin out red ranges pairs (filter.getD (.node "true" [])) body args
+      match filter with
+      | some p => return .faqWhere out red ranges p body args
+      | none => return .faq out red ranges body args
     else
       return .node op args
   | _ => throw s!"not an Expression: {j.compress}"
@@ -277,6 +272,70 @@ def isTrue (j : Json) : Bool := (j.getObjValAs? String "op").toOption == some "t
 inductive VIFail where
   | skip (why : String)
   | error (what : String)
+  | missing (name : String)
+
+private structure VIRange where
+  symbol : String
+  set : String
+  parents : Option (List String)
+
+private def viEval {α : Type} : Except EvalError α → Except VIFail α
+  | .ok value => .ok value
+  | .error (.unbound name) => .error (.missing name)
+  | .error err => .error (.error (errorString (.eval err)))
+
+private def viRanges (sets rhs : Json) : Except VIFail (List VIRange) := do
+  let ranges ← (rhs.getObjValD "ranges").getObj?.mapError VIFail.skip
+  ranges.toArray.toList.mapM fun (symbol, spec) => do
+    let fields ← spec.getObj?.mapError (fun _ => .skip s!"distinct faq range {symbol}: not an index set")
+    let set ← (spec.getObjValAs? String "from").mapError VIFail.skip
+    let kind := (sets.getObjValD set).getObjValAs? String "kind"
+    match fields.toArray.toList.map Prod.fst, kind with
+    | ["from"], .ok "interval" | ["from"], .ok "derived" => return ⟨symbol, set, none⟩
+    | ["from", "of"], .ok "ragged" =>
+      let parents ← (do (← (← spec.getObjVal? "of").getArr?).toList.mapM Json.getStr?).mapError
+        VIFail.skip
+      unless !parents.isEmpty do throw (.error s!"faq ragged set {set}: no parent symbols")
+      return ⟨symbol, set, some parents⟩
+    | _, _ => throw (.skip s!"distinct faq range {symbol}: unsupported set form for {set}")
+
+/-- Parents have to be bound before reading a ragged row, regardless of the
+order of the range keys. -/
+private def orderVIRanges : Nat → List VIRange → Except VIFail (List VIRange)
+  | _, [] => pure []
+  | 0, _ => throw (.error "cyclic distinct faq ragged ranges")
+  | fuel + 1, pending => do
+    let symbols := pending.map (·.symbol)
+    let some range := pending.find? (fun r => !(r.parents.getD []).any symbols.contains)
+      | throw (.error "cyclic distinct faq ragged ranges")
+    return range :: (← orderVIRanges fuel (pending.filter (·.symbol != range.symbol)))
+
+private def lookupVI (env : Env Float) (name : String) : Except VIFail (Val Float) :=
+  match env.lookup name with
+  | some value => pure value
+  | none => throw (.missing name)
+
+private def viMembers (data env : Env Float) (range : VIRange) : Except VIFail (List (Val Float)) := do
+  match range.parents with
+  | none =>
+    unless (env.lookup (setKey range.set)).isSome do throw (.missing (setKey range.set))
+    let size ← viEval (setSize range.set env)
+    return (List.range size.toNat).map (fun i => .num (Float.ofNat (i + 1)))
+  | some parents =>
+    let some (.raggedSet rank lengths values) := data.lookup (raggedSetKey range.set)
+      | throw (.error s!"faq ragged set {range.set}: missing backing factor declarations")
+    unless rank == parents.length do throw (.error s!"faq ragged set {range.set}: parent rank mismatch")
+    let parents ← parents.mapM fun p => do
+      let value ← lookupVI env p
+      viEval (do asInt (← asNum value))
+    viEval (raggedMembers (← lookupVI data lengths) (← lookupVI data values) parents)
+
+private def foldVIRanges (data : Env Float) (step : Env Float → List Float → Except VIFail (List Float)) :
+    List VIRange → Env Float → List Float → Except VIFail (List Float)
+  | [], env, keys => step env keys
+  | range :: rest, env, keys => do
+    let members ← viMembers data env range
+    members.foldlM (fun acc member => foldVIRanges data step rest ((range.symbol, member) :: env) acc) keys
 
 /-- The index set of a rank-1 variable (its `shape`), or none. -/
 def shape1 (vars : Json) (name : String) : Option String :=
@@ -285,8 +344,8 @@ def shape1 (vars : Json) (name : String) : Option String :=
   | _ => none
 
 /-- §9.6.6 value invention, the `distinct` form a derived index set is produced
-by: a `bool_and_or` `faq` with `distinct: true`, every range over a whole
-interval set, body `true`, an optional `filter` and optional `join` `on`
+by: a `bool_and_or` `faq` with `distinct: true`, ranges over whole interval or
+materialized derived sets or over ragged members, body `true`, an optional `filter` and optional `join` `on`
 clauses (each column a rank-1 variable over the set one range draws from), and
 an integer-valued `key`. Every index tuple, in any order, whose join
 equalities and filter hold contributes its key; a NaN key is
@@ -299,21 +358,12 @@ def materialize (scope : List (String × Template)) (env : Env Float) (vars sets
   if (rhs.getObjValAs? String "semiring").toOption != some "bool_and_or" then
     skip "distinct faq outside the bool_and_or semiring"
   unless isTrue (rhs.getObjValD "expr") do skip "distinct faq body other than true"
-  let ranges ← match (rhs.getObjValD "ranges").getObj? with
-    | .ok r => pure r.toArray.toList
-    | .error _ => throw (.skip "distinct faq without ranges")
-  let mut syms : List String := []
-  let mut sizes : List Nat := []
-  let mut setOf : List (String × String) := []
-  for (k, r) in ranges do
-    let fields := (r.getObj?.toOption.map (·.toArray.toList.map (·.1))).getD []
-    unless fields == ["from"] do throw (.skip s!"distinct faq range {k}: not a whole index set")
-    let some set := (r.getObjValAs? String "from").toOption | throw (.skip s!"range {k}")
-    let sj := sets.getObjValD set
-    unless (sj.getObjValAs? String "kind").toOption == some "interval" do
-      throw (.skip s!"distinct faq range {k} over non-interval set {set}")
-    let some n := (sj.getObjValAs? Nat "size").toOption | throw (.skip s!"set {set}: no size")
-    syms := syms ++ [k]; sizes := sizes ++ [n]; setOf := setOf ++ [(k, set)]
+  let ranges ← viRanges sets rhs
+  let setOf := ranges.map (fun range => (range.symbol, range.set))
+  for range in ranges do
+    unless (range.parents.getD []).all (fun parent => (setOf.lookup parent).isSome) do
+      throw (.error s!"faq ragged set {range.set}: parent is not a range symbol")
+  let ranges ← orderVIRanges ranges.length ranges
   let parse (j : Json) : Except VIFail Ast :=
     match astOf j with
     | .error w => throw (.skip w)
@@ -345,21 +395,17 @@ def materialize (scope : List (String × Template)) (env : Env Float) (vars sets
     match eval a e with
     | .ok (.num x) => pure x
     | .ok _ => throw (.error "not a scalar")
-    | .error err => throw (.error (errorString (.eval err)))
-  let mut keys : List Float := []
-  for t in tuples sizes do
-    let e := (syms.zip t).foldl (fun e (sk : String × Nat) =>
-      (sk.1, Val.num (Float.ofNat sk.2)) :: e) env
+    | .error err => viEval (.error err)
+  let keys ← foldVIRanges env (fun e keys => do
     let mut keep := true
     for c in conds do
       if keep then keep := truthy (← ev c e)
-    if keep then
-      let k ← ev keyAst e
-      if k.isNaN then
-        throw (.error s!"value_invention_key_out_of_range: a key of {id} is NaN")
-      unless k.isFinite && k.floor == k do
-        throw (.error s!"value_invention_key_out_of_range: a key of {id} is not an integer")
-      keys := (if k == 0.0 then 0.0 else k) :: keys
+    if !keep then return keys
+    let k ← ev keyAst e
+    unless k.isFinite && k.floor == k do
+      let row := ranges.map fun r => (r.symbol, (e.lookup r.symbol).bind fun v => (asNum v).toOption)
+      throw (.error s!"value_invention_key_out_of_range: key of {id} at {row} is not an integer")
+    return (if k == 0.0 then 0.0 else k) :: keys) ranges env []
   let sorted := keys.mergeSort (fun a b => a ≤ b)
   return sorted.foldr (fun x acc => match acc with
     | y :: _ => if x == y then acc else x :: acc
@@ -479,6 +525,8 @@ def main (args : List String) : IO UInt32 := do
               out := out.push (Json.mkObj [("name", lhs), ("set", id), ("skipped", why)])
             | .error (.error what) =>
               out := out.push (Json.mkObj [("name", lhs), ("set", id), ("error", what)])
+            | .error (.missing name) =>
+              out := out.push (Json.mkObj [("name", lhs), ("set", id), ("error", s!"unbound: {name}")])
             | .ok keys =>
               out := out.push (Json.mkObj [("name", lhs), ("set", id),
                 ("members", toJson (keys.map floatJson)),

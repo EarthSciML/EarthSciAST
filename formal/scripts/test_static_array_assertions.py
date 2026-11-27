@@ -18,6 +18,20 @@ SPEC.loader.exec_module(ADAPTER)
 
 
 class StaticArrayAssertions(unittest.TestCase):
+    def request_static(self, model, documents):
+        request = [{"test_id": "probe", "assertion_idx": 1}]
+        payload = "".join(
+            json.dumps({"document": document, "requests": request}) + "\n" for document in documents
+        )
+        proc = subprocess.run(
+            [ADAPTER.BINARY, "static-assertions-jsonl", model],
+            input=payload,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        return [json.loads(line) for line in proc.stdout.splitlines()]
+
     def check_passes(self, manifest_path, fixture):
         result = ADAPTER.run_fixture(manifest_path, fixture)
         self.assertIn("assertions", result, result)
@@ -85,6 +99,49 @@ class StaticArrayAssertions(unittest.TestCase):
             ADAPTER.run_fixture(manifest_path, fixture),
             {"error": "unbound: missingFactor"},
         )
+
+    def test_lazy_cell_gather(self):
+        path = ROOT / "tests/differential/shaped/pending/lazy_cell_gather.esm"
+        selected = json.loads(path.read_text())
+        rejected = json.loads(path.read_text())
+        rejected["models"]["Probe"]["equations"][0]["rhs"]["args"][1] = 2
+        success, fault = self.request_static("Probe", [selected, rejected])
+        self.assertEqual([ADAPTER.decode_float_bits(v) for v in success["values"]], [7.0])
+        self.assertEqual(fault, {"error": "E_TREEWALK_CONSTARRAY_OOB"})
+
+    def test_join_side_diagnostics(self):
+        sources = ROOT / "tests/invalid/faq/build_time"
+        cases = {
+            "self_join_index_set_key_ambiguous": "join_side_ambiguous",
+            "self_join_three_ranges_ambiguous": "join_side_ambiguous",
+            "self_join_syms_unknown_symbol": "join_syms_unknown_symbol",
+        }
+        documents = []
+        for fixture in cases:
+            document = json.loads((sources / f"{fixture}.esm").read_text())
+            [model] = document["models"].values()
+            document["models"] = {"Probe": model}
+            # Use a static assertion to request the same RHS as the corpus
+            # fixture. Its join scope and expected structural fault are intact.
+            model["equations"][-1]["lhs"] = "count"
+            model["tests"] = [
+                {"id": "probe", "assertions": [{"variable": "count", "time": 0, "expected": 0}]}
+            ]
+            documents.append(document)
+        results = self.request_static("Probe", documents)
+        for (fixture, code), result in zip(cases.items(), results, strict=True):
+            with self.subTest(fixture=fixture):
+                self.assertEqual(result["error"].split(":", 1)[0], code)
+
+    def test_pending_join_replays(self):
+        manifest = CONFORMANCE / "static_array_semantics" / "manifest.json"
+        source = ROOT / "tests/differential/shaped/pending"
+        for path in sorted(source.glob("join_*.esm")):
+            with self.subTest(fixture=path.name):
+                self.check_passes(
+                    manifest,
+                    {"id": path.stem, "path": str(path), "model": "Probe"},
+                )
 
     def test_static_faq(self):
         fixture = {

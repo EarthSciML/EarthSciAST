@@ -11,8 +11,11 @@ import Esm.Expr.ArrayConformance
 import Esm.Expr.Canonical
 import Esm.Expr.Canonical.Typed
 import Esm.Expr.Template
+import Esm.Expr.ExpansionProofs
 import Esm.Rewrite.Engine
 import Esm.Rewrite.Match
+import Esm.Rewrite.Imports
+import Esm.Rewrite.Metaparameters
 import Esm.Lib.Interp
 import Esm.Closed.Interp.TemplateAst
 import Esm.Lib.Calendar

@@ -81,12 +81,28 @@
       "theorem": "Esm.Expr.evalCell_strict_operands"
     },
     {
-      "id": "P-gather-after-successful-broadcast",
+      "id": "P-gather-materialized-broadcast-cell",
       "clauses": ["conf.5.29.gather-distributes-to-leaves"],
-      "statement": "Gathering an in-range coordinate from a successfully evaluated elementwise array gives the primitive applied to that coordinate's broadcast operands.",
-      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (base : Esm.Expr.Ast) (args : List Esm.Expr.Ast) (values : List (Esm.Expr.Val α)) (op : Esm.Expr.StrictOp) (operands : List (Esm.Expr.ArrayData (Esm.Expr.Val α))) (result : Esm.Expr.ArrayData (Esm.Expr.Val α)) (ix : List Nat), Esm.Expr.ArrayData.broadcast (Esm.Expr.applyCell op) .shapeMismatch operands = .ok result → Esm.Expr.eval base env = .ok (.shaped result.dims result.cells) → Esm.Expr.evalList args env = .ok values → values.mapM (fun v => do Esm.Expr.asInt (← Esm.Expr.asNum v)) = .ok (Esm.Expr.oneBased ix) → List.Forall₂ (fun n i : Nat => i < n) result.dims ix → Esm.Expr.eval (.node \"index\" (base :: args)) env = Esm.Expr.ArrayData.broadcastCell (Esm.Expr.applyCell op) .shapeMismatch operands ix",
+      "statement": "The checked gather of a materialized broadcast reads the result of applying the operation to that coordinate's broadcast operands.",
+      "lean_statement": "∀ {α : Type} (apply : List (Esm.Expr.Val α) → Except Esm.Expr.EvalError (Esm.Expr.Val α)) (operands : List (Esm.Expr.ArrayData (Esm.Expr.Val α))) (result : Esm.Expr.ArrayData (Esm.Expr.Val α)) (ix : List Nat), Esm.Expr.ArrayData.broadcast apply .shapeMismatch operands = .ok result → List.Forall₂ (fun n i : Nat => i < n) result.dims ix → Esm.Expr.indexCell (.shaped result.dims result.cells) (Esm.Expr.oneBased ix) = Esm.Expr.ArrayData.broadcastCell apply .shapeMismatch operands ix",
       "status": "proven",
-      "theorem": "Esm.Expr.eval_index_materialized_broadcast"
+      "theorem": "Esm.Expr.indexCell_broadcast"
+    },
+    {
+      "id": "P-full-elementwise-gather-reads-selected-cell",
+      "clauses": ["conf.5.29.gather-distributes-to-leaves", "conf.5.5.5.untaken-read-no-fault"],
+      "statement": "A complete gather of an elementwise expression with inferred extents returns the per-cell evaluator's result at the selected in-range coordinate.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (base : Esm.Expr.Ast) (args : List Esm.Expr.Ast) (dims ix : List Nat) (values : List (Esm.Expr.Val α)), Esm.Expr.isElementwiseGatherBase base = true → Esm.Expr.expressionDims base env = .ok (some dims) → dims ≠ [] → dims.length = args.length → Esm.Expr.evalList args env = .ok values → Esm.Expr.gatherSubscripts values = .ok (Esm.Expr.oneBased ix) → List.Forall₂ (fun n i : Nat => i < n) dims ix → Esm.Expr.eval (.node \"index\" (base :: args)) env = Esm.Expr.evalCell base env ix",
+      "status": "proven",
+      "theorem": "Esm.Expr.eval_index_elementwise_cell"
+    },
+    {
+      "id": "P-full-elementwise-gather-checks-every-axis",
+      "clauses": ["conf.5.29.gather-distributes-to-leaves", "conf.5.5.5.gather-boundary-agree"],
+      "statement": "A complete gather of an elementwise expression detects an out-of-range subscript on any axis before evaluating the selected cell.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (base : Esm.Expr.Ast) (args : List Esm.Expr.Ast) (dims : List Nat) (values : List (Esm.Expr.Val α)) (indices : List Int), Esm.Expr.isElementwiseGatherBase base = true → Esm.Expr.expressionDims base env = .ok (some dims) → dims ≠ [] → dims.length = args.length → Esm.Expr.evalList args env = .ok values → Esm.Expr.gatherSubscripts values = .ok indices → dims.length = indices.length → (¬ List.Forall₂ (fun (n : Nat) (i : Int) => 1 ≤ i ∧ i ≤ (n : Int)) dims indices) → Esm.Expr.eval (.node \"index\" (base :: args)) env = .error .outOfRange",
+      "status": "proven",
+      "theorem": "Esm.Expr.eval_index_elementwise_outOfRange"
     },
     {
       "id": "P-scalar-ifelse-evaluates-selected-branch",
@@ -103,6 +119,17 @@
       "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (condition yes no : Esm.Expr.Ast) (ix : List Nat) (value : α), Esm.Expr.evalCell condition env ix = .ok (.num value) → Esm.Expr.evalCell (.node \"ifelse\" [condition, yes, no]) env ix = (if Esm.Expr.truthy value then Esm.Expr.evalCell yes env ix else Esm.Expr.evalCell no env ix)",
       "status": "proven",
       "theorem": "Esm.Expr.evalCell_ifelse_selected_branch"
+    }
+  ],
+  "superseded_properties": [
+    {
+      "id": "P-gather-after-successful-broadcast",
+      "clauses": ["conf.5.29.gather-distributes-to-leaves"],
+      "statement": "Gathering an in-range coordinate from a successfully evaluated elementwise array gives the primitive applied to that coordinate's broadcast operands.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (base : Esm.Expr.Ast) (args : List Esm.Expr.Ast) (values : List (Esm.Expr.Val α)) (op : Esm.Expr.StrictOp) (operands : List (Esm.Expr.ArrayData (Esm.Expr.Val α))) (result : Esm.Expr.ArrayData (Esm.Expr.Val α)) (ix : List Nat), Esm.Expr.ArrayData.broadcast (Esm.Expr.applyCell op) .shapeMismatch operands = .ok result → Esm.Expr.eval base env = .ok (.shaped result.dims result.cells) → Esm.Expr.evalList args env = .ok values → values.mapM (fun v => do Esm.Expr.asInt (← Esm.Expr.asNum v)) = .ok (Esm.Expr.oneBased ix) → List.Forall₂ (fun n i : Nat => i < n) result.dims ix → Esm.Expr.eval (.node \"index\" (base :: args)) env = Esm.Expr.ArrayData.broadcastCell (Esm.Expr.applyCell op) .shapeMismatch operands ix",
+      "previous_theorem": "Esm.Expr.eval_index_materialized_broadcast",
+      "superseded_by": ["P-gather-materialized-broadcast-cell", "P-full-elementwise-gather-reads-selected-cell", "P-full-elementwise-gather-checks-every-axis"],
+      "reason": "Full elementwise gathers no longer materialize their base. The replacement laws separately cover committed array storage and selection through the elementwise AST, including when a different output cell would fault."
     }
   ]
 }

@@ -1,0 +1,192 @@
+{
+ "esm": "2.4.0",
+ "metadata": {
+  "name": "static_join_self",
+  "description": "Default self-join side selection follows canonical range order. Explicit reversed symbols read successors instead of predecessors.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ]
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": 5
+  }
+ },
+ "models": {
+  "Probe": {
+   "variables": {
+    "prior": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "id": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "payload": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "default_sum": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "explicit_sum": {
+     "type": "unknown",
+     "units": "1"
+    }
+   },
+   "equations": [
+    {
+     "lhs": "prior",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       0,
+       1,
+       2,
+       3,
+       4
+      ]
+     }
+    },
+    {
+     "lhs": "id",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1,
+       2,
+       3,
+       4,
+       5
+      ]
+     }
+    },
+    {
+     "lhs": "payload",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1,
+       10,
+       100,
+       1000,
+       10000
+      ]
+     }
+    },
+    {
+     "lhs": "default_sum",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "a": {
+        "from": "rows"
+       },
+       "b": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "b"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "prior",
+          "id"
+         ]
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "explicit_sum",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "a": {
+        "from": "rows"
+       },
+       "b": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "b"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "prior",
+          "id"
+         ]
+        ],
+        "syms": [
+         "b",
+         "a"
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "tolerance": {
+    "rel": 0,
+    "abs": 0
+   },
+   "tests": [
+    {
+     "id": "probe",
+     "time_span": {
+      "start": 0,
+      "end": 1
+     },
+     "assertions": [
+      {
+       "variable": "default_sum",
+       "time": 0,
+       "expected": 1111
+      },
+      {
+       "variable": "explicit_sum",
+       "time": 0,
+       "expected": 11110
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

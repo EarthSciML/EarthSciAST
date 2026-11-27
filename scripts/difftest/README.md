@@ -85,8 +85,32 @@ preserves both axes of a one-cell const array and returns positive zero.
 that reverses its operand's declared axes and returns `3` for the saved cell.
 
 Pass `--fixture` more than once to replay several documents with one set of
-adapters. Formal CI replays every document under `tests/differential` this way
-before the generated sweeps.
+adapters. Formal CI replays the resolved cases in the `scalar` and `shaped`
+directories before the generated sweeps.
+
+The Lean array test runs
+`tests/differential/shaped/pending/lazy_cell_gather.esm`. Its first cell
+evaluates to `7` and selecting the second raises
+`E_TREEWALK_CONSTARRAY_OOB`. Native Python and Rust raise that fault even for
+the first cell. Native Julia refuses the first cell with
+`unevaluable_operator` when it reads the non-scalar inline `const`.
+
+The Lean array test also checks the pending equality joins in the same directory.
+Python and Rust native agree with Lean on these probes. Julia has four
+differences.
+
+- `join_fold_order.esm` returns `1` in native Julia and the Julia reference. The contracted
+  row order yields `0`.
+- `join_extra_range_fold_order.esm` returns `2` in native Julia and the Julia reference.
+  The row order within each season yields a total of `0`.
+- `join_explicit_symbols.esm` returns `1111` for the explicit `syms` assertion
+  in native Julia. The explicit reversal yields `11110`, which the Julia
+  reference also returns.
+- `join_both_outputs.esm` returns `compiler_refused_rule` in native Julia.
+  The Julia reference agrees on the matched values and zeros.
+
+Pass a pending document explicitly with `--fixture` to replay its disagreement
+across the native adapters.
 
 ```sh
 python scripts/difftest/scalar.py --timeout 300 \

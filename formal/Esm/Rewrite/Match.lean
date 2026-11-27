@@ -44,10 +44,11 @@ mutual
 
 /-- Repeated captures compare complete JSON values. Object fields compare by
 name while array positions stay ordered. -/
-private def sameValue : Json → Json → Bool
+def sameValue : Json → Json → Bool
   | .str a, .str b => a == b
   | .num a, .num b => decide (a = b)
   | .bool a, .bool b => a == b
+  | .math a, .math b => a == b
   | .null, .null => true
   | .arr a, .arr b => sameArray a b
   | .obj a, .obj b => a.length == b.length && sameObject a b
