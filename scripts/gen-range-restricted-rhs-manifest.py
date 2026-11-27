@@ -55,6 +55,7 @@ DOCS = {
     "lanes_column": {"document": "fixtures/lanes_column.esm"},
     "lanes_surface_region": {"document": "fixtures/lanes_surface_region.esm"},
     "lanes_time_observed_ic": {"document": "fixtures/lanes_time_observed_ic.esm"},
+    "lanes_forcing_contraction": {"document": "fixtures/lanes_forcing_contraction.esm"},
     "global_horizontal_sum": {"document": "fixtures/global_horizontal_sum.esm"},
     "global_scalar_state": {"document": "fixtures/global_scalar_state.esm"},
     "esd_ppm_1d_periodic": {
@@ -641,6 +642,39 @@ def lane_cases():
             "batches": [{"id": "mixed_levels", "cells": perm[:cap], "n": cap}],
             "negative_control": {"batch": "mixed_levels", "swap_lanes": [1, 2]},
             "covers": ["lanes", "time_observed_read_by_ic"],
+        }
+    )
+    # Forcing data feeding a pointwise operator: a whole-domain contraction of a
+    # forcing array (forcing only) read at a computed subscript, and forcing
+    # arrays pre-gathered per lane at an affine and a non-affine subscript.
+    # Several batches through one workspace, so a value memoized for one batch
+    # and stale for the next would show. Its own generator, so the cases
+    # above keep their cells.
+    frng = random.Random(542)
+    cells = [[i, j, k] for k in range(1, 5) for j in range(1, 6) for i in range(1, 7)]
+    perm = cells[:]
+    frng.shuffle(perm)
+    cap = 16
+    out.append(
+        {
+            "id": "lanes_forcing_contraction",
+            "kind": "lanes",
+            **doc_ref("lanes_forcing_contraction"),
+            "selection": SELECT_ALL,
+            "lane_kind": "cells",
+            "lane_sets": ["lon", "lat", "lev"],
+            "capacity": cap,
+            "batches": [
+                {"id": "batch_1", "cells": perm[:cap], "n": cap},
+                {"id": "batch_2", "cells": perm[cap : 2 * cap], "n": cap},
+                {
+                    "id": "batch_3_padded",
+                    "cells": perm[2 * cap : 2 * cap + 7] + [perm[2 * cap]] * (cap - 7),
+                    "n": 7,
+                },
+            ],
+            "negative_control": {"batch": "batch_2", "swap_lanes": [1, 2]},
+            "covers": ["lanes", "forcing_only_contraction", "pre_gathered_computed_subscript"],
         }
     )
     # A lane program over an operator that reads a neighbour is refused.

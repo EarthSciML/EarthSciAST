@@ -352,14 +352,20 @@ end
 Announce that the contents of a live forcing buffer (a `param_arrays` buffer
 bound into the build) were mutated in place. The announcement goes to the
 buffer's owner: the Problem whose build reads it, or the
-[`DiscreteMaterializer`](@ref) that build filled (the same build's epoch). Two
-kinds of build product are derived from such a buffer, and both are brought up
+[`DiscreteMaterializer`](@ref) that build filled (the same build's epoch). Three
+kinds of build product are derived from such a buffer, and all are brought up
 to the new contents by the owner's next in-place `f!` call (or
 [`observed_field`](@ref) read):
 
 * the memoized time-cadence prelude values that gather it, which `f!` refills
   on the next call at a `t` it has already been called at (a later `t`
-  re-evaluates them anyway), and
+  re-evaluates them anyway),
+* the forcing-cadence materialized observeds that read it (they read forcing
+  but neither the state nor `t`), which `f!` refills on its next call at ANY
+  `t`. Once the build's writers are declared announced (a Problem whose only
+  live buffers are its own providers', or the `owner` given to
+  [`build_refresh_callback`](@ref)), nothing but this announcement (or a
+  change of `p`) refills them; otherwise a later `t` does too, and
 * every discrete-cadence cache ([`DiscreteMaterializer`](@ref)) of the build,
   which `f!` refills on its next call at ANY `t`. Nothing but this
   announcement (or a change of `p`) refills them, so a forcing write that is
@@ -380,13 +386,19 @@ from `f!`; it calls the [`DiscreteMaterializer`](@ref)'s `refresh!()` after the
 announcement.
 
 A spurious call gives no wrong number, but the next `f!` re-runs its
-time-cadence slots and its whole discrete-cadence stack. The refill happens
+time-cadence slots, its forcing-cadence observeds and its whole discrete-cadence
+stack. The refill happens
 inside `f!`, so one build's `f!` must still not be called from several threads
 at once.
 """
 function notify_forcing_refresh! end
 
 notify_forcing_refresh!(dm::DiscreteMaterializer) = _bump_epoch!(dm.epoch)
+
+# Declare that every write to the live buffers of `owner`'s build is announced
+# to it (`_ForcingEpoch.announced`, cadence_stamp.jl).
+_declare_announced!(dm::DiscreteMaterializer) = (dm.epoch.announced = true; nothing)
+_declare_announced!(_) = nothing
 
 # --------------------------------------------------------------------------- #
 # RefreshBuffers — the live forcing buffers (the SAME objects as param_arrays)
@@ -478,9 +490,14 @@ forcing on the buffer's grid.
 `owner` is the build that reads `buffers` (the Problem, or the
 [`DiscreteMaterializer`](@ref) its build filled); `affect!` announces each
 boundary's writes to it with [`notify_forcing_refresh!`](@ref) so its memoized
-values refill. With `owner = nothing` nothing is announced, and a value
-memoized from the old forcing stays until `t` moves (time-cadence values) or for
-good (discrete caches).
+values refill. Giving `owner` also declares that every write to that build's
+live buffers is announced: from then on a materialized observed that reads
+forcing but neither the state nor `t` is refilled only on an announcement or a
+new `p`, not at every new `t`, so any other writer of those buffers must
+announce too. With `owner = nothing` nothing is announced or declared: a value
+memoized from the old forcing stays until `t` moves (time-cadence values and,
+in a build no writer was declared for, forcing-only observeds) or for good
+(discrete caches).
 
 `post_refresh` is a `() -> nothing` hook `affect!` calls at each boundary after
 the buffers are refreshed and announced and before `u_modified!`.
@@ -497,8 +514,15 @@ package extension); calling it without them throws [`RefreshError`](@ref).
 """
 function build_refresh_callback end
 
-# Fallback (varargs ⇒ strictly less specific than the extension's
-# zero-positional keyword method): fires only when the extension is NOT loaded.
+# The callback without `build_refresh_callback`'s declaration that the
+# owner's writes are announced: the Problem's own callback, whose caller may
+# still write its `param_arrays` unannounced. Its method lives in the
+# extension too.
+function _refresh_callback end
+
+# Fallbacks (varargs ⇒ strictly less specific than the extension's
+# zero-positional keyword methods): fire only when the extension is NOT loaded.
+_refresh_callback(args...; kwargs...) = build_refresh_callback(args...; kwargs...)
 build_refresh_callback(args...; kwargs...) = throw(
     RefreshError(
         "build_refresh_callback requires the DiffEqCallbacks + SciMLBase extension; " *

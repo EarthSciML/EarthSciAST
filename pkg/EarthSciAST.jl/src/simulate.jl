@@ -1643,6 +1643,18 @@ function _esm_problem(
     finally
         req.inspect === nothing || _publish_inspection!(req.inspect, products)
     end
+    # One forcing epoch per Problem: the one its right-hand side reads. A
+    # build given the materializer shares its epoch already. A program build
+    # is not given one (it has no discrete-cadence cut, so `dm` holds no
+    # cache and no fill closes over its epoch) and makes its own, which `dm`
+    # takes: the refresh callback announces to `dm`, and `observed_field`
+    # reads its epoch.
+    req.program_build && (dm.epoch = products.forcing_epoch)
+    # With no caller `param_arrays`, every live buffer of the build is a
+    # discrete provider's, written only by this Problem's refresh callback,
+    # which announces its writes: forcing-only observeds may then be kept
+    # across a new `t` (cadence_stamp.jl, `announced`).
+    isempty(req.param_arrays) && (dm.epoch.announced = true)
 
     if compiler === :xla
         f! = _xla_problem_rhs(
@@ -1778,7 +1790,7 @@ function _problem_callbacks(req::_ProblemRequest, refresh)
     cbs = Any[]
     tstops = Float64[]
     if refresh !== nothing
-        cb, ts = build_refresh_callback(;
+        cb, ts = _refresh_callback(;
             providers = refresh.providers,
             buffers = RefreshBuffers(refresh.buffers),
             owner = refresh.owner,
@@ -2007,6 +2019,7 @@ end
 
 
 notify_forcing_refresh!(prob::EsmProblem) = _bump_epoch!(prob.build.products.forcing_epoch)
+_declare_announced!(prob::EsmProblem) = (prob.build.products.forcing_epoch.announced = true; nothing)
 
 function notify_forcing_refresh!(prob::EsmProblem, name::AbstractString)
     haskey(prob.param_buffers, name) || throw(

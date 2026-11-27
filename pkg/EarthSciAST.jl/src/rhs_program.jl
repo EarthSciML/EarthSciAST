@@ -360,15 +360,16 @@ function _ws_fresh(x::_ObsExtVec, c)
     y = _ObsExtVec(
         _inst(x.f64, c), nothing, _CSE_INVALID, _CSE_INVALID, _CSE_INVALID,
         NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID, UInt64(0),
-        _inst(x.epoch, c), nothing
+        _inst(x.epoch, c), nothing, _CSE_INVALID, UInt64(0), _CSE_INVALID, UInt64(0)
     )
     push!(c.caches, y)
     return c.memo[x] = y
 end
 _ws_fresh(x::_AccScratch, c) = c.memo[x] = _AccScratch(_inst(x.f64, c), nothing)
 function _ws_fresh(x::_ForcingEpoch, c)
-    # A workspace tracks its forcing set's epoch itself.
-    e = _ForcingEpoch(UInt64(0))
+    # A workspace tracks its forcing set's epoch itself: its buffers change
+    # only when it loads a new set, which bumps it (announced).
+    e = _ForcingEpoch(UInt64(0), true)
     push!(c.epochs, e)
     return c.memo[x] = e
 end
@@ -423,6 +424,10 @@ function _ws_invalidate!(x::_WsCache)
     x.stampalt = _CSE_INVALID
     x.tp64 = _CSE_INVALID
     x.tpalt = _CSE_INVALID
+    if x isa _ObsExtVec
+        x.fp64 = _CSE_INVALID
+        x.fpalt = _CSE_INVALID
+    end
     return nothing
 end
 _ws_invalidate!(x::_ACMask) = (x.stamp = _CSE_INVALID; nothing)
@@ -694,7 +699,6 @@ mutable struct RhsWorkspace{F}
     const epochs::Vector{_ForcingEpoch}
     # The memoizing caches, whose stamps a failed call invalidates.
     const caches::Vector{Any}
-    const env::Dict{String, Int}
     primed::UInt64
 end
 
@@ -707,7 +711,7 @@ function _instantiate(shared::_RhsShared)
     f = _inst(fac.template, c)
     return RhsWorkspace(
         shared, f, zeros(fac.n), zeros(fac.n), fbufs, copy(fac.slot_read),
-        lbufs, c.epochs, c.caches, Dict{String, Int}(), UInt64(0)
+        lbufs, c.epochs, c.caches, UInt64(0)
     )
 end
 
@@ -758,8 +762,26 @@ function _check_forcing_set(slots::Vector{ForcingSlot}, fs::ForcingSet, call::Ab
                 "$(join((s.name for s in slots), ", ")))"
         )
     )
+    # A set built by hand (`ForcingSet(slots, bufs, epoch)`) is not checked by
+    # `forcing_set`; the lane gathers read its buffers unchecked.
+    length(fs.bufs) == length(slots) || throw(
+        ArgumentError(
+            "$call: the forcing set holds $(length(fs.bufs)) buffers for " *
+                "$(length(slots)) forcing slots"
+        )
+    )
+    @inbounds for k in eachindex(slots)
+        n = prod(slots[k].shape; init = 1)
+        length(fs.bufs[k]) == n || _forcing_buffer_length_error(call, slots[k], fs.bufs[k], n)
+    end
     return nothing
 end
+@noinline _forcing_buffer_length_error(call, s::ForcingSlot, buf, n) = throw(
+    ArgumentError(
+        "$call: the forcing set's buffer for slot '$(s.name)' has $(length(buf)) " *
+            "elements; the slot's shape $(Tuple(s.shape)) has $n"
+    )
+)
 
 function _check_parameters(shared::_RhsShared, p, call::AbstractString)
     p isa AbstractVector || return nothing

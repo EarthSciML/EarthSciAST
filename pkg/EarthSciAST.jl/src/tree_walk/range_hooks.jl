@@ -29,6 +29,15 @@ _range_observed_box(::_AnySpec, name, dims) = (ones(Int, length(dims)), copy(dim
 _range_fill_equations(::_AnySpec, name, def, dims, box) =
     _materialized_fill_equations(name, def, dims)
 
+# The live buffers a lane program refills for every chunk of lanes
+# (range/lanes.jl): each lane's global indices, its time and its pre-gathered
+# inputs. They are per-call inputs like the state, so no cadence tier memoizes
+# a value that reads one: their names (`_range_lane_inputs`, for the observed
+# fill levels) and whether a gather's buffer is one of them
+# (`_range_is_lane_buffer`, for the scalar prelude).
+_range_lane_inputs(::_AnySpec) = ()
+_range_is_lane_buffer(::_AnySpec, buf) = false
+
 # The document and build options (`BuildOptions`) the front door
 # (`_front_door`) hands the build, recorded so a restriction re-lowers without
 # re-reading the document.

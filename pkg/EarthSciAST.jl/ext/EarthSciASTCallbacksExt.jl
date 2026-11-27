@@ -13,8 +13,9 @@ module EarthSciASTCallbacksExt
 
 using EarthSciAST: ERROR_CODES, RefreshBuffers, RefreshError, OutputError, StateSnapshot,
     provider_is_const, provider_refresh_times, provider_sample, _write_forcing!,
-    notify_forcing_refresh!, sink_output_times, sink_write!, sink_flush!, _union_tstops
-import EarthSciAST: build_refresh_callback, build_output_callback,
+    notify_forcing_refresh!, sink_output_times, sink_write!, sink_flush!, _union_tstops,
+    _declare_announced!
+import EarthSciAST: build_refresh_callback, _refresh_callback, build_output_callback,
     build_checkpoint_callback
 import DiffEqCallbacks: PresetTimeCallback
 import SciMLBase
@@ -61,9 +62,23 @@ function _group_discrete_providers(providers::AbstractDict, buffers::RefreshBuff
     return groups
 end
 
-# Zero-positional keyword method: more specific than the core's varargs
-# fallback, so it wins whenever this extension is loaded.
+# Zero-positional keyword methods: more specific than the core's varargs
+# fallbacks, so they win whenever this extension is loaded. A caller's
+# `owner` also declares that the build's forcing writes are announced
+# (`_declare_announced!`); the Problem's own callback (`_problem_callbacks`)
+# calls `_refresh_callback` directly, which declares nothing.
 function build_refresh_callback(;
+        providers::AbstractDict,
+        buffers::RefreshBuffers,
+        owner,
+        post_refresh::Function = () -> nothing
+    )
+    out = _refresh_callback(; providers, buffers, owner, post_refresh)
+    owner === nothing || _declare_announced!(owner)
+    return out
+end
+
+function _refresh_callback(;
         providers::AbstractDict,
         buffers::RefreshBuffers,
         owner,
