@@ -831,7 +831,7 @@ function _assertion_observed(backend_prob, insp, file, owner, loc, ctx, state, t
         err isa SimulateError || rethrow()
         return nothing
     end
-    shape = something(model.variables[loc].shape, String[])
+    shape = _observed_shape(model, model.variables[loc], ctx, owner, loc)
     exts = _shape_extents(insp, file, shape)
     cells = (exts === nothing || prod(exts; init = 1) != length(vals)) ?
         [Int[i] for i in eachindex(vals)] : _row_major_cells(exts)

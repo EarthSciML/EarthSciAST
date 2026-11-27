@@ -160,8 +160,9 @@ end
 # index sets is placed by those names under a usable alignment, like a variable
 # declared over them (esm-spec §4.3.4): `k * faq_i(q[i])` over `lat` in a
 # `[lat, lon]` result reads its element at the `lat` loop and replicates along
-# `lon`. Any other producer, or one naming an index set the result lacks or
-# one name twice, is gathered whole, positionally.
+# `lon`, and one naming an index set the result lacks is
+# `E_TREEWALK_ARRAY_SHAPE_MISMATCH`, as for a declared variable. Any other
+# producer, or one naming an index set twice, is gathered whole, positionally.
 function _index_wrap_producer(
         e::OpExpr, loops::Vector{String}, align::Union{Nothing, _AxisAlign}
     )::OpExpr
@@ -169,7 +170,15 @@ function _index_wrap_producer(
     sets = _producer_index_sets(e)
     (sets === nothing || isempty(sets) || !allunique(sets)) && return _index_wrap(e, loops)
     r = _gather_by_name(e, sets, align.axes, loops)
-    return r isa OpExpr ? r : _index_wrap(e, loops)
+    r isa OpExpr && return r
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_ARRAY_SHAPE_MISMATCH",
+            "A `faq` operand of an array-level expression ranges over index " *
+                "set '$(last(r))' (index sets $(sets)), which the result shape " *
+                "$(align.axes) is not shaped over (esm-spec §4.3.4)"
+        )
+    )
 end
 
 _array_shape_mismatch_text(v::VarExpr, shape, axes, s) =

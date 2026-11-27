@@ -302,6 +302,13 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
     new_contribs = Vector{Contribution}[]
     for (eq, cs) in zip(flat.equations, _flat_contributions(flat))
         out, out_cs = eq, cs
+        target = _equation_target(eq.lhs)
+        if target !== nothing && !_is_lifted(eq, flat.lifted_shapes)
+            out, out_cs = _rewrite_contributions(
+                e -> _place_named_producers(e, target, get(shapes, target, String[])),
+                out, out_cs, false
+            )
+        end
         if eq.lhs isa VarExpr && haskey(ew_lifted, (eq.lhs::VarExpr).name)
             out_cs = Contribution[Contribution(ew_lifted[(eq.lhs::VarExpr).name], _union_origins(cs))]
             out = _equation_from(eq, out_cs)
@@ -332,6 +339,72 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
     # The cellwise variants this pass's lift made take their final names, with
     # those flatten named (esm-spec §9.6.11).
     return _rename_flat_refs(promoted, _name_cellwise_variants!(registry))
+end
+
+# The variable an equation `x = …` or `D(x) = …` defines, or `nothing`.
+function _equation_target(lhs::ASTExpr)::Union{Nothing, String}
+    lhs isa VarExpr && return lhs.name
+    (lhs isa OpExpr && lhs.op == "D" && length(lhs.args) == 1 && lhs.args[1] isa VarExpr) ||
+        return nothing
+    return (lhs.args[1]::VarExpr).name
+end
+
+# `rhs` with each `faq` over named index sets that it is, or reads in
+# element-wise position, put in the frame of its target `target` over `shape`:
+# one output index per index set of `shape`, in that order, the producer's own
+# where it ranges over that set and a fresh one otherwise. A producer over
+# index sets aligns by their names (esm-spec §4.3.4): `faq_i(c[i])` with `i`
+# over `lon`, defining an `[lat, lon]` result, becomes `faq_{l,i}(c[i])` with
+# `l` over `lat`, the same value replicated along `lat`, and one over
+# `(lat, lon)` defining a `[lon, lat]` result is transposed. Once its ranges are
+# resolved to intervals, every later read of it is positional. A producer
+# naming an index set `shape` lacks is `E_TREEWALK_ARRAY_SHAPE_MISMATCH`, as a
+# declared operand is; one naming an index set twice, or a target whose shape
+# does, is left as written.
+function _place_named_producers(rhs::ASTExpr, target::String, shape::Vector{String})::ASTExpr
+    (isempty(shape) || !allunique(shape)) && return rhs
+    rhs isa OpExpr || return rhs
+    _producer_index_sets(rhs) === nothing || return _producer_in_frame(rhs, target, shape)
+    _is_elementwise_node(rhs) || return rhs
+    args = ASTExpr[_place_named_producers(a, target, shape) for a in rhs.args]
+    all(i -> args[i] === rhs.args[i], eachindex(args)) && return rhs
+    return reconstruct(rhs; args = args)
+end
+
+function _producer_in_frame(e::OpExpr, target::String, shape::Vector{String})::OpExpr
+    sets = _producer_index_sets(e)::Vector{String}
+    (isempty(sets) || sets == shape || !allunique(sets)) && return e
+    foreign = findfirst(s -> !(s in shape), sets)
+    foreign === nothing || throw(
+        TreeWalkError(
+            "E_TREEWALK_ARRAY_SHAPE_MISMATCH",
+            "A `faq` over index sets $(sets) in the definition of '$(target)' ranges " *
+                "over index set '$(sets[foreign])', which '$(target)' (shape $(shape)) " *
+                "is not shaped over (esm-spec §4.3.4)"
+        )
+    )
+    used = Set{String}(String(k) for k in keys(e.ranges))
+    foreach_subexpr_once(e) do x
+        x isa VarExpr && push!(used, x.name)
+        nothing
+    end
+    output_idx = Any[]
+    ranges = Dict{String, Any}(String(k) => v for (k, v) in e.ranges)
+    for axis in shape
+        d = findfirst(isequal(axis), sets)
+        if d !== nothing
+            push!(output_idx, e.output_idx[d])
+            continue
+        end
+        sym = "_" * axis
+        while sym in used
+            sym = "_" * sym
+        end
+        push!(used, sym)
+        ranges[sym] = IndexSetRef(axis)
+        push!(output_idx, sym)
+    end
+    return reconstruct(e; output_idx = output_idx, ranges = ranges)
 end
 
 # Whether `rhs` is already the array `shape` names: a `faq` whose output

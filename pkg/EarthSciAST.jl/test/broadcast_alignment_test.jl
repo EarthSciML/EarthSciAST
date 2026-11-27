@@ -589,3 +589,41 @@ end
         @test all(r -> r.passed, results)
     end
 end
+
+# The assertion-time fallback that evaluates an observed's own authored
+# equation (`_authored_observed_body`): a producer whose NAME has no index sets
+# (`wa`, a `faq` over an inline interval, esm-spec §4.3.4 rule 2) is read
+# positionally at the cell, and one whose name has index sets (`w`, a `faq`
+# over `{from: lat}`) by them. Without a build context the shape of an
+# undeclared result is the one its definition spans, as the build infers it.
+@testset "authored observed body reads named and anonymous producers" begin
+    inline = Dict{String, Any}(
+        "op" => "faq", "output_idx" => Any["p"],
+        "ranges" => Dict{String, Any}("p" => Any[1, 3]),
+        "args" => Any[], "expr" => _bc_idx("c", "p")
+    )
+    param(shape, v) = Dict{String, Any}(
+        "type" => "parameter", "units" => "1", "default" => v, "shape" => Any[shape...]
+    )
+    vars = Dict{String, Any}(
+        "q" => param(("lat",), [5, 8]),
+        "c" => param(("lon",), [3, 10, 20]),
+        "w" => _bc_obs(nothing, _bc_agg(("i",), ("i" => "lat",), _bc_idx("q", "i"))),
+        "wa" => _bc_obs(nothing, inline),
+        "za" => _bc_obs(("lon",), _bc_op("+", "wa", "c")),
+        "zw" => _bc_obs(nothing, _bc_op("+", "w", "c")),
+    )
+    file = E.load_string(JSON3.write(_bc_doc("Anon", vars, Any[]; sets = ("lat" => 2, "lon" => 3))))
+    model = file.models["Anon"]
+    @test E._observed_shape(model, model.variables["zw"], nothing, "Anon", "zw") == ["lat", "lon"]
+    @test E._observed_shape(model, model.variables["wa"], nothing, "Anon", "wa") == String[]
+    insp = E.esm_problem(file, (0.0, 1.0)).build.products
+    read(name, exts) = E.evaluate_cellwise(
+        E._authored_observed_body(insp, file, model, "Anon", name, exts),
+        E._row_major_cells(exts);
+        const_arrays = insp.const_arrays,
+        params = E._param_scope_with_aliases(insp.params, "Anon")
+    )
+    @test read("za", [3]) == [6.0, 20.0, 40.0]
+    @test read("zw", [2, 3]) == [8.0, 15.0, 25.0, 11.0, 18.0, 28.0]
+end
