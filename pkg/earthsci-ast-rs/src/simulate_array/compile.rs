@@ -1217,6 +1217,10 @@ fn resolve_for_compile(
     // The next three passes look only at nodes with `ranges` and at `faq`
     // nodes, and shape inference only at `index` nodes; no pass from here
     // to there adds any of them, so one walk says whether there are any.
+    // Range resolution erases the index-set names a producer's output
+    // indices range over, so a producer an equation reads elementwise is put
+    // in its target's frame by those names first.
+    place_named_producers(&mut model, shapes);
     let census = OpCensus::of(&model);
     if census.ranges {
         crate::faq::resolve_aggregate_ranges_with_extents(
@@ -5073,6 +5077,123 @@ pub(super) fn inline_region_aggregates(node: &ExpressionNode, loops: &[String]) 
             .collect(),
     );
     out
+}
+
+/// Put each `faq` an equation reads in elementwise position, over named index
+/// sets the target's do not match in order, in the target's frame: one output
+/// index per target index set, in the target's order, the producer's own where
+/// it ranges over that set and a fresh one otherwise. `k * faq_i(q[i])` with
+/// `i` over `lat`, in a `[lat, lon]` target, becomes
+/// `k * faq_{i,j}(q[i])` with `j` over `lon`: the same value replicated along
+/// `lon` (esm-spec §4.3.4, a producer over index sets aligns by their names),
+/// which reads positionally once range resolution has made every range an
+/// interval. A producer that names a set the target lacks, or one twice, is
+/// left for the alignment checks to refuse; one that is the whole right-hand
+/// side keeps its own frame.
+fn place_named_producers(model: &mut Model, shapes: &ShapeTable) {
+    for eq in &mut model.equations {
+        let target = match &eq.lhs {
+            Expr::Variable(name) => name,
+            Expr::Operator(d) if d.op == "D" && d.args.len() == 1 => match &d.args[0] {
+                Expr::Variable(name) => name,
+                _ => continue,
+            },
+            _ => continue,
+        };
+        let Some(axes) = shapes.axes(target) else {
+            continue;
+        };
+        if (1..axes.len()).any(|d| axes[..d].contains(&axes[d])) {
+            continue;
+        }
+        let axes = axes.to_vec();
+        if let Some(rhs) = producers_in_frame(&eq.rhs, &axes) {
+            eq.rhs = rhs;
+        }
+    }
+}
+
+/// `expr` with each producer [`place_named_producers`] places put in the
+/// `axes` frame, or `None` when none is.
+fn producers_in_frame(expr: &Expr, axes: &[String]) -> Option<Expr> {
+    let Expr::Operator(node) = expr else {
+        return None;
+    };
+    if !crate::op_registry::is_elementwise_node(node) {
+        return None;
+    }
+    let mut args: Option<Vec<Expr>> = None;
+    for (k, arg) in node.args.iter().enumerate() {
+        let placed = match arg {
+            Expr::Operator(child) if is_array_producer(child) => {
+                producer_in_frame(child, axes).map(Expr::operator)
+            }
+            _ => producers_in_frame(arg, axes),
+        };
+        if let Some(placed) = placed {
+            args.get_or_insert_with(|| node.args.clone())[k] = placed;
+        }
+    }
+    let mut out = ExpressionNode::clone(node);
+    out.args = args?;
+    Some(Expr::operator(out))
+}
+
+/// The `faq` `node` over its target's index sets `axes` (see
+/// [`place_named_producers`]), or `None` when it already is, or cannot be.
+fn producer_in_frame(node: &ExpressionNode, axes: &[String]) -> Option<ExpressionNode> {
+    if !is_faq_op(&node.op) {
+        return None;
+    }
+    let sets = crate::structural::producer_index_sets(node)?;
+    let syms = node.output_idx.as_ref()?;
+    if sets.as_slice() == axes
+        || (1..sets.len()).any(|d| sets[..d].contains(&sets[d]))
+        || !sets.iter().all(|s| axes.contains(s))
+    {
+        return None;
+    }
+    let mut used: HashSet<String> = HashSet::new();
+    names_bound_or_read(node, &mut used);
+    let mut out = node.clone();
+    let mut ranges = node.ranges.clone().unwrap_or_default();
+    let mut output_idx = Vec::with_capacity(axes.len());
+    for axis in axes {
+        if let Some(d) = sets.iter().position(|s| s == axis) {
+            output_idx.push(syms[d].clone());
+            continue;
+        }
+        let mut sym = format!("_{axis}");
+        while used.contains(&sym) {
+            sym.insert(0, '_');
+        }
+        used.insert(sym.clone());
+        ranges.insert(
+            sym.clone(),
+            crate::types::RangeSpec::IndexSetRef {
+                from: axis.clone(),
+                of: None,
+            },
+        );
+        output_idx.push(sym);
+    }
+    out.output_idx = Some(output_idx);
+    out.ranges = Some(ranges);
+    Some(out)
+}
+
+/// Every variable name `node` reads and every symbol a node in it binds
+/// (`output_idx`, `ranges` keys).
+fn names_bound_or_read(node: &ExpressionNode, out: &mut HashSet<String>) {
+    out.extend(node.output_idx.iter().flatten().cloned());
+    out.extend(node.ranges.iter().flat_map(|r| r.keys().cloned()));
+    node.for_each_child(&mut |c| match c {
+        Expr::Variable(name) => {
+            out.insert(name.clone());
+        }
+        Expr::Operator(child) => names_bound_or_read(child, out),
+        _ => {}
+    });
 }
 
 /// Declared index-set axis NAMES of every array-shaped variable — the ordered

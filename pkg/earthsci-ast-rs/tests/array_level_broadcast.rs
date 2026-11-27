@@ -436,7 +436,10 @@ fn shared_fixtures_are_bare_array_level_equations() {
 /// An undeclared result takes the UNION of its operands' index sets (esm-spec
 /// §4.3.4), and an operand declared without a `shape` has the index sets its
 /// definition spans — here a `faq` over `lat`, whole (`w`) or nested
-/// (`v = k * faq`). With `c` over `lon`, `w + c` spans `[lat, lon]`, so its
+/// (`v = k * faq`). A `faq` that is itself an operand of the result
+/// (`zi = k * faq + c`) is placed by its index sets too, which range
+/// resolution would otherwise erase. With `c` over `lon`, `w + c` spans
+/// `[lat, lon]`, so its
 /// cells exist for an element-name assertion, and a declared `[lat, lon]` or
 /// `[lon, lat]` result places `w` and `v` on `lat` by name. The extents
 /// differ, so a positional reading cannot pass by accident.
@@ -460,6 +463,7 @@ fn undeclared_operand_and_result_span_the_union() {
                 serde_json::json!({"variable": format!("zw[{i},{j}]"), "time": 0, "expected": sum}),
             );
             assertions.push(serde_json::json!({"variable": format!("zv[{i},{j}]"), "time": 0, "expected": scaled}));
+            assertions.push(serde_json::json!({"variable": format!("zi[{i},{j}]"), "time": 0, "expected": scaled}));
             assertions.push(serde_json::json!({"variable": "zd", "time": 0, "expected": scaled, "coords": {"lat": i, "lon": j}}));
             assertions.push(serde_json::json!({"variable": "zt", "time": 0, "expected": sum, "coords": {"lon": j, "lat": i}}));
         }
@@ -474,6 +478,7 @@ fn undeclared_operand_and_result_span_the_union() {
                 "c": {"type": "parameter", "units": "1", "shape": ["lon"], "default": c},
                 "k": {"type": "parameter", "units": "1", "default": 2},
                 "w": unknown(None), "v": unknown(None), "zw": unknown(None), "zv": unknown(None),
+                "zi": unknown(None),
                 "zd": unknown(Some(["lat", "lon"])), "zt": unknown(Some(["lon", "lat"]))
             },
             "equations": [
@@ -481,6 +486,7 @@ fn undeclared_operand_and_result_span_the_union() {
                 {"lhs": "v", "rhs": {"op": "*", "args": ["k", faq]}},
                 {"lhs": "zw", "rhs": {"op": "+", "args": ["w", "c"]}},
                 {"lhs": "zv", "rhs": {"op": "+", "args": ["v", "c"]}},
+                {"lhs": "zi", "rhs": {"op": "+", "args": [{"op": "*", "args": ["k", faq]}, "c"]}},
                 {"lhs": "zd", "rhs": {"op": "+", "args": ["v", "c"]}},
                 {"lhs": "zt", "rhs": {"op": "+", "args": ["w", "c"]}}
             ],
@@ -500,7 +506,7 @@ fn undeclared_operand_and_result_span_the_union() {
                 ..Default::default()
             },
         );
-        assert_eq!(results.len(), 24, "{compiler:?}");
+        assert_eq!(results.len(), 30, "{compiler:?}");
         for r in &results {
             assert!(r.passed, "{compiler:?} {}: {}", r.variable, r.message);
         }
