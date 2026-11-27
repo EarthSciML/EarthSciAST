@@ -792,59 +792,55 @@ function _publish_build_time!(
 end
 
 # The cadence of the materialized observeds the in-place right-hand side fills
-# outside every call: `const`, filled only when `p` moves, and `time`, filled
-# only when `(p, t, forcing epoch)` moves. Neither under the untiered
-# interpreter, which refills everything on every call, nor in the out-of-place
-# product, which has no such skip.
-_fill_cadences(::_OutOfPlace, split, mat_vars, layout, scope) = (Set{String}(), Set{String}())
+# outside every call: `const`, filled only when `p` moves; `forcing`, which read
+# a live buffer but neither `t` nor the state, filled only when `p` or the
+# forcing epoch moves; and `time`, filled only when `(p, t, forcing epoch)`
+# moves. None under the untiered interpreter, which refills everything on every
+# call, nor in the out-of-place product, which has no such skip.
+_fill_cadences(::_OutOfPlace, split, mat_vars, layout, scope) =
+    (Set{String}(), Set{String}(), Set{String}())
 function _fill_cadences(
         ::_InPlace, split::_ObservedSplit, mat_vars::Set{String}, layout::_StatePlan,
         scope::_CompileScope
     )
-    (_untiered() || isempty(mat_vars)) && return (Set{String}(), Set{String}())
-    dyn_seed = _state_base_names(layout.var_map, layout.array_var_info)
-    push!(dyn_seed, "t")
-    union!(dyn_seed, keys(scope.pgather))
-    mat_const = _const_cadence_mat_obs(
-        split.materialized, mat_vars, split.raw, dyn_seed,
-        scope.param_index, scope.const_registry
+    none = Set{String}()
+    (_untiered() || isempty(mat_vars)) && return (none, none, none)
+    # A lane program's lane buffers are per-call inputs, like the state
+    # (range_hooks.jl).
+    states = _state_base_names(layout.var_map, layout.array_var_info)
+    union!(states, _range_lane_inputs(_range_spec_now()))
+    # The live buffers: the `param_arrays` buffers and the discrete caches.
+    live = setdiff!(Set{String}(keys(scope.pgather)), states)
+    tiered(dynamic, allowed) = _const_cadence_mat_obs(
+        split.materialized, mat_vars, split.raw, dynamic,
+        scope.param_index, scope.const_registry, allowed
     )
-    # Time cadence: no state below them, but `t` or a live buffer (a
-    # `param_arrays` buffer, a discrete cache) somewhere.
-    tleaves = Set{String}(keys(scope.pgather))
-    push!(tleaves, "t")
-    mat_time = setdiff!(
-        _const_cadence_mat_obs(
-            split.materialized, mat_vars, split.raw,
-            _state_base_names(layout.var_map, layout.array_var_info),
-            scope.param_index, scope.const_registry, tleaves
-        ), mat_const
-    )
-    return mat_const, mat_time
+    mat_const = tiered(union(states, live, ("t",)), none)
+    mat_forcing = setdiff!(tiered(union(states, ("t",)), live), mat_const)
+    mat_time = setdiff!(tiered(states, union(live, ("t",))), mat_const, mat_forcing)
+    return mat_const, mat_forcing, mat_time
 end
 
 # The fill levels of the materialized observeds, in fill order: the const
-# levels, the time levels, then the rest, each `(names, cadence)` with no name
-# reading another of the same level.
+# levels, the forcing levels, the time levels, then the rest, each
+# `(names, cadence)` with no name reading another of the same level.
 function _fill_level_plan(
         form::_BuildForm, split::_ObservedSplit, mat_vars::Set{String},
         layout::_StatePlan, scope::_CompileScope
     )
     plan = Tuple{Vector{String}, Symbol}[]
     isempty(mat_vars) && return plan
-    mat_const, mat_time = _fill_cadences(form, split, mat_vars, layout, scope)
+    tiers = _fill_cadences(form, split, mat_vars, layout, scope)
     mat_defs = split.materialized
-    isempty(mat_const) || foreach(
-        l -> push!(plan, (l, :const)),
-        _materialized_obs_levels(mat_defs, mat_const, split.raw)
-    )
-    isempty(mat_time) || foreach(
-        l -> push!(plan, (l, :time)),
-        _materialized_obs_levels(mat_defs, mat_time, split.raw)
-    )
+    for (names, cadence) in zip(tiers, (:const, :forcing, :time))
+        isempty(names) || foreach(
+            l -> push!(plan, (l, cadence)),
+            _materialized_obs_levels(mat_defs, names, split.raw)
+        )
+    end
     foreach(
         l -> push!(plan, (l, :dynamic)),
-        _materialized_obs_levels(mat_defs, setdiff(mat_vars, mat_const, mat_time), split.raw)
+        _materialized_obs_levels(mat_defs, setdiff(mat_vars, tiers...), split.raw)
     )
     return plan
 end
@@ -908,6 +904,7 @@ struct _SealedFills
     # out-of-place levels (empty in place).
     levels::Vector{Any}
     const_levels::Vector{Any}
+    forcing_levels::Vector{Any}
     time_levels::Vector{Any}
     oop_levels::Vector{_OopFillLevel}
     # The state equations' kernels after the class merge, their prefix folds
@@ -925,7 +922,7 @@ function _seal_fill_levels(
     )
     acc_kernels, class_merge_diag = _merge_acc_kernel_classes(state_eqs.kernels; keep_affine = false)
     return _SealedFills(
-        Any[], Any[], Any[], oop_levels, acc_kernels, state_eqs.scan_folds, (),
+        Any[], Any[], Any[], Any[], oop_levels, acc_kernels, state_eqs.scan_folds, (),
         class_merge_diag, length(state_eqs.scan_folds)
     )
 end
@@ -943,7 +940,7 @@ function _seal_fill_levels(
     acc_kernels_pre = state_eqs.kernels
     scan_folds = state_eqs.scan_folds
     n_state_scan_folds = length(scan_folds)
-    out = (dynamic = Any[], constant = Any[], time = Any[])
+    out = (dynamic = Any[], constant = Any[], forcing = Any[], time = Any[])
     if !isempty(levels)
         consumers = _scan_consumer_plan(
             levels, acc_kernels_pre, n_states,
@@ -961,6 +958,7 @@ function _seal_fill_levels(
                 lv.contractions
             push!(
                 lv.cadence === :const ? out.constant :
+                    lv.cadence === :forcing ? out.forcing :
                     lv.cadence === :time ? out.time : out.dynamic,
                 _inplace_fill_level(
                     lv.scalars, lvl_kernels, _make_scan_section(lvl_scans, lvl_fused),
@@ -976,7 +974,7 @@ function _seal_fill_levels(
         _detach_fused_scans(acc_kernels_pre, scan_folds; nst = obs_nst)
     acc_kernels, class_merge_diag = _merge_acc_kernel_classes(acc_kernels_pre; keep_affine = true)
     return _SealedFills(
-        out.dynamic, out.constant, out.time, _OopFillLevel[], acc_kernels, scan_folds,
+        out.dynamic, out.constant, out.forcing, out.time, _OopFillLevel[], acc_kernels, scan_folds,
         fused_scans, class_merge_diag, n_state_scan_folds
     )
 end
@@ -1051,7 +1049,7 @@ function _assemble_rhs(
         nst = n_total > n_states ? n_states : 0,
         observed = _rhs_observed(
             n_total, n_states, Tuple(sealed.levels), Tuple(sealed.const_levels),
-            Tuple(sealed.time_levels), forcing_epoch
+            Tuple(sealed.forcing_levels), Tuple(sealed.time_levels), forcing_epoch
         ),
         refill = discrete_refill
     )
@@ -1105,8 +1103,9 @@ function _rhs_stats(
         n_mat_array_obs = length(mat_vars),
         n_mat_array_cells = n_total - n_states,
         n_mat_levels = length(sealed.levels) + length(sealed.const_levels) +
-            length(sealed.time_levels),
+            length(sealed.forcing_levels) + length(sealed.time_levels),
         n_mat_const_levels = length(sealed.const_levels),
+        n_mat_forcing_levels = length(sealed.forcing_levels),
         n_mat_time_levels = length(sealed.time_levels),
     )
 end

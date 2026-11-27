@@ -143,7 +143,7 @@ end
 # The compiled parts of one level of materialized-observed fills: what
 # `_compile_fill_level` produces and a level's sections are made from.
 struct _LevelParts
-    cadence::Symbol                    # :const, :time or :dynamic
+    cadence::Symbol                    # :const, :forcing, :time or :dynamic
     owner::IdDict{Any, String}         # scan fold => the observed it fills
     scalars::Vector{Tuple{Int, _Node}}
     kernels::Vector{_AccKernel}

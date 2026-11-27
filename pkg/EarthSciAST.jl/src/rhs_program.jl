@@ -360,7 +360,7 @@ function _ws_fresh(x::_ObsExtVec, c)
     y = _ObsExtVec(
         _inst(x.f64, c), nothing, _CSE_INVALID, _CSE_INVALID, _CSE_INVALID,
         NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID, UInt64(0),
-        _inst(x.epoch, c), nothing
+        _inst(x.epoch, c), nothing, _CSE_INVALID, UInt64(0), _CSE_INVALID, UInt64(0)
     )
     push!(c.caches, y)
     return c.memo[x] = y
@@ -423,6 +423,10 @@ function _ws_invalidate!(x::_WsCache)
     x.stampalt = _CSE_INVALID
     x.tp64 = _CSE_INVALID
     x.tpalt = _CSE_INVALID
+    if x isa _ObsExtVec
+        x.fp64 = _CSE_INVALID
+        x.fpalt = _CSE_INVALID
+    end
     return nothing
 end
 _ws_invalidate!(x::_ACMask) = (x.stamp = _CSE_INVALID; nothing)
@@ -694,7 +698,6 @@ mutable struct RhsWorkspace{F}
     const epochs::Vector{_ForcingEpoch}
     # The memoizing caches, whose stamps a failed call invalidates.
     const caches::Vector{Any}
-    const env::Dict{String, Int}
     primed::UInt64
 end
 
@@ -707,7 +710,7 @@ function _instantiate(shared::_RhsShared)
     f = _inst(fac.template, c)
     return RhsWorkspace(
         shared, f, zeros(fac.n), zeros(fac.n), fbufs, copy(fac.slot_read),
-        lbufs, c.epochs, c.caches, Dict{String, Int}(), UInt64(0)
+        lbufs, c.epochs, c.caches, UInt64(0)
     )
 end
 
