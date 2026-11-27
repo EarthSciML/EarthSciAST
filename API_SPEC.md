@@ -1755,13 +1755,13 @@ keep their global 1-based values.
   lane, in a call at one time too; only one with no lane form (and the
   observeds of `t` it reads) is evaluated over the domain, once per call.
   A state-free observed (one that reads neither a state nor `t`) is computed
-  at most once per parameter vector and forcing set: over the domain, either
+  either over the domain, at most once per parameter vector and forcing set,
   per workspace or once for the lane program and shared by its workspaces,
   and then gathered at each lane's cell; or per lane, in each call, bitwise
-  equal to the whole-domain value at the lane's cell. The two are
-  equivalent. So the first call on a workspace, or the first after a new
-  parameter vector or forcing set, may do domain-sized work for these
-  observeds; every other call does not.
+  equal to the whole-domain value at the lane's cell. The two are equivalent.
+  So the first call on a workspace, or the first after a new parameter vector
+  or forcing set, may do domain-sized work for these observeds; every other
+  call does not.
 - **Capacity.** Julia loops over lanes with a run-time count, so one build
   serves every `L` (`L = size(cells, 2)`). Rust slot boxes are static, so a lane
   program is built per capacity (re-lowering only, no document rebuild) and `L`
