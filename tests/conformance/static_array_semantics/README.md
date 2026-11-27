@@ -8,5 +8,12 @@ and wrapping with ordinary ESM expressions. The evaluator's optional
 `const_array_boundaries` input has no document spelling.
 
 The shared runner grades against each document's assertions and the committed
-reference output. Julia, Python, and Rust run with `--compiler native` in the
-native conformance stage. Lean scores the same documents in formal CI.
+reference output. The manifest requires Julia, Python, and Rust to run every
+document under both the `interpreter` and `native` compilers, so each binding
+is graded in both inline-test conformance stages. Lean scores the same
+documents in formal CI.
+
+The seven entries that point at `native_model_shapes` documents are graded for
+Julia and Rust in that tier as well. They are listed here because
+`native_model_shapes` requires neither Python nor Lean, and this tier is how
+those two participants reach them.
