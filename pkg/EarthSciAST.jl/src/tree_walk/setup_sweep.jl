@@ -668,26 +668,44 @@ function _geo_frame(faq, index_sets, derived_extents)
     )
 end
 
+# With a zero RHS codegen budget, a plan that licenses per-cell walks walks a
+# tiny one-off setup sweep rather than compiling it; a strict plan has no
+# license and always compiles. On large sweeps, walking each tuple can cost
+# more than compilation. Count the full loop product as an upper bound even
+# with gates.
+function _geo_emit_setup_kernel(fr::_GeoFrame)
+    _codegen_node_budget() != 0 && return true
+    _optional_percell_license() === nothing && return true
+    limit = 64
+    terms = 1
+    for extent in Iterators.flatten((fr.exts, fr.cexts))
+        terms *= min(extent, limit + 1)
+        terms > limit && return true
+    end
+    return false
+end
+
 # The compiled body and filter as the sweep calls them. With subtree sharing
 # on, a body keyed like one already compiled in this pass takes that kernel
 # over its own arrays, with no memoize pass and no emission
 # (`_GeoKernelCache`); otherwise the shared sub-trees are memoized and the
 # body is emitted as native code when the emitter models it (the walker
 # otherwise).
-function _geo_body_callable(body, filt, kernel_cache)
-    share = _compiler_plan_now().share_subtrees
-    shape = share && filt === nothing && kernel_cache !== nothing ? _geo_shape_key(body) : nothing
+function _geo_body_callable(body, filt, kernel_cache, fr::_GeoFrame)
+    plan = _compiler_plan_now()
+    emit = plan.share_subtrees && _geo_emit_setup_kernel(fr)
+    shape = emit && filt === nothing && kernel_cache !== nothing ? _geo_shape_key(body) : nothing
     known = shape === nothing ? missing : get(kernel_cache.byshape, shape[1], missing)
     if known isa Tuple
         f, order, fns = known
         _tally_cascade!(:geo_kernel)
         return _GeoKernel(f, Tuple(shape[2][i] for i in order), fns), filt
     end
-    if share
+    if plan.share_subtrees
         roots = _geo_memoize!(filt === nothing ? _Node[body] : _Node[filt, body])
         filt === nothing ? (body = roots[1]) : ((filt, body) = (roots[1], roots[2]))
     end
-    known === missing || return body, filt          # a shape the emitter declined
+    (emit && known === missing) || return body, filt
     kbody = _geo_kernel(body; cache = kernel_cache)
     if shape !== nothing
         kernel_cache.byshape[shape[1]] = kbody === nothing ? nothing :
@@ -765,7 +783,7 @@ function _materialize_geom_array(
     g = _GeoCompileCtx(ctx, fr.scope, fr.setof, fr.nslots)
     gates = _geo_slot_gates(faq, g)
     filt = faq.filter === nothing ? nothing : _geo_compile(faq.filter, g)
-    body, filt = _geo_body_callable(_geo_compile(faq.expr_body, g), filt, kernel_cache)
+    body, filt = _geo_body_callable(_geo_compile(faq.expr_body, g), filt, kernel_cache, fr)
     drive, dov, ovdense = _geo_choose_drive(
         faq, fr, gates, ctx, index_sets, derived_extents, ov_cache, eq_cache
     )

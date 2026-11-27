@@ -16,7 +16,7 @@ import (
 // ## Spellings
 
 const (
-	stypODesc    = "#description["
+	stypODesc    = "#description"
 	stypOBlock   = "#esm-block("
 	stypOModel   = "#model("
 	stypORs      = "#reaction-system("
@@ -50,63 +50,150 @@ func stypORole(r Role) string {
 const stypHeader = "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with("
 
 // ## Description text
+//
+// A description is written verbatim as Typst markup, `#description[…]`, when
+// stypVerbOK says that markup is safe to typeset, and as a Typst string,
+// `#description("…")`, otherwise (`Typ.itemT`). The reader reads a content
+// block as Typst does: a backslash escapes the next character, `\u{…}` is a
+// code point, brackets nest, and inside a raw span (between backticks) every
+// character is literal.
 
-// stypMustEsc is `Typ.mustEsc`: whether a character of a description is
-// written escaped. hasNext is false at the end of the text.
-func stypMustEsc(bol bool, c rune, next rune, hasNext bool) bool {
-	switch c {
-	case '\\', '[', ']', '#', '$', '*', '_', '`', '<', '>', '@', '~':
-		return true
-	case '=', '-', '+':
-		if bol {
-			return true
-		}
-	}
-	return c == '/' && hasNext && (next == '/' || next == '*')
+// stypAlnumA is `Typ.alnumA`: an ASCII letter or digit.
+func stypAlnumA(c rune) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
-// stypEscT is `Typ.escT`: a description's text in a content block.
-func stypEscT(bol bool, cs []rune) []rune {
-	out := make([]rune, 0, len(cs))
-	b := bol
+// stypVerbOK is `Typ.verbOK`: whether a description is written verbatim: none
+// of `# $ @ \ < * ~`, none of the sequences `//` `/*` `--` `-?` `...`, every
+// `_` between two ASCII letters or digits, balanced brackets outside raw
+// spans, no bracket inside a raw span, and every raw span closed.
+func stypVerbOK(cs []rune) bool {
+	at := func(i int) rune {
+		if i < len(cs) {
+			return cs[i]
+		}
+		return 0
+	}
+	depth, raw := 0, false
 	for i, c := range cs {
-		var next rune
-		hasNext := i+1 < len(cs)
-		if hasNext {
-			next = cs[i+1]
+		switch c {
+		case '#', '$', '@', '\\', '<', '*', '~':
+			return false
+		case '/':
+			if n := at(i + 1); n == '/' || n == '*' {
+				return false
+			}
+		case '-':
+			if n := at(i + 1); n == '-' || n == '?' {
+				return false
+			}
+		case '.':
+			if at(i+1) == '.' && at(i+2) == '.' {
+				return false
+			}
+		case '_':
+			if i == 0 || !stypAlnumA(cs[i-1]) || !stypAlnumA(at(i+1)) {
+				return false
+			}
+		case '`':
+			raw = !raw
+		case '[':
+			if raw {
+				return false
+			}
+			depth++
+		case ']':
+			if raw || depth == 0 {
+				return false
+			}
+			depth--
 		}
-		if stypMustEsc(b, c, next, hasNext) {
-			out = append(out, '\\')
-		}
-		out = append(out, c)
-		b = c == '\n'
 	}
-	return out
+	return depth == 0 && !raw
 }
 
-// stypReadEsc is `Typ.readEsc`: the text of a content block up to its
-// unescaped `]`.
-func stypReadEsc(s []rune) ([]rune, []rune, bool) {
-	var out []rune
-	for {
-		if len(s) == 0 {
-			return nil, nil, false
+// stypHexVal is the value of an ASCII hex digit, or -1.
+func stypHexVal(c rune) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	}
+	return -1
+}
+
+// stypReadUEsc reads the `h+}` of a `\u{h+}` escape: the code point, which must
+// be a Unicode scalar value, and the rest after the `}`.
+func stypReadUEsc(s []rune) (rune, []rune, bool) {
+	v, n := 0, 0
+	for len(s) > 0 && s[0] != '}' {
+		h := stypHexVal(s[0])
+		if h < 0 {
+			return 0, nil, false
 		}
-		switch s[0] {
-		case ']':
-			return out, s[1:], true
-		case '\\':
-			if len(s) >= 2 {
-				out = append(out, s[1])
-				s = s[2:]
-				continue
-			}
-		case '[':
-			return nil, nil, false
+		if v <= 0x10FFFF {
+			v = v*16 + h
 		}
-		out = append(out, s[0])
+		n++
 		s = s[1:]
 	}
+	if len(s) == 0 || n == 0 || v > 0x10FFFF || (v >= 0xD800 && v <= 0xDFFF) {
+		return 0, nil, false
+	}
+	return rune(v), s[1:], true
+}
+
+// stypReadVerb is `Typ.readVerb 0`: the text of a content block up to the `]`
+// that closes it. Outside a raw span a backslash escape reads as the character
+// it escapes (`\u{h+}` as that code point) and brackets nest; inside a raw span
+// every character up to the closing backtick is literal.
+func stypReadVerb(s []rune) ([]rune, []rune, bool) {
+	var out []rune
+	depth, raw := 0, false
+	for len(s) > 0 {
+		c := s[0]
+		if raw {
+			if c == '`' {
+				raw = false
+			}
+			out = append(out, c)
+			s = s[1:]
+			continue
+		}
+		switch c {
+		case ']':
+			if depth == 0 {
+				return out, s[1:], true
+			}
+			depth--
+		case '[':
+			depth++
+		case '`':
+			raw = true
+		case '\\':
+			if len(s) < 2 {
+				return nil, nil, false
+			}
+			if s[1] == 'u' && len(s) >= 3 && s[2] == '{' {
+				r, rest, ok := stypReadUEsc(s[3:])
+				if !ok {
+					return nil, nil, false
+				}
+				out = append(out, r)
+				s = rest
+				continue
+			}
+			out = append(out, s[1])
+			s = s[2:]
+			continue
+		}
+		out = append(out, c)
+		s = s[1:]
+	}
+	return nil, nil, false
 }
 
 // stypArgT is `Typ.argT`: `key: value`.
@@ -510,8 +597,15 @@ func stypItemT(it *RItem) []rune {
 	switch it.K {
 	case RIDesc:
 		out = pushS(out, stypODesc)
-		out = append(out, stypEscT(true, []rune(it.S))...)
-		out = append(out, ']', '\n')
+		if cs := []rune(it.S); stypVerbOK(cs) {
+			out = append(out, '[')
+			out = append(out, cs...)
+			out = append(out, ']', '\n')
+		} else {
+			out = append(out, '(')
+			out = append(out, strQuote(true, it.S)...)
+			out = append(out, ')', '\n')
+		}
 	case RIBlock:
 		out = pushS(out, stypOBlock)
 		out = append(out, strQuote(true, it.S)...)
@@ -611,11 +705,12 @@ func stypLabelOk(sl []rune) bool {
 // ## The lexer
 
 var stypBlockOpeners = []string{
-	stypODesc, stypOBlock, stypOModel, stypORs, stypOEq, stypOCe, stypORxn, stypOInit,
+	stypODesc + "[", stypODesc + "(", stypOBlock, stypOModel, stypORs, stypOEq, stypOCe, stypORxn, stypOInit,
 	stypOCons, stypOPlot, stypOSub, stypOTmpl, stypORule,
 }
 
-// stypBlockOpen is `Typ.blockOpen`.
+// stypBlockOpen is `Typ.blockOpen`. A description opens a block only as
+// `#description[` or `#description(`, so `#description-note[…]` stays prose.
 func stypBlockOpen(s []rune) bool {
 	if len(s) == 0 || (s[0] != '#' && s[0] != '$') {
 		return false
@@ -636,17 +731,32 @@ func stypDeclOpen(s []rune) bool {
 	return textPreS(stypOVar, s) || textPreS(stypOParam, s) || textPreS(stypOSpecies, s)
 }
 
-// stypDescAt is `Typ.descAt`.
+// stypDescAt is `Typ.descAt`: a description after `#description`: a content
+// block, or a string in parentheses.
 func stypDescAt(u []rune) (RItem, []rune, bool) {
-	t, r, ok := stypReadEsc(u)
-	if !ok {
+	var t string
+	var r []rune
+	switch {
+	case len(u) > 0 && u[0] == '[':
+		v, rest, ok := stypReadVerb(u[1:])
+		if !ok {
+			return RItem{}, nil, false
+		}
+		t, r = string(v), rest
+	case len(u) > 0 && u[0] == '(':
+		q, rest, ok := strParseQuoted(true, u[1:])
+		if !ok || len(rest) == 0 || rest[0] != ')' {
+			return RItem{}, nil, false
+		}
+		t, r = q, rest[1:]
+	default:
 		return RItem{}, nil, false
 	}
 	r1, ok := stypLineEnd(r)
 	if !ok {
 		return RItem{}, nil, false
 	}
-	return RItem{K: RIDesc, S: string(t)}, r1, true
+	return RItem{K: RIDesc, S: t}, r1, true
 }
 
 // stypBlockAtT is `Typ.blockAtT`: a path block after `#esm-block(`.

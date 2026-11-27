@@ -102,8 +102,8 @@ env:
   # script's own bytes, so a bump there invalidates the cache automatically,
   # but this path has to be spelled out to export XLA_EXTENSION_DIR.
   XLA_EXTENSION_VERSION: '0.10.0'
-  # Julia 1.12: the version the main workflow uses for its golden-regeneration
-  # and coverage leg, and recent enough for Reactant (which is x86_64-linux
+  # Julia 1.12: the version the main workflow uses for golden regeneration
+  # and a version supported by Reactant (which is x86_64-linux
   # only for the prebuilt runtime this uses).
   JULIA_VERSION: '1.12'
 

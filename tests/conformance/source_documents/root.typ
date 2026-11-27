@@ -3,7 +3,7 @@
   "EarthSciML",
 ), name: "root")
 
-#description[Imports the upwind\_flux template from a template library and mounts a decay model as a subsystem.]
+#description[Imports the upwind_flux template from a template library and mounts a decay model as a subsystem.]
 
 #model("Transport")
 
