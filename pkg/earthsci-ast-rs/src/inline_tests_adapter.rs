@@ -48,8 +48,10 @@ use crate::simulate::SolveOptions;
 /// this binding declining to evaluate the document, which the tier gates as a
 /// REFUSAL — a named exclusion only where the fixture's ledger admits it, never
 /// a wrong answer and never a silent skip. Anything else is an ordinary
-/// assertion failure.
-const REFUSAL_CODES: [&str; 5] = [
+/// assertion failure. `array_shape_mismatch` is the build declining a document
+/// whose operand has no axis to align to (esm-spec §4.3.4).
+const REFUSAL_CODES: [&str; 6] = [
+    "array_shape_mismatch",
     "compiler_refused_rule",
     "compiler_unavailable",
     "unevaluable_operator",
@@ -263,6 +265,10 @@ mod tests {
         assert_eq!(
             refusal_code("simulation failed: unevaluable_operator: operator 'false'"),
             Some("unevaluable_operator".to_string())
+        );
+        assert_eq!(
+            refusal_code("build: array_shape_mismatch: operand 'faq over [lon]'"),
+            Some("array_shape_mismatch".to_string())
         );
         assert_eq!(
             refusal_code("build: E_TREEWALK_CONSTARRAY_OOB at cell 5"),

@@ -3615,6 +3615,20 @@ fn inline_producer_axes(rhs: &crate::Expr, name: &str) -> Option<Vec<String>> {
         .collect()
 }
 
+/// The index sets a producer's output indices range over, in `output_idx`
+/// order (`{"from": "lat"}` names `lat`), or `None` when any ranges over
+/// something else (an inline interval, an anonymous axis).
+pub(crate) fn producer_index_sets(node: &crate::types::ExpressionNode) -> Option<Vec<String>> {
+    node.output_idx
+        .iter()
+        .flatten()
+        .map(|sym| match node.ranges.as_ref().and_then(|r| r.get(sym)) {
+            Some(crate::types::RangeSpec::IndexSetRef { from, .. }) => Some(from.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Julia's `_infer_expr_shape`: the index-set axes `expr` evaluates over.
 fn infer_expr_axes(
     expr: &crate::Expr,
@@ -3633,15 +3647,7 @@ fn infer_expr_axes(
     let out = if node.op == "index" {
         Vec::new()
     } else if is_array_producer_op(&node.op) {
-        node.output_idx
-            .iter()
-            .flatten()
-            .map(|sym| match node.ranges.as_ref().and_then(|r| r.get(sym)) {
-                Some(crate::types::RangeSpec::IndexSetRef { from, .. }) => Some(from.clone()),
-                _ => None,
-            })
-            .collect::<Option<Vec<String>>>()
-            .unwrap_or_default()
+        producer_index_sets(node).unwrap_or_default()
     } else {
         let mut result: Vec<String> = Vec::new();
         for arg in &node.args {

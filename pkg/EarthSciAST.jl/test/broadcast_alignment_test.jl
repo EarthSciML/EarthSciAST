@@ -13,11 +13,13 @@
 #     operand transposes (it is not reinterpreted positionally), and an operand
 #     naming an axis the result does not have is a hard error.
 #
-# Anonymous shapes (a `faq`/`makearray` producer, whose
-# `output_idx` symbols are node-local) keep POSITIONAL semantics — pinned below
-# so the name rule can never silently widen to them.
+# Anonymous shapes (a `makearray`, or a `faq` whose output indices range over
+# inline intervals) keep POSITIONAL semantics. A `faq` whose output indices
+# range `{"from": X}` names its index sets, and is placed by them (the last
+# testset below).
 using Test
 using JSON3
+import OrdinaryDiffEqTsit5
 import EarthSciAST as ESS
 const E = ESS
 include("testutils.jl")
@@ -527,4 +529,101 @@ _bc_oracle(name, body) = _bc_model(
         @test E._broadcast_fn_problem("faq", 1).kind === :non_scalar
     end
 
+end
+
+# esm-spec §4.3.4, "An undeclared result takes the union": a `faq` over
+# `{from: lat}` contributes `lat` as a variable's whole definition (`w`),
+# nested under an elementwise operator (`v = k * faq`), or as an operand of the
+# result itself (`zi`). With `c` over `lon`, every sum spans [lat, lon] — not a
+# scalar, not a [lat] field — and a declared result places each operand by
+# NAME (`zt` over [lon, lat] transposes). Unequal extents keep a positional
+# reading from passing by accident.
+@testset "undeclared result spans the union with a faq producer (esm-spec §4.3.4)" begin
+    faq = () -> _bc_agg(("i",), ("i" => "lat",), _bc_idx("q", "i"))
+    param(shape, v) = Dict{String, Any}(
+        "type" => "parameter", "units" => "1", "default" => v,
+        (shape === nothing ? () : ("shape" => Any[shape...],))...
+    )
+    vars = Dict{String, Any}(
+        "q" => param(("lat",), [5, 8]),
+        "c" => param(("lon",), [3, 10, 20]),
+        "k" => param(nothing, 2),
+        "w" => _bc_obs(nothing, faq()),
+        "v" => _bc_obs(nothing, _bc_op("*", "k", faq())),
+        "zw" => _bc_obs(nothing, _bc_op("+", "w", "c")),
+        "zv" => _bc_obs(nothing, _bc_op("+", "v", "c")),
+        "zi" => _bc_obs(nothing, _bc_op("+", _bc_op("*", "k", faq()), "c")),
+        "zd" => _bc_obs(("lat", "lon"), _bc_op("+", "v", "c")),
+        "zt" => _bc_obs(("lon", "lat"), _bc_op("+", "w", "c")),
+    )
+    doc = _bc_doc("Union", vars, Any[]; sets = ("lat" => 2, "lon" => 3))
+    q, c = [5, 8], [3, 10, 20]
+    assertions = Any[]
+    for i in 1:2, j in 1:3
+        push!(assertions, Dict("variable" => "zw[$i,$j]", "time" => 0, "expected" => q[i] + c[j]))
+        push!(assertions, Dict("variable" => "zv[$i,$j]", "time" => 0, "expected" => 2q[i] + c[j]))
+        push!(assertions, Dict("variable" => "zi[$i,$j]", "time" => 0, "expected" => 2q[i] + c[j]))
+        push!(
+            assertions, Dict(
+                "variable" => "zd", "time" => 0, "expected" => 2q[i] + c[j],
+                "coords" => Dict("lat" => i, "lon" => j)
+            )
+        )
+        push!(
+            assertions, Dict(
+                "variable" => "zt", "time" => 0, "expected" => q[i] + c[j],
+                "coords" => Dict("lon" => j, "lat" => i)
+            )
+        )
+    end
+    doc["models"]["Union"]["tests"] = Any[
+        Dict(
+            "id" => "union", "time_span" => Dict("start" => 0, "end" => 1),
+            "assertions" => assertions
+        ),
+    ]
+    file = E.load_string(JSON3.write(doc))
+    for c in (:interpreter, :native)
+        results = E.run_inline_tests(file; compiler = c, alg = OrdinaryDiffEqTsit5.Tsit5())
+        @test length(results) == length(assertions)
+        @test all(r -> r.passed, results)
+    end
+end
+
+# The assertion-time fallback that evaluates an observed's own authored
+# equation (`_authored_observed_body`): a producer whose NAME has no index sets
+# (`wa`, a `faq` over an inline interval, esm-spec §4.3.4 rule 2) is read
+# positionally at the cell, and one whose name has index sets (`w`, a `faq`
+# over `{from: lat}`) by them. Without a build context the shape of an
+# undeclared result is the one its definition spans, as the build infers it.
+@testset "authored observed body reads named and anonymous producers" begin
+    inline = Dict{String, Any}(
+        "op" => "faq", "output_idx" => Any["p"],
+        "ranges" => Dict{String, Any}("p" => Any[1, 3]),
+        "args" => Any[], "expr" => _bc_idx("c", "p")
+    )
+    param(shape, v) = Dict{String, Any}(
+        "type" => "parameter", "units" => "1", "default" => v, "shape" => Any[shape...]
+    )
+    vars = Dict{String, Any}(
+        "q" => param(("lat",), [5, 8]),
+        "c" => param(("lon",), [3, 10, 20]),
+        "w" => _bc_obs(nothing, _bc_agg(("i",), ("i" => "lat",), _bc_idx("q", "i"))),
+        "wa" => _bc_obs(nothing, inline),
+        "za" => _bc_obs(("lon",), _bc_op("+", "wa", "c")),
+        "zw" => _bc_obs(nothing, _bc_op("+", "w", "c")),
+    )
+    file = E.load_string(JSON3.write(_bc_doc("Anon", vars, Any[]; sets = ("lat" => 2, "lon" => 3))))
+    model = file.models["Anon"]
+    @test E._observed_shape(model, model.variables["zw"], nothing, "Anon", "zw") == ["lat", "lon"]
+    @test E._observed_shape(model, model.variables["wa"], nothing, "Anon", "wa") == String[]
+    insp = E.esm_problem(file, (0.0, 1.0); compiler = :interpreter).build.products
+    read(name, exts) = E.evaluate_cellwise(
+        E._authored_observed_body(insp, file, model, "Anon", name, exts),
+        E._row_major_cells(exts);
+        const_arrays = insp.const_arrays,
+        params = E._param_scope_with_aliases(insp.params, "Anon")
+    )
+    @test read("za", [3]) == [6.0, 20.0, 40.0]
+    @test read("zw", [2, 3]) == [8.0, 15.0, 25.0, 11.0, 18.0, 28.0]
 end

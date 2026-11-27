@@ -70,7 +70,10 @@ BINDING = "python"
 #: this binding declining to evaluate the document, which the tier records as a
 #: NAMED EXCLUSION under the fixture's ledger -- never as a wrong answer, and
 #: never as a silent skip. Anything else is an ordinary assertion failure.
+#: ``array_shape_mismatch`` is the build declining a document whose operand has
+#: no axis to align to (esm-spec §4.3.4).
 REFUSAL_CODES = (
+    "array_shape_mismatch",
     "compiler_refused_rule",
     "compiler_unavailable",
     "unevaluable_operator",
