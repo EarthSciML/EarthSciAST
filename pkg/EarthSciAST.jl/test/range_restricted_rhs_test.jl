@@ -1731,6 +1731,10 @@ _rrt_gather_allocated(li, lp, p, fs, cells, n) =
     ref2 = whole(replace_forcing(default_forcing_set(prog), kF, F2))
     @test bits.(du[1:n]) == bits.(ref2)
     @test bits.(ref2) != bits.(ref)
+    # The lane form of the array observed Exy is materialized once per lane
+    # into a buffer its readers gather (a dynamic fill level), not spliced
+    # into each reader.
+    @test lp.f!.observed !== nothing && !isempty(lp.f!.observed.levels)
     # A cell outside its lane set's range is refused.
     bad = copy(cells)
     bad[2, 3] = 6

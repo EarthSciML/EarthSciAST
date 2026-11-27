@@ -510,8 +510,8 @@ function _build_state_layout(
                 continue
             end
             v = model.variables[name]
-            dims = _materialized_obs_dims(
-                mat_defs_raw[name], v.shape,
+            dims = _range_observed_dims(
+                _range_spec_now(), name, mat_defs_raw[name], v.shape,
                 index_sets, parts.derived_extents
             )
             if dims === nothing || isempty(dims) || any(d -> d <= 0, dims)

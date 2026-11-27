@@ -25,6 +25,11 @@ _range_state_boxes!(::_AnySpec, array_var_info) = array_var_info
 # `nothing` to leave the observed inlined.
 _range_observed_box(::_AnySpec, name, dims) = (ones(Int, length(dims)), copy(dims))
 
+# The full extents of a materialized array observed (`nothing` to leave it
+# inlined), from its definition `def` and declared `shape`.
+_range_observed_dims(::_AnySpec, name, def, shape, index_sets, derived_extents) =
+    _materialized_obs_dims(def, shape, index_sets, derived_extents)
+
 # The fill equations of a materialized array observed over its block `box`.
 _range_fill_equations(::_AnySpec, name, def, dims, box) =
     _materialized_fill_equations(name, def, dims)

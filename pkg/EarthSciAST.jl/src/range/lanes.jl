@@ -235,6 +235,15 @@ function _range_observed_box(spec::_LaneSpec, name, dims)
     return (lo, hi)
 end
 
+# A lane-rewritten observed's definition runs over the lane box (its lane
+# axes narrowed to `1..C` and `1`), so its extents are its declared shape's:
+# the box (`_range_observed_box`) is what it stores.
+function _range_observed_dims(spec::_LaneSpec, name, def, shape, index_sets, derived_extents)
+    name in spec.laned ||
+        return _materialized_obs_dims(def, shape, index_sets, derived_extents)
+    return _declared_shape_extents(shape, index_sets, derived_extents)
+end
+
 function _range_fill_equations(spec::_LaneSpec, name, def, dims, box)
     eqs = _materialized_fill_equations(name, def, dims)
     name in spec.laned || return eqs
@@ -1133,7 +1142,7 @@ function _lane_gather_value(
             for j in eachindex(s.rows)
                 i += s.coef[j] * Int(cells[s.rows[j], l])
             end
-            i = _lane_resolve(lp.gathers[k], gp.policy, d, i)
+            1 <= i <= gp.dims[d] || (i = _lane_resolve_oob(lp.gathers[k], gp.policy, d, i))
         elseif !s.tabled
             i = _lane_resolve(lp.gathers[k], gp.policy, d, _lane_subscript_eval(lp, k, d, cells, l))
         else
@@ -1337,10 +1346,14 @@ function _lane_rhs!(du, lp::LaneProgram, ws::RhsWorkspace, u, aux, p, tof::F, fs
             for k in 1:ni
                 lb[k][c] = Float64(cells[k, l])
             end
-            for k in eachindex(lp.gathers)
-                _lane_gather!(lb[ni + k], c, lp, k, fs, cells, l)
-            end
             tb === nothing || (tb[c] = c <= m ? tof(l) : tof(1))
+        end
+        # Gather by gather, each over the chunk's lanes.
+        for k in eachindex(lp.gathers)
+            buf = lb[ni + k]
+            for c in 1:C
+                _lane_gather!(buf, c, lp, k, fs, cells, s0 + min(c, m))
+            end
         end
         _lane_chunk!(du, lp, ws, u, aux, p, tof(s0 + 1), L, s0, m)
     end
