@@ -220,6 +220,8 @@ end
 # lowering — is exactly the promoted-faq case, just spelled with the
 # public op name. A SCALAR reduction (empty `output_idx`) is not an array
 # producer and keeps the scalar-observed path.
+# A bare transpose of declared shape also uses this route: the existing fill
+# equation reads it through `index(transpose(...), …)`, a symbolic axis remap.
 function _collect_array_inline_vars(
         model::Model, equations::Vector{Equation},
         geom_setup_vars::Set{String}, geom_inline_vars::Set{String}
@@ -237,7 +239,7 @@ function _collect_array_inline_vars(
         (name in observed_here && _is_array_shape(v.shape)) || continue
         (
             eq.rhs isa OpExpr && (
-                (eq.rhs::OpExpr).op == "faq" ||
+                (eq.rhs::OpExpr).op in ("faq", "transpose") ||
                     _is_array_producer(eq.rhs)
             )
         ) || continue
@@ -624,7 +626,8 @@ end
 # a mesh subsystem's const factors re-exposed under the bare names a grid's
 # ragged index set and rule bodies resolve) is build-time data under a second
 # name. Follow the alias chain to its const-backed array and register the
-# alias as a const array too (same values), excluded from the ODE partition.
+# alias as a const array too, excluded from the ODE partition. Each alias
+# uses its own declared axis order (esm-spec §4.3.4).
 # Only chains ending at a `const`-op observed / caller `const_arrays` entry
 # resolve; any other alias keeps the existing unsupported-shape error. Empty
 # (byte-identical) for documents without bare-alias array observeds. Mutates
@@ -656,19 +659,28 @@ function _register_bare_alias_arrays!(
         for _ in 1:(length(alias_defs) + 1)   # cap defends against a cycle
             rhs = get(alias_defs, cur, nothing)
             rhs isa VarExpr || break
-            tgt = (rhs::VarExpr).name
-            if haskey(const_obs_arrays, tgt)
-                arr = const_obs_arrays[tgt]
-            elseif haskey(const_arrays, tgt)
-                arr = Array{Float64}(const_arrays[tgt])
-            elseif get(obs_defs, tgt, nothing) !== nothing &&
-                    _is_const_op(obs_defs[tgt])
-                arr = _const_op_to_array((obs_defs[tgt]::OpExpr).value)
+            cur = (rhs::VarExpr).name
+            if haskey(const_obs_arrays, cur)
+                arr = const_obs_arrays[cur]
+            elseif haskey(const_arrays, cur)
+                arr = Array{Float64}(const_arrays[cur])
+            elseif get(obs_defs, cur, nothing) !== nothing &&
+                    _is_const_op(obs_defs[cur])
+                arr = _const_op_to_array((obs_defs[cur]::OpExpr).value)
             end
             arr === nothing || break
-            cur = tgt
         end
         arr === nothing && continue
+        # `cur` names the buffer found above, whether it is the original source
+        # or an alias already registered in its own axis order.
+        source = get(model.variables, cur, nothing)
+        from = source === nothing ? nothing : source.shape
+        to = v.shape
+        if from !== nothing && from != to && length(from) == length(to) == ndims(arr) &&
+                allunique(from) && allunique(to)
+            perm = indexin(to, from)
+            all(!isnothing, perm) && (arr = permutedims(arr, Int[d for d in perm]))
+        end
         const_obs_arrays[name] = arr
         push!(const_obs_vars, name)
     end

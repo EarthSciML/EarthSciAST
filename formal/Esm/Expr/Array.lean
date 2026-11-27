@@ -105,13 +105,18 @@ def mergeDims : List Nat → List Nat → Option (List Nat)
 def broadcastAt (data : ArrayData β) (ix : List Nat) : Option β :=
   data.at? ((data.dims.zip ix).map fun (n, i) => if n = 1 then 0 else i)
 
+/-- Read each broadcast operand at one result coordinate and apply the scalar
+operation there. An operand that cannot supply the coordinate faults. -/
+def broadcastCell (apply : List β → Except ε β) (shapeError : ε)
+    (operands : List (ArrayData β)) (ix : List Nat) : Except ε β := do
+  let some args := operands.mapM (broadcastAt · ix) | throw shapeError
+  apply args
+
 def broadcast (apply : List β → Except ε β) (shapeError : ε)
     (operands : List (ArrayData β)) : Except ε (ArrayData β) := do
   let some dims := operands.foldlM (fun ds operand => mergeDims ds operand.dims) []
     | throw shapeError
-  let cells ← (coords dims).mapM fun (ix : List Nat) => do
-    let some args := operands.mapM (broadcastAt · ix) | throw shapeError
-    apply args
+  let cells ← (coords dims).mapM (broadcastCell apply shapeError operands)
   return ⟨dims, cells⟩
 
 def emptyRegion (region : List (Int × Int)) : Bool :=

@@ -1,0 +1,13 @@
+{
+  "fixture": "permuted_static_alias",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "probe",
+      "assertion_idx": 1,
+      "variable": "permuted",
+      "actual": 3.0
+    }
+  ]
+}

@@ -29,10 +29,11 @@ Pass `--shaped` to generate documents with static arrays. The shaped sweep
 allocates cases across seven families and compares every cell of the result.
 It covers filtered `faq` reductions, indirect gathers, transpose, reshape,
 concat, scalar broadcast, and overlapping `makearray` regions. Cases vary
-interval extents from one to four and use small integer inputs. The transpose,
-reshape, and concat cases start at extent two and observe each transformed
-cell through a literal gather. The shaped results compare exactly in
-binary64, including the sign of zero.
+interval extents from one to four and use small integer inputs. Transpose is
+tested as a bare array definition, including singleton axes. The reshape and
+concat cases start at extent two and observe each transformed cell through a
+literal gather. The shaped results compare exactly in binary64, including the
+sign of zero.
 
 Each participant stays alive for the sweep. Use `--adapter NAME=COMMAND` to
 add a participant. `--timeout` bounds each complete request and response.
@@ -78,10 +79,10 @@ The 1,200-case sweep with seed 20261026 shrank one disagreement to
 zero. The Lean model now returns negative zero for both operand orders.
 Replay `tests/differential/scalar/negative_zero_min.esm` to check those bits.
 
-Native Julia refuses the 1×1 bare transpose in
-`tests/differential/shaped/bare_transpose_1x1.esm` with
-`E_TREEWALK_UNSUPPORTED_SHAPE`. Lean, native Python, and native Rust return
-positive zero for its sole cell. Replay the disagreement with the Julia adapter.
+The 1×1 bare transpose replay in
+`tests/differential/shaped/bare_transpose_1x1.esm` checks that the native Julia
+compiler preserves both axes of the one-cell array and returns positive zero.
+Replay it with the Julia adapter.
 
 ```sh
 python scripts/difftest/scalar.py --shaped --timeout 300 \
@@ -90,6 +91,5 @@ python scripts/difftest/scalar.py --shaped --timeout 300 \
 ```
 
 Use the same command with `tests/differential/shaped/permuted_static_alias.esm`
-to replay a state-free alias that reverses its operand's declared axes. Lean,
-native Python, and native Rust return `3`. The native Julia request reports
-`E_TREEWALK_CONSTARRAY_OOB` on the operand's second axis.
+to check a state-free alias that reverses its operand's declared axes. Lean
+and the three native binding compilers return `3` for the saved cell.

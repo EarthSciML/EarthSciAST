@@ -545,7 +545,7 @@
       "class": "semantic",
       "phase": 3,
       "area": "diagnostics",
-      "note": "join_side_ambiguous and join_syms_unknown_symbol are validation-time verdicts, decidable from the single document, attached at the containing equation field."
+      "note": "join_side_ambiguous and join_syms_unknown_symbol are validation-time verdicts, decidable from the single document, attached at the containing equation field. The static Lean adapter still needs resolution of join key names at document scope."
     },
     {
       "id": "conf.5.5.8.driver-choice-result-neutral",
@@ -554,7 +554,7 @@
       "class": "semantic",
       "phase": 3,
       "area": "arrays",
-      "note": "With several join gates on one node, the result is independent of which gate drives enumeration and of the order the clauses are written."
+      "note": "With several join gates on one node, the result is independent of which gate drives enumeration and of the order the clauses are written. Document-level gating and aggregation remain open in Phase 3."
     },
     {
       "id": "conf.5.5.8.fourth-shape-should",

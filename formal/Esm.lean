@@ -7,9 +7,12 @@ import Esm.Closed.Interp.Bilinear64
 import Esm.Closed.Interp.Template
 import Esm.Expr.Core
 import Esm.Expr.ArrayProofs
+import Esm.Expr.ArrayConformance
 import Esm.Expr.Canonical
 import Esm.Expr.Canonical.Typed
 import Esm.Expr.Template
+import Esm.Rewrite.Engine
+import Esm.Rewrite.Match
 import Esm.Lib.Interp
 import Esm.Closed.Interp.TemplateAst
 import Esm.Lib.Calendar
