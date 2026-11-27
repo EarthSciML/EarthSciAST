@@ -617,7 +617,7 @@ end
     model = file.models["Anon"]
     @test E._observed_shape(model, model.variables["zw"], nothing, "Anon", "zw") == ["lat", "lon"]
     @test E._observed_shape(model, model.variables["wa"], nothing, "Anon", "wa") == String[]
-    insp = E.esm_problem(file, (0.0, 1.0)).build.products
+    insp = E.esm_problem(file, (0.0, 1.0); compiler = :interpreter).build.products
     read(name, exts) = E.evaluate_cellwise(
         E._authored_observed_body(insp, file, model, "Anon", name, exts),
         E._row_major_cells(exts);
