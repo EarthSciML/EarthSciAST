@@ -1,0 +1,255 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "NestedProducerUnion",
+    "description": "An undeclared result takes the UNION of its operands' index sets (esm-spec §4.3.4), and a `faq` producer over `{from: lat}` contributes `lat` whether it is a variable's whole definition (`w`) or nested under an elementwise operator (`v = k * faq`). `q` and `c` have disjoint index sets of unequal extents, so `w + c` spans [lat, lon] and is neither a scalar nor a [lat] field; the declared results check that each operand is placed in the result's frame by NAME, including under a transposed declaration (`zt` over [lon, lat]).",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {
+    "lat": {
+      "kind": "interval",
+      "size": 2
+    },
+    "lon": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "NestedProducerUnion": {
+      "variables": {
+        "q": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "lat"
+          ],
+          "default": [
+            5,
+            8
+          ]
+        },
+        "c": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "lon"
+          ],
+          "default": [
+            3,
+            10,
+            20
+          ]
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2
+        },
+        "w": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Undeclared; its whole definition is a faq over lat, so it spans [lat]."
+        },
+        "v": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Undeclared; k times a faq over lat, so it spans [lat]."
+        },
+        "zw": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Undeclared; w + c spans the union [lat, lon]: zw[i,j] = q[i] + c[j]."
+        },
+        "zv": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Undeclared; v + c spans [lat, lon]: zv[i,j] = k q[i] + c[j]."
+        },
+        "zd": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Declared [lat, lon]; v + c, the nested producer placed on lat by name.",
+          "shape": [
+            "lat",
+            "lon"
+          ]
+        },
+        "zt": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Declared [lon, lat]; w + c, transposed: zt[j,i] = q[i] + c[j].",
+          "shape": [
+            "lon",
+            "lat"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "w",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lat"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "q",
+                "i"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "v",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "k",
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": {
+                    "from": "lat"
+                  }
+                },
+                "expr": {
+                  "op": "index",
+                  "args": [
+                    "q",
+                    "i"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "zw",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "w",
+              "c"
+            ]
+          }
+        },
+        {
+          "lhs": "zv",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "v",
+              "c"
+            ]
+          }
+        },
+        {
+          "lhs": "zd",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "v",
+              "c"
+            ]
+          }
+        },
+        {
+          "lhs": "zt",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "w",
+              "c"
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 0,
+        "abs": 1e-12
+      },
+      "tests": [
+        {
+          "id": "union_axes",
+          "time_span": {
+            "start": 0,
+            "end": 1
+          },
+          "assertions": [
+            {
+              "variable": "zw[2,3]",
+              "time": 0,
+              "expected": 28
+            },
+            {
+              "variable": "zw[1,2]",
+              "time": 0,
+              "expected": 15
+            },
+            {
+              "variable": "zv[2,3]",
+              "time": 0,
+              "expected": 36
+            },
+            {
+              "variable": "zv[1,1]",
+              "time": 0,
+              "expected": 13
+            },
+            {
+              "variable": "zd",
+              "time": 0,
+              "expected": 36,
+              "coords": {
+                "lat": 2,
+                "lon": 3
+              }
+            },
+            {
+              "variable": "zd",
+              "time": 0,
+              "expected": 26,
+              "coords": {
+                "lat": 2,
+                "lon": 2
+              }
+            },
+            {
+              "variable": "zt",
+              "time": 0,
+              "expected": 28,
+              "coords": {
+                "lon": 3,
+                "lat": 2
+              }
+            },
+            {
+              "variable": "zt",
+              "time": 0,
+              "expected": 15,
+              "coords": {
+                "lon": 2,
+                "lat": 1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

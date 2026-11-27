@@ -321,6 +321,42 @@
         ]
       },
       "named_exclusions": []
+    },
+    {
+      "id": "nested_producer_union",
+      "path": "fixtures/nested_producer_union.esm",
+      "model": "NestedProducerUnion",
+      "golden": "golden/nested_producer_union.json",
+      "tags": [
+        "static",
+        "array",
+        "undeclared-result",
+        "faq-producer",
+        "esm-spec-4.3.4"
+      ],
+      "note": "Authored here. An undeclared result spans the union of its operands' index sets, a faq producer contributing its own at any depth on the value path.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": [],
+      "lean_assertion_exclusions": {
+        "zw[2,3]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zw[1,2]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zv[2,3]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zv[1,1]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zt": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch."
+      }
     }
   ]
 }

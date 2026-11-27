@@ -1,0 +1,55 @@
+{
+  "fixture": "nested_producer_union",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 1,
+      "variable": "zw[2,3]",
+      "actual": 28.0
+    },
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 2,
+      "variable": "zw[1,2]",
+      "actual": 15.0
+    },
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 3,
+      "variable": "zv[2,3]",
+      "actual": 36.0
+    },
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 4,
+      "variable": "zv[1,1]",
+      "actual": 13.0
+    },
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 5,
+      "variable": "zd",
+      "actual": 36.0
+    },
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 6,
+      "variable": "zd",
+      "actual": 26.0
+    },
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 7,
+      "variable": "zt",
+      "actual": 28.0
+    },
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 8,
+      "variable": "zt",
+      "actual": 15.0
+    }
+  ]
+}
