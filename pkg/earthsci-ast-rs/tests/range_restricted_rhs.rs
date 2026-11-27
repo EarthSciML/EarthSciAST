@@ -1804,3 +1804,43 @@ fn only_the_observeds_of_t_with_no_lane_form_stay_whole_domain() {
         other => panic!("expected a mixed-times error, got {other:?}"),
     }
 }
+
+/// An observed of `t` declared with no shape and defined whole by an array
+/// `faq` over an interval (the planner's derivative observeds, `_dt_x =
+/// faq{…}` over `[1, n]`), where another index set has the same length:
+/// its axis is the set the body reads the output index along, so the lane
+/// program computes it per lane, and lanes at their own times equal the
+/// whole-domain program.
+#[test]
+fn an_interval_faq_observed_takes_the_set_its_body_reads() {
+    let n = 5;
+    let doc = model(
+        json!({"x": {"kind": "interval", "size": n}, "w": {"kind": "interval", "size": n}}),
+        json!({
+            "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+            "s": {"type": "unknown", "units": "1", "shape": ["x"]},
+            "g": {"type": "unknown", "units": "1"}
+        }),
+        json!([
+            {"lhs": "s", "rhs": faq_node(&["i"], json!({"i": {"from": "x"}}),
+                json!({"op": "cos", "args": [{"op": "+", "args": ["t", "i"]}]}))},
+            {"lhs": "g", "rhs": faq_node(&["r"], json!({"r": [1, n]}),
+                json!({"op": "*", "args": [2.0, ix("s", vec![json!("r")])]}))},
+            {"lhs": d_of(json!("u")),
+             "rhs": faq_node(&["i"], json!({"i": {"from": "x"}}),
+                 json!({"op": "*", "args": [ix("g", vec![json!("i")]), ix("u", vec![json!("i")])]}))}
+        ]),
+    );
+    let prog = program(&doc, Compiler::Native);
+    let lanes = prog
+        .lanes(
+            LaneKind::Cells {
+                sets: vec!["x".to_string()],
+            },
+            2,
+        )
+        .expect("lanes");
+    let times = [0.25, 3.0, 0.75, 1.5, 0.5];
+    assert_lanes_match_at(&prog, &lanes, &[n], &|c| times[c], true);
+    assert_lanes_match(&prog, &lanes, &[n], 1.25);
+}

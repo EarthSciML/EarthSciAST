@@ -1431,9 +1431,15 @@ fn elementwise_loop(
 }
 
 /// The index set each output axis of the array `faq` `body` runs over: the
-/// set a range is `from`, or the one interval index set of the length of a
-/// range `[1, n]`; `None` when one has no such set.
-fn faq_output_sets(body: &Expr, sizes: &HashMap<String, i64>) -> Option<Vec<String>> {
+/// set a range is `from`; for a range `[1, n]`, the set of length `n` the
+/// body reads the output index along (as a subscript of a variable whose
+/// axes are known), else the one interval index set of length `n`; `None`
+/// when an axis has no such set.
+fn faq_output_sets(
+    body: &Expr,
+    sizes: &HashMap<String, i64>,
+    axes: &HashMap<String, Vec<Option<String>>>,
+) -> Option<Vec<String>> {
     let Expr::Operator(f) = body else {
         return None;
     };
@@ -1446,15 +1452,63 @@ fn faq_output_sets(body: &Expr, sizes: &HashMap<String, i64>) -> Option<Vec<Stri
         .map(|o| match ranges.get(o)? {
             crate::types::RangeSpec::IndexSetRef { from, of: None } => Some(from.clone()),
             crate::types::RangeSpec::Interval([1, n]) => {
-                let mut c = sizes.iter().filter(|(_, m)| **m == *n).map(|(k, _)| k);
-                match (c.next(), c.next()) {
-                    (Some(k), None) => Some(k.clone()),
-                    _ => None,
+                let mut read = HashSet::new();
+                if let Some(e) = f.expr.as_deref() {
+                    subscript_sets(e, o, axes, &mut read);
                 }
+                read.retain(|s| sizes.get(s) == Some(n));
+                let only = |mut c: std::vec::IntoIter<String>| match (c.next(), c.next()) {
+                    (Some(k), None) => Some(k),
+                    _ => None,
+                };
+                if !read.is_empty() {
+                    return only(read.into_iter().collect::<Vec<_>>().into_iter());
+                }
+                only(
+                    sizes
+                        .iter()
+                        .filter(|(_, m)| **m == *n)
+                        .map(|(k, _)| k.clone())
+                        .collect::<Vec<_>>()
+                        .into_iter(),
+                )
             }
             _ => None,
         })
         .collect()
+}
+
+/// The index sets `e` reads the loop symbol `o` along: the axis of each
+/// `index(v, …)` subscript that is `o` itself, `v` a variable with known
+/// axes. A nested binder of `o` hides it.
+fn subscript_sets(
+    e: &Expr,
+    o: &str,
+    axes: &HashMap<String, Vec<Option<String>>>,
+    out: &mut HashSet<String>,
+) {
+    let Expr::Operator(n) = e else {
+        return;
+    };
+    if n.ranges.as_ref().is_some_and(|r| r.contains_key(o)) {
+        return;
+    }
+    if n.op == "index"
+        && let Some(Expr::Variable(v)) = n.args.first()
+        && let Some(a) = axes.get(v)
+    {
+        for (d, s) in n.args[1..].iter().enumerate() {
+            if matches!(s, Expr::Variable(x) if x == o)
+                && let Some(Some(set)) = a.get(d)
+            {
+                out.insert(set.clone());
+            }
+        }
+    }
+    n.any_child(&mut |c| {
+        subscript_sets(c, o, axes, out);
+        false
+    });
 }
 
 /// `var = f`, `f` an array `faq` over the whole of each of `var`'s axes, as
@@ -1829,11 +1883,15 @@ pub(super) fn build(
         if !axes.get(var).is_none_or(Vec::is_empty) {
             continue;
         }
-        let found = match (prog.inner.shapes.axes(var), rule) {
-            (Some(a), _) => Some(a.to_vec()),
-            (None, AlgebraicRule::Scalar { body, .. }) => faq_output_sets(body, &sizes),
+        // The shape table names an axis it inferred without a set after
+        // the variable (`x___r1`): the `faq`'s own sets replace those.
+        let table = prog.inner.shapes.axes(var);
+        let named = table.is_some_and(|a| a.iter().all(|s| sizes.contains_key(s)));
+        let from_faq = match rule {
+            AlgebraicRule::Scalar { body, .. } if !named => faq_output_sets(body, &sizes, &axes),
             _ => None,
         };
+        let found = from_faq.or_else(|| table.map(<[String]>::to_vec));
         if let Some(a) = found {
             axes.insert(var.to_string(), a.into_iter().map(Some).collect());
         }
