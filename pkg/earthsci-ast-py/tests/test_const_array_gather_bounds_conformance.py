@@ -123,3 +123,27 @@ def test_partial_elementwise_gather_keeps_the_trailing_axes() -> None:
     branch = ExprNode(op="broadcast", fn="ifelse", args=[condition, "tbl", 9])
     gather = ExprNode(op="index", args=[branch, 2])
     np.testing.assert_array_equal(_compile_expr(gather)(_ctx()), [3, 9])
+
+
+@pytest.mark.parametrize(
+    "producer",
+    [
+        ExprNode(op="concat", axis=0, args=[ExprNode(op="const", value=[7]), 8]),
+        ExprNode(op="makearray", regions=[[[1, 1]], [[2, 2]]], values=[7, 8]),
+    ],
+    ids=["concat", "makearray"],
+)
+def test_full_gather_stays_lazy_with_whole_array_operands(producer: ExprNode) -> None:
+    condition = ExprNode(op="const", value=[1, 0])
+    invalid = ExprNode(op="index", args=[_INLINE, 1, 0])
+    branch = ExprNode(op="broadcast", fn="ifelse", args=[condition, producer, invalid])
+    gather = ExprNode(op="index", args=[branch, "position"])
+    generated = compile_box_body(gather, {})
+    assert generated is not None
+    ctx = _ctx()
+    for evaluate in (lambda ctx: eval_expr(gather, ctx), _compile_expr(gather), generated):
+        ctx.locals["position"] = 1
+        assert evaluate(ctx) == 7
+        ctx.locals["position"] = 2
+        with pytest.raises(NumpyInterpreterError, match="E_TREEWALK_CONSTARRAY_OOB.*dim 2"):
+            evaluate(ctx)

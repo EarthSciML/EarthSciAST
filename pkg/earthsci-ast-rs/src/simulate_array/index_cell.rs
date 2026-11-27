@@ -2,7 +2,7 @@
 //! other cells. Evaluators read the projected AST with their existing operators.
 
 use super::DimU;
-use crate::op_registry::is_elementwise_node;
+use crate::op_registry::{elementwise_op, is_elementwise_node};
 use crate::{Expr, ExpressionNode};
 
 pub(super) struct ElementwiseCell<'a> {
@@ -42,6 +42,15 @@ impl<'a> ElementwiseCell<'a> {
                         }
                     }
                     operands.push(operand);
+                }
+                if elementwise_op(node) == Some("ifelse")
+                    && let [condition, yes, no] = operands.as_slice()
+                    && condition.shape.is_empty()
+                    && yes.shape != no.shape
+                {
+                    // A scalar condition returns its branch as-is. The merged
+                    // extents cannot decide even the rank of this gather.
+                    return None;
                 }
                 shape
             }

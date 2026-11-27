@@ -949,6 +949,27 @@ def _gather_operand_shape(expr: Expr, ctx: EvalContext) -> Shape | None:
         if sorted(expr.perm) == list(range(len(shape))):
             return tuple(shape[i] for i in expr.perm)
         return None
+    if op == "concat" and args:
+        parts = []
+        for arg in args:
+            shape = _gather_operand_shape(arg, ctx)
+            if shape is None:
+                return None
+            parts.append(shape or (1,))  # Concat promotes scalar inputs to length one.
+        first = parts[0]
+        axis = expr.axis if expr.axis is not None else 0
+        if not -len(first) <= axis < len(first):
+            return None
+        axis %= len(first)
+        frame = first[:axis] + first[axis + 1 :]
+        if any(len(s) != len(first) or s[:axis] + s[axis + 1 :] != frame for s in parts):
+            return None
+        return first[:axis] + (sum(s[axis] for s in parts),) + first[axis + 1 :]
+    if op == "makearray":
+        try:
+            return _makearray_shape(expr)
+        except NumpyInterpreterError:
+            return None
     if op == "faq" and not any(isinstance(i, str) for i in expr.output_idx or ()):
         return ()
     if op == "Pre" and len(args) == 1:
@@ -5166,8 +5187,8 @@ def _reduce_over_gated(
     return acc if acc is not None else empty_zero
 
 
-def _eval_makearray(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
-    """Build a dense array from a list of region/value pairs."""
+def _makearray_shape(expr: ExprNode) -> Shape:
+    """Get the dense shape from region bounds without reading their values."""
     regions = expr.regions or []
     values = expr.values or []
     if len(regions) != len(values):
@@ -5186,6 +5207,15 @@ def _eval_makearray(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         for d, (_lo, hi) in enumerate(region):
             if hi > shape[d]:
                 shape[d] = int(hi)
+    return tuple(shape)
+
+
+def _eval_makearray(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
+    """Build a dense array from a list of region/value pairs."""
+    shape = _makearray_shape(expr)
+    ndim = len(shape)
+    regions = expr.regions or []
+    values = expr.values or []
 
     # Stencil makearray carrying its own loop symbols (``output_idx``, set by the
     # pointwise lift, esm-spec §10.5). Each region's value expression indexes the
@@ -5201,10 +5231,10 @@ def _eval_makearray(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             # Codegen is safe here: the box (this node's own output_idx ×
             # its region bounds) is entirely node-derived, hence static.
             return _materialize_makearray_vectorized(
-                expr, ctx, out_syms, tuple(shape), allow_codegen=True
+                expr, ctx, out_syms, shape, allow_codegen=True
             )
 
-    out = np.zeros(tuple(shape), dtype=float)
+    out = np.zeros(shape, dtype=float)
     for region, value_expr in zip(regions, values):
         v = _require_real(eval_expr(value_expr, ctx), "makearray region value")
         slicer = tuple(slice(int(lo) - 1, int(hi)) for lo, hi in region)
