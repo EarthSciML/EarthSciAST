@@ -1,0 +1,147 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "UndeclaredOperandState",
+    "description": "A whole-array state equation whose operand is an observed declared without a `shape`. `w` is a faq over lat, so it spans [lat] (esm-spec §4.3.4, an undeclared variable whose definition spans index sets aligns by name); `D(x) = w + c` with `x` over [lon, lat] places `w` on lat and `c` on lon by name, transposed against `w`'s own order. From x = 0 the state integrates the constant tendency: x[j,i](t) = (q[i] + c[j]) t.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {
+    "lat": {
+      "kind": "interval",
+      "size": 2
+    },
+    "lon": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "UndeclaredOperandState": {
+      "variables": {
+        "q": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "lat"
+          ],
+          "default": [
+            5,
+            8
+          ]
+        },
+        "c": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "lon"
+          ],
+          "default": [
+            3,
+            10,
+            20
+          ]
+        },
+        "w": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Undeclared; a faq over lat, so it spans [lat]."
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat"
+          ],
+          "default": 0,
+          "description": "State over [lon, lat]; dx/dt = w + c."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "w",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lat"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "q",
+                "i"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              "w",
+              "c"
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-09,
+        "abs": 1e-12
+      },
+      "tests": [
+        {
+          "id": "t",
+          "time_span": {
+            "start": 0,
+            "end": 1
+          },
+          "assertions": [
+            {
+              "variable": "x",
+              "time": 1,
+              "expected": 28,
+              "coords": {
+                "lon": 3,
+                "lat": 2
+              }
+            },
+            {
+              "variable": "x",
+              "time": 1,
+              "expected": 15,
+              "coords": {
+                "lon": 2,
+                "lat": 1
+              }
+            },
+            {
+              "variable": "x[1,2]",
+              "time": 1,
+              "expected": 11
+            },
+            {
+              "variable": "x[3,1]",
+              "time": 1,
+              "expected": 25
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

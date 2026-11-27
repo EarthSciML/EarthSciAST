@@ -58,15 +58,15 @@ because the goldens do not move.
 tests/conformance/broadcast_alignment/
 ├── README.md                 # this file — the contract
 ├── manifest.json             # fixtures, tolerances, the `required` ledger, the exclusions
-├── fixtures/<id>.esm         # the three documents authored HERE
-└── golden/<id>.json          # the Julia-interpreter actual for every assertion
+├── fixtures/<id>.esm         # the documents authored HERE
+└── golden/<id>.json          # the Julia-interpreter actual for every assertion (none for a fault fixture)
 ```
 
-Four of the ten fixtures are **referenced, not authored**:
+Four of the thirteen fixtures are **referenced, not authored**:
 `tests/valid/array_broadcast/*.esm` already carried the §4.3.4 documents and
 their inline `tests` blocks, and copying them would have created a second place
 to keep them in step. A fifth, `permuted_static_alias`, replays a saved
-differential document from `tests/differential/shaped/`. The other five are
+differential document from `tests/differential/shaped/`. The other eight are
 authored here because no shared document covered them:
 
 | Fixture | What it holds | Migrated from |
@@ -79,7 +79,10 @@ authored here because no shared document covered them:
 | `unary_broadcast_fn` | `broadcast(fn: "-", [x])` ≡ the bare `-(x)`, both reaching `exp(0.3)` | the #101 arms of `broadcast_alignment_test.jl` and `test_broadcast_and_index_alignment.py` |
 | `observed_expression_aligned` | alignment reaches THROUGH an observed's body | `test_observed_expression_is_aligned_too` (Python), `array_shaped_observed_broadcasts_by_name` (Rust) |
 | `static_named_broadcast` | state-free: `[rows]` and `[cols]` parameters of unequal extents align by name into a `[cols, rows]` and a `[rows, cols]` result | authored here |
-| `nested_producer_union` | state-free: an undeclared result spans the union of its operands' index sets, a `faq` over `{from: lat}` contributing `lat` as a whole definition, under `k *`, or as an operand of the result itself; declared and transposed results place it by name | authored here |
+| `nested_producer_union` | state-free: an undeclared result spans the union of its operands' index sets, a `faq` over `{from: lat}` contributing `lat` as a whole definition, under `k *`, or as an operand of the result itself; declared and transposed results place it by name; a `faq` that is a declared result's whole definition transposes or replicates by name | authored here |
+| `undeclared_operand_state` | a whole-array `D(x) = w + c` with `x` over `[lon, lat]` and `w` an undeclared observed spanning `[lat]` places `w` by name | authored here |
+| `faq_producer_foreign_index_set` | **fault**: `k * faq` over `{from: lon}` in a result declared over `[lat]` only is `array_shape_mismatch`, as for a declared operand over `lon` | authored here |
+| `faq_whole_rhs_foreign_index_set` | **fault**: the same with the `faq` the whole right-hand side | authored here |
 | `permuted_static_alias` | state-free: a bare alias whose declared axes reverse its operand's reads its cells in its own axis order | `tests/differential/shaped/` replay |
 
 Each authored fixture with state integrates a **constant tendency from a zero
@@ -123,6 +126,14 @@ no longer forces `Compiler::Interpreter`.
 
 Everything is `required` for `interpreter` and `native` in all three executing
 bindings.
+
+The two `faq_*_foreign_index_set` fixtures carry `expected_fault` instead of a
+golden: their conforming outcome is the build refusing with
+`array_shape_mismatch`, so a compiler their `required` map names passes only by
+declining with that code, and an answer to their assertions (the laundered
+positional read they pin) is red. Julia's build spells the same refusal
+`E_TREEWALK_ARRAY_SHAPE_MISMATCH`, the build-time twin of `validate()`'s code,
+and `expected_fault.binding_codes` records that spelling.
 
 ## Running it
 

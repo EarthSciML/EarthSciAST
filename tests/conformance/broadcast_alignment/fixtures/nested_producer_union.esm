@@ -2,7 +2,7 @@
   "esm": "2.3.0",
   "metadata": {
     "name": "NestedProducerUnion",
-    "description": "An undeclared result takes the UNION of its operands' index sets (esm-spec §4.3.4), and a `faq` producer over `{from: lat}` contributes `lat` whether it is a variable's whole definition (`w`), nested under an elementwise operator (`v = k * faq`), or an operand of the result itself (`zi = k * faq + c`). `q` and `c` have disjoint index sets of unequal extents, so `w + c` spans [lat, lon] and is neither a scalar nor a [lat] field; the declared results check that each operand is placed in the result's frame by NAME, including under a transposed declaration (`zt` over [lon, lat]).",
+    "description": "An undeclared result takes the UNION of its operands' index sets (esm-spec §4.3.4), and a `faq` producer over `{from: lat}` contributes `lat` whether it is a variable's whole definition (`w`), nested under an elementwise operator (`v = k * faq`), or an operand of the result itself (`zi = k * faq + c`). `q` and `c` have disjoint index sets of unequal extents, so `w + c` spans [lat, lon] and is neither a scalar nor a [lat] field; the declared results check that each operand is placed in the result's frame by NAME, including under a transposed declaration (`zt` over [lon, lat]). A faq that is a declared result's whole definition is placed by name too: transposed (`zr` over [lon, lat] from a faq over (lat, lon)) or replicated (`xr` over [lat, lon] from a faq over lon).",
     "authors": [
       "EarthSciML Authors and Contributors"
     ]
@@ -89,6 +89,24 @@
           "shape": [
             "lon",
             "lat"
+          ]
+        },
+        "zr": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Declared [lon, lat]; its whole definition is a faq over (lat, lon), placed by name, so transposed: zr[j,i] = q[i] + c[j].",
+          "shape": [
+            "lon",
+            "lat"
+          ]
+        },
+        "xr": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Declared [lat, lon]; its whole definition is a faq over lon alone, placed on lon by name and replicated along lat: xr[i,j] = c[j].",
+          "shape": [
+            "lat",
+            "lon"
           ]
         }
       },
@@ -216,6 +234,66 @@
               "c"
             ]
           }
+        },
+        {
+          "lhs": "zr",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lat"
+              },
+              "j": {
+                "from": "lon"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "q",
+                    "i"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "c",
+                    "j"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "xr",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "c",
+                "i"
+              ]
+            }
+          }
         }
       ],
       "tolerance": {
@@ -294,6 +372,42 @@
               "coords": {
                 "lon": 2,
                 "lat": 1
+              }
+            },
+            {
+              "variable": "zr",
+              "time": 0,
+              "expected": 28,
+              "coords": {
+                "lon": 3,
+                "lat": 2
+              }
+            },
+            {
+              "variable": "zr",
+              "time": 0,
+              "expected": 11,
+              "coords": {
+                "lon": 1,
+                "lat": 2
+              }
+            },
+            {
+              "variable": "xr",
+              "time": 0,
+              "expected": 20,
+              "coords": {
+                "lat": 2,
+                "lon": 3
+              }
+            },
+            {
+              "variable": "xr",
+              "time": 0,
+              "expected": 3,
+              "coords": {
+                "lat": 1,
+                "lon": 1
               }
             }
           ]

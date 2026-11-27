@@ -357,7 +357,115 @@
         "zv[1,1]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
         "zt": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
         "zi[2,3]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
-        "zi[1,2]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch."
+        "zi[1,2]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zr": "The Lean static adapter checks a `faq` definition's extents against the declared shape position by position; it does not place a `faq` over `{from}` index sets by name when that `faq` is the whole definition (esm-spec \u00a74.3.4 rule 2), so it refuses this transposed definition with array_shape_mismatch.",
+        "xr": "The Lean static adapter checks a `faq` definition's extents against the declared shape position by position; it does not place a `faq` over `{from}` index sets by name when that `faq` is the whole definition (esm-spec \u00a74.3.4 rule 2), so it refuses this replicated definition with array_shape_mismatch."
+      }
+    },
+    {
+      "id": "undeclared_operand_state",
+      "path": "fixtures/undeclared_operand_state.esm",
+      "model": "UndeclaredOperandState",
+      "golden": "golden/undeclared_operand_state.json",
+      "tags": [
+        "array-level",
+        "state",
+        "undeclared-operand",
+        "faq-producer",
+        "esm-spec-4.3.4"
+      ],
+      "note": "Authored here. A whole-array state equation aligns an operand declared without a `shape` by the index sets its definition spans, as an observed equation does.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
+    },
+    {
+      "id": "faq_producer_foreign_index_set",
+      "path": "fixtures/faq_producer_foreign_index_set.esm",
+      "model": "FaqProducerForeignIndexSet",
+      "golden": null,
+      "expected_fault": {
+        "code": "array_shape_mismatch",
+        "binding_codes": {
+          "julia": "E_TREEWALK_ARRAY_SHAPE_MISMATCH"
+        },
+        "reason": "A faq over {from: lon} under an elementwise operator, in a result declared over [lat] only. The faq aligns by the index sets it names (esm-spec \u00a74.3.4 rule 2), and lon has no axis in the result, so the build refuses, as for a declared operand over lon. A positional read would launder it into the plausible [2, 4] the assertions pin. Julia's build spells the code E_TREEWALK_ARRAY_SHAPE_MISMATCH, the build-time twin of validate()'s array_shape_mismatch."
+      },
+      "tags": [
+        "fault",
+        "array-level",
+        "faq-producer",
+        "esm-spec-4.3.4"
+      ],
+      "note": "Authored here. Every required compiler of every executing binding must decline the document with array_shape_mismatch.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "faq_whole_rhs_foreign_index_set",
+      "path": "fixtures/faq_whole_rhs_foreign_index_set.esm",
+      "model": "FaqWholeRhsForeignIndexSet",
+      "golden": null,
+      "expected_fault": {
+        "code": "array_shape_mismatch",
+        "binding_codes": {
+          "julia": "E_TREEWALK_ARRAY_SHAPE_MISMATCH"
+        },
+        "reason": "The same refusal when the faq over {from: lon} is the whole right-hand side of a result declared over [lat] only. A positional read would launder it into the plausible [1, 2] the assertions pin."
+      },
+      "tags": [
+        "fault",
+        "array-level",
+        "faq-producer",
+        "esm-spec-4.3.4"
+      ],
+      "note": "Authored here. Every required compiler of every executing binding must decline the document with array_shape_mismatch.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
       }
     },
     {

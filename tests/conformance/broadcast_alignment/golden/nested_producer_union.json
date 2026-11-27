@@ -62,6 +62,30 @@
       "assertion_idx": 10,
       "variable": "zt",
       "actual": 15.0
+    },
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 11,
+      "variable": "zr",
+      "actual": 28.0
+    },
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 12,
+      "variable": "zr",
+      "actual": 11.0
+    },
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 13,
+      "variable": "xr",
+      "actual": 20.0
+    },
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 14,
+      "variable": "xr",
+      "actual": 3.0
     }
   ]
 }
