@@ -99,8 +99,14 @@ function _de_body_info(ctx::_DECtx, site::_E._CallSite)::_DEBodyInfo
         end
         if k === _E._NK_ARG_GATHER
             ref = nd.payload::_E._ArgGatherRef
-            a = site.arrays[site.target.passed[ref.j]]
-            (site.target.baseidx[ref.j] == 0 && a.kind === :const) || (callable[] = false)
+            # A block array passes no array (`passed` is 0): its read is the
+            # inline path's, which refuses it by name.
+            if site.target.baseidx[ref.j] != 0
+                callable[] = false
+            else
+                a = site.arrays[site.target.passed[ref.j]]
+                a.kind === :const || (callable[] = false)
+            end
         elseif k === _E._NK_CALL
             inner = nd.payload::_E._CallSite
             # A nested call passing on one of this body's arrays is placed
