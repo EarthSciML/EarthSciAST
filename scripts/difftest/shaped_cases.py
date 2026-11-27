@@ -5,7 +5,7 @@ from itertools import product
 from hypothesis import strategies as st
 
 KINDS = ("faq", "gather", "transpose", "reshape", "concat", "broadcast", "makearray")
-TRANSFORMS = {"transpose", "reshape", "concat"}
+INDEXED_TRANSFORMS = {"reshape", "concat"}
 NUMBERS = st.integers(-8, 8)
 EXTENTS = st.integers(1, 4)
 
@@ -16,7 +16,7 @@ def node(op, *args, **fields):
 
 def document(model, test_id, kind, axes, definitions, result, output_axes):
     cells = list(product(*(range(1, axes[axis] + 1) for axis in output_axes)))
-    if kind in TRANSFORMS:
+    if kind in INDEXED_TRANSFORMS:
         assertions = []
         for number, cell in enumerate(cells, 1):
             name = f"cell_{number}"
@@ -63,7 +63,7 @@ def document(model, test_id, kind, axes, definitions, result, output_axes):
 
 @st.composite
 def fixture(draw, model, test_id, kind):
-    extents = st.integers(2, 4) if kind in TRANSFORMS else EXTENTS
+    extents = st.integers(2, 4) if kind in INDEXED_TRANSFORMS else EXTENTS
     rows = draw(extents)
     columns = draw(extents)
     axes = {"rows": rows, "columns": columns}

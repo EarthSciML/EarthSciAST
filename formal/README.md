@@ -73,8 +73,22 @@ exclusions. Select the `faq_pointwise_filter`, `array_expression_forms`,
 `broadcast_alignment`, or `static_array_semantics` manifest to score state-free
 array cases. Run `python3 formal/scripts/test_static_array_assertions.py` for
 constant-gather values and faults, indexed observations, and the static array
-operation checks. Run `python3 formal/scripts/test_ragged_faq.py` for ragged
-parent tuples, empty reductions, and scoped backing factors.
+operation checks. The shared cases exercise rank-two indexed LHS spellings and
+elementwise gathers, named-axis alias permutation, and whole-array transpose.
+Run `python3 formal/scripts/test_ragged_faq.py` for ragged parent tuples, empty
+reductions, and scoped backing factors.
+
+Phase 3 still needs document-level `faq` joins, including multiple and overlap
+gates, and value invention over ragged members (§4.3.1). The closed template
+adapter can score integer-key `distinct` FAQs over whole interval sets with
+`join.on`. Ordinary ragged contractions bind positions and gather the values
+array explicitly. Value invention must bind the members directly and use the
+result to materialize a derived index set for downstream evaluation.
+
+The gather-distribution proof assumes successful materialization of the full
+elementwise expression. The whole-expression evaluator can still fault in a
+different output cell. For example, gathering the first cell of a two-cell
+`broadcast(ifelse, ...)` can fault if the second cell selects an invalid gather.
 
 The `static-assertions` executable mode also accepts a JSON array
 of `{test_id, assertion_idx}` requests on stdin and returns binary64 bit
@@ -244,3 +258,18 @@ The wire adapter uses the terminating tree traversal in
 products over typed numeric literals and references, the kernel checks exact
 value preservation and idempotence of the resulting expression tree. The
 shared byte fixtures cover JSON decoding, emission, and the other operators.
+
+## Component-local rewrite conformance
+
+`esm-lean rewrite-templates <document.esm> <component>` prints the lowered
+equation or reaction roots from a component with local operator definitions.
+The walk preserves operator declaration order, filters `where` constraints
+before selection, and writes opaque references for non-leaf replacements.
+`--expanded` prints the explicit expansion after rewriting reachable bodies
+with their argument context and counting rewrite depth through each reference.
+
+From the repository root, run `python3 scripts/run-lean-rewrite-conformance.py`
+to check those expression roots against the shared `expression_templates`
+fixtures and their load-time diagnostics. The runner covers the component-local
+slice. Import and metaparameter resolution and reference registry emission,
+including variant names, belong to the document-level loader milestone.

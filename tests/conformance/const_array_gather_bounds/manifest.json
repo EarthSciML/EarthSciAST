@@ -1,7 +1,7 @@
 {
   "category": "const_array_gather_bounds",
   "version": "1.0",
-  "description": "Cross-binding conformance for an out-of-range const-array gather (esm-spec §4.3.3, CONFORMANCE_SPEC §5.5.5 and §5.40). The `index` base is a const array when it is a `const` literal written inline OR an observed defined by one; neither declares a boundary policy, so an index outside 1..N on ANY axis must fail the run with `E_TREEWALK_CONSTARRAY_OOB`. Each case is one document with one assertion, because the fault aborts the whole build or solve. Error cases carry an assertion `expected` of -1, a value no conforming or non-conforming read produces, so a binding that silently returns a number cannot pass by accident. The divergences this closes: Rust decided const-ness by the operand's NAME, so an inline literal took the state gather's zero ghost; Python had no const-array rule in its simulation gather, so index 0 wrapped to the last element and a past-the-end index surfaced as a bare NumPy IndexError; and Julia's run-time const gather checked only the flattened offset, so an overflow on a non-final axis read a neighbouring element. The 2-D cases overflow ONE axis each, on the first axis (whose column-major offset stays in range) and on the second (whose row-major offset stays in range), so a flat-offset-only check fails at least one of them in either memory layout. The `guarded_*` cases put the out-of-range read where a guard decides whether it happens: in an `ifelse` branch or behind a `faq` filter. A guard that excludes it means nothing is read and nothing faults, under every compiler; a guard that admits it fails the run exactly as an unguarded read does.",
+  "description": "Cross-binding conformance for an out-of-range const-array gather (esm-spec §4.3.3, CONFORMANCE_SPEC §5.5.5 and §5.40). The `index` base is a const array when it is a `const` literal written inline OR an observed defined by one; neither declares a boundary policy, so an index outside 1..N on ANY axis must fail the run with `E_TREEWALK_CONSTARRAY_OOB`. Each case is one document with one assertion, because the fault aborts the whole build or solve. Error cases carry an assertion `expected` of -1, a value no conforming or non-conforming read produces, so a binding that silently returns a number cannot pass by accident. The divergences this closes: Rust decided const-ness by the operand's NAME, so an inline literal took the state gather's zero ghost; Python had no const-array rule in its simulation gather, so index 0 wrapped to the last element and a past-the-end index surfaced as a bare NumPy IndexError; and Julia's run-time const gather checked only the flattened offset, so an overflow on a non-final axis read a neighbouring element. The 2-D cases overflow ONE axis each, on the first axis (whose column-major offset stays in range) and on the second (whose row-major offset stays in range), so a flat-offset-only check fails at least one of them in either memory layout. The `guarded_*` cases put the out-of-range read where a guard decides whether it happens: in an `ifelse` branch or behind a `faq` filter. A guard that excludes it means nothing is read and nothing faults, under every compiler; a guard that admits it fails the run exactly as an unguarded read does. The rank-three cases use unequal extents, test one overflowing axis at a time, and include a control for each const spelling. The named rank-three faults come from a state-free model, which exercises the static assertion runner's fail-closed handling.",
   "reference_binding": "julia",
   "bindings_required": [
     "julia",
@@ -307,6 +307,126 @@
       "outcome": "error",
       "error_code": "E_TREEWALK_CONSTARRAY_OOB",
       "note": "Guarded: the out-of-range read is a `faq` term the filter that IS taken."
+    },
+    {
+      "id": "named_3d_in_range",
+      "path": "fixtures/named_3d_in_range.esm",
+      "model": "M",
+      "test_id": "probe",
+      "base": "named",
+      "index": [
+        2,
+        1,
+        4
+      ],
+      "outcome": "pass",
+      "expected": 16,
+      "note": "In-range rank-three named const gather with subscript (2, 1, 4)."
+    },
+    {
+      "id": "inline_3d_in_range",
+      "path": "fixtures/inline_3d_in_range.esm",
+      "model": "M",
+      "test_id": "probe",
+      "base": "inline",
+      "index": [
+        2,
+        1,
+        4
+      ],
+      "outcome": "pass",
+      "expected": 16,
+      "note": "In-range rank-three inline const gather with subscript (2, 1, 4)."
+    },
+    {
+      "id": "inline_3d_axis1_past_end",
+      "path": "fixtures/inline_3d_axis1_past_end.esm",
+      "model": "M",
+      "test_id": "probe",
+      "base": "inline",
+      "index": [
+        3,
+        1,
+        1
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "Rank-three inline const gather with subscript (3, 1, 1). One axis exceeds its declared extent."
+    },
+    {
+      "id": "inline_3d_axis2_past_end",
+      "path": "fixtures/inline_3d_axis2_past_end.esm",
+      "model": "M",
+      "test_id": "probe",
+      "base": "inline",
+      "index": [
+        1,
+        4,
+        1
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "Rank-three inline const gather with subscript (1, 4, 1). One axis exceeds its declared extent."
+    },
+    {
+      "id": "inline_3d_axis3_past_end",
+      "path": "fixtures/inline_3d_axis3_past_end.esm",
+      "model": "M",
+      "test_id": "probe",
+      "base": "inline",
+      "index": [
+        1,
+        1,
+        5
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "Rank-three inline const gather with subscript (1, 1, 5). One axis exceeds its declared extent."
+    },
+    {
+      "id": "named_3d_axis1_past_end",
+      "path": "fixtures/named_3d_axis1_past_end.esm",
+      "model": "M",
+      "test_id": "probe",
+      "base": "named",
+      "index": [
+        3,
+        1,
+        1
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "Rank-three named const gather with subscript (3, 1, 1). One axis exceeds its declared extent."
+    },
+    {
+      "id": "named_3d_axis2_past_end",
+      "path": "fixtures/named_3d_axis2_past_end.esm",
+      "model": "M",
+      "test_id": "probe",
+      "base": "named",
+      "index": [
+        1,
+        4,
+        1
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "Rank-three named const gather with subscript (1, 4, 1). One axis exceeds its declared extent."
+    },
+    {
+      "id": "named_3d_axis3_past_end",
+      "path": "fixtures/named_3d_axis3_past_end.esm",
+      "model": "M",
+      "test_id": "probe",
+      "base": "named",
+      "index": [
+        1,
+        1,
+        5
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "Rank-three named const gather with subscript (1, 1, 5). One axis exceeds its declared extent."
     }
   ]
 }

@@ -142,6 +142,43 @@ _bc_oracle(name, body) = _bc_model(
 )
 
 @testset "broadcast + name-based operand alignment (esm-spec §4.3.4)" begin
+    @testset "constant aliases keep their own named axis order" begin
+        vars = Dict{String, Any}(
+            "matrix" => _bc_obs(
+                ("lat", "lon"),
+                Dict{String, Any}("op" => "const", "args" => [], "value" => [[1, 2, 3], [4, 5, 6]])
+            ),
+            "permuted" => _bc_obs(("lon", "lat"), "matrix"),
+            "alias" => _bc_obs(("lon", "lat"), "permuted"),
+            "restored" => _bc_obs(("lat", "lon"), "alias"),
+            "gathered" => _bc_obs(nothing, _bc_idx("alias", 2, 1))
+        )
+        doc = _bc_doc("M", vars, Any[])
+        prob = E.esm_problem(doc, (0.0, 1.0); compiler = :native)
+        @test E.observed_field(prob, "M.matrix") == [1, 2, 3, 4, 5, 6]
+        @test E.observed_field(prob, "M.permuted") == [1, 4, 2, 5, 3, 6]
+        @test E.observed_field(prob, "M.alias") == [1, 4, 2, 5, 3, 6]
+        @test E.observed_field(prob, "M.restored") == [1, 2, 3, 4, 5, 6]
+        @test E.observed_field(prob, "M.gathered") == [2]
+
+        # Equal extents still need the name-based permutation.
+        doc["index_sets"]["lon"]["size"] = 2
+        matrix = only(eq for eq in doc["models"]["M"]["equations"] if eq["lhs"] == "matrix")
+        matrix["rhs"]["value"] = [[1, 2], [3, 4]]
+        square = E.esm_problem(doc, (0.0, 1.0); compiler = :native)
+        @test E.observed_field(square, "M.permuted") == [1, 3, 2, 4]
+    end
+
+    @testset "bare transpose of an inline constant array" begin
+        matrix = jconst([[1, 2, 3], [4, 5, 6]])
+        vars = Dict{String, Any}(
+            "transposed" => _bc_obs(("lon", "lat"), _bc_op("transpose", matrix)),
+            "gathered" => _bc_obs(nothing, _bc_idx("transposed", 3, 2))
+        )
+        prob = E.esm_problem(_bc_doc("M", vars, Any[]), (0.0, 1.0); compiler = :native)
+        @test E.observed_field(prob, "M.transposed") == [1, 4, 2, 5, 3, 6]
+        @test E.observed_field(prob, "M.gathered") == [6]
+    end
 
     @testset "unary broadcast(fn=F,[x]) ≡ F(x)" begin
         # Scalar model: the identity is about the OPERATOR, so pin it on the

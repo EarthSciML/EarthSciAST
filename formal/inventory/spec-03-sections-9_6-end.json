@@ -289,7 +289,7 @@
       "class": "semantic",
       "phase": 3,
       "area": "arrays",
-      "note": "A range over a derived index set whose producer was not materialized yields derived_index_set_unmaterialized at build, never the semiring's additive identity."
+      "note": "A range over a derived index set whose producer was not materialized yields derived_index_set_unmaterialized at build, never the semiring's additive identity. Ragged value-invention producers and downstream materialization remain open in Phase 3."
     },
     {
       "id": "spec.9.6.6.unevaluable-op-checked-upfront",

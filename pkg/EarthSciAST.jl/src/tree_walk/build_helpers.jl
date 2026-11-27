@@ -155,13 +155,8 @@ end
 # array, a source field). Its value lives in `e.value`, not `e.args`.
 _is_const_op(e) = e isa OpExpr && (e::OpExpr).op == "const"
 
-# A `const`-op node's stored (nested-vector) value → a dense Float64 array whose
-# rank is the nesting depth (`[[[...]]]` → 3-D): an in-file
-# `src_poly[cell, vert, coord]` ring stack or a 1-D `F_src[cell]` field.
-# Column-major fill matches
-# Julia's native layout, so `index(src_poly, i)` slices out cell `i`'s ring
-# matrix.
-function _const_op_to_array(val)::Array{Float64}
+# Probe the extents of a rectangular nested-vector const without allocating its cells.
+function _const_op_dims(val)::Vector{Int}
     dims = Int[]
     node = val
     while !(node isa Number)
@@ -170,6 +165,13 @@ function _const_op_to_array(val)::Array{Float64}
         n == 0 && break
         node = first(node)
     end
+    return dims
+end
+
+# Convert a const literal to Julia's column-major layout with one axis per
+# level of its nested value.
+function _const_op_to_array(val)::Array{Float64}
+    dims = _const_op_dims(val)
     A = Array{Float64}(undef, dims...)
     _fill_const_dense!(A, val, dims) || _fill_const_array!(A, val, ())
     return A

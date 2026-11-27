@@ -3,12 +3,14 @@
 
 # `expr` read at one cell given by `subscripts`: every array-PRODUCING node
 # (`makearray`, or `faq` with non-empty `output_idx`) is wrapped in
-# `index(node, subscripts…)`, elementwise operators are descended, and scalar
-# leaves (literals, scalar names, `index` gathers, scalar reductions) pass
-# through. The concrete-cell dual of `_index_array_leaves` (loop-name form).
+# `index(node, subscripts…)`, as is `transpose`. Elementwise operators are
+# descended, and scalar leaves (literals, scalar names, `index` gathers, scalar
+# reductions) pass through. The concrete-cell dual of `_index_array_leaves`
+# (loop-name form).
 function _index_at(expr::ASTExpr, subscripts::Vector{ASTExpr})::ASTExpr
     expr isa OpExpr || return expr
-    _is_array_producer(expr) && return OpExpr("index", ASTExpr[expr, subscripts...])
+    (_is_array_producer(expr) || (expr.op == "transpose" && !isempty(subscripts))) &&
+        return OpExpr("index", ASTExpr[expr, subscripts...])
     _is_self_indexed_op(expr.op) && return expr
     return reconstruct(expr; args = ASTExpr[_index_at(a, subscripts) for a in expr.args])
 end

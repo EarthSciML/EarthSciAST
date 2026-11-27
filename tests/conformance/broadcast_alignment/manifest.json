@@ -34,7 +34,7 @@
   "tolerances": {
     "golden_rtol": 1e-09,
     "golden_atol": 1e-11,
-    "detail": "The band between a producer's actual and the Julia-interpreter golden. It is separate from, and tighter than, each assertion's own \u00a76.6.4 band: the assertion states what the PHYSICS is (and is gated at the document's own tolerance by each binding's \u00a76.6.3 predicate), while this states how far two evaluations of the same arithmetic may drift. Every fixture here integrates a CONSTANT tendency from a zero initial condition, or a scalar exponential, so an integrator contributes nothing near this floor."
+    "detail": "The band between a producer's actual and the Julia-interpreter golden. It is separate from, and tighter than, each assertion's own \u00a76.6.4 band: the assertion states what the PHYSICS is (and is gated at the document's own tolerance by each binding's \u00a76.6.3 predicate), while this states how far two evaluations of the same arithmetic may drift. The state-free probes test named alignment directly. The trajectory probes integrate a constant tendency from a zero initial condition, or a scalar exponential."
   },
   "fixtures": [
     {
@@ -357,6 +357,34 @@
         "zv[1,1]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
         "zt": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch."
       }
+    },
+    {
+      "id": "permuted_static_alias",
+      "path": "differential/shaped/permuted_static_alias.esm",
+      "model": "Probe",
+      "golden": "golden/permuted_static_alias.json",
+      "tags": [
+        "static",
+        "named-alignment",
+        "axis-permutation",
+        "differential-replay"
+      ],
+      "note": "Exact saved replay of the Julia native wrong-cell read through a bare shape-permuting alias.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
     }
   ]
 }

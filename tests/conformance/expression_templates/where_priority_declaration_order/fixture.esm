@@ -1,0 +1,53 @@
+{
+  "esm": "2.4.0",
+  "metadata": {"name": "RewriteSelectionOrder"},
+  "index_sets": {
+    "a": {"kind": "interval", "size": 2},
+    "b": {"kind": "interval", "size": 2}
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "x": {"type": "parameter", "default": [1, 2], "shape": ["a"]},
+        "y": {"type": "parameter", "default": [3, 4], "shape": ["b"]},
+        "scoped": {"type": "unknown"},
+        "high": {"type": "unknown"},
+        "fallback": {"type": "unknown"}
+      },
+      "operators": {
+        "unscoped": {
+          "params": ["v"],
+          "match": {"op": "choose", "args": ["v"]},
+          "priority": 1,
+          "body": 1
+        },
+        "z_first": {
+          "params": ["v"],
+          "match": {"op": "choose", "args": ["v"]},
+          "where": {"v": {"shape": ["a"]}},
+          "priority": 1,
+          "body": 2
+        },
+        "a_second": {
+          "params": ["v"],
+          "match": {"op": "choose", "args": ["v"]},
+          "where": {"v": {"shape": ["a"]}},
+          "priority": 1,
+          "body": 3
+        },
+        "highest": {
+          "params": ["v"],
+          "match": {"op": "choose", "args": ["v"]},
+          "where": {"v": {"shape": ["b"]}},
+          "priority": 10,
+          "body": 4
+        }
+      },
+      "equations": [
+        {"lhs": "scoped", "rhs": {"op": "choose", "args": ["x"]}},
+        {"lhs": "high", "rhs": {"op": "choose", "args": ["y"]}},
+        {"lhs": "fallback", "rhs": {"op": "choose", "args": [5]}}
+      ]
+    }
+  }
+}

@@ -74,6 +74,18 @@ class StaticArrayAssertions(unittest.TestCase):
                 with self.subTest(fixture=fixture["id"]):
                     self.check_passes(manifest_path, fixture)
 
+    def test_unbound_gather_fails_closed(self):
+        fixture = {
+            "id": "undefined_variable_in_gather",
+            "path": "invalid/undefined_variable_in_gather.esm",
+            "model": "UnboundConstGatherOperand",
+        }
+        manifest_path = CONFORMANCE / "static_array_semantics" / "manifest.json"
+        self.assertEqual(
+            ADAPTER.run_fixture(manifest_path, fixture),
+            {"error": "unbound: missingFactor"},
+        )
+
     def test_static_faq(self):
         fixture = {
             "id": "min_reduction_static_shaped_document",

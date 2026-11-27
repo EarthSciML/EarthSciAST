@@ -1,0 +1,43 @@
+{
+  "fixture": "static_bare_transpose_2x3",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "probe",
+      "assertion_idx": 1,
+      "variable": "result",
+      "actual": 1.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 2,
+      "variable": "result",
+      "actual": 4.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 3,
+      "variable": "result",
+      "actual": 2.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 4,
+      "variable": "result",
+      "actual": 5.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 5,
+      "variable": "result",
+      "actual": 3.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 6,
+      "variable": "result",
+      "actual": 6.0
+    }
+  ]
+}

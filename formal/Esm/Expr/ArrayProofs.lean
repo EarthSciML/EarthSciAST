@@ -17,7 +17,7 @@ theorem broadcast_unary (apply : β → Except ε β) (err : ε) (data : ArrayDa
   simp [broadcast, List.foldlM, mergeDims, List.mapM]
   congr
   funext ix
-  cases h : data.broadcastAt ix <;> simp [List.mapM.loop, h]
+  cases h : data.broadcastAt ix <;> simp [broadcastCell, h]
 
 theorem trailingSlice_dims (data : ArrayData β) (prefixRank prefixOffset : Nat) :
     (data.trailingSlice prefixRank prefixOffset).dims = data.dims.drop prefixRank := rfl
