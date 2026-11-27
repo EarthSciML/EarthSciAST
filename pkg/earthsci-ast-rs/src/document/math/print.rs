@@ -1558,6 +1558,37 @@ pub fn faq_ok(f: &FaqForm) -> bool {
         })
 }
 
+/// `Math.upSet`: a segment of an index set's name prints upright in a Typst range row
+/// when it would otherwise print `italic("…")`.
+pub fn up_set(sf: Sf, g: &[char]) -> bool {
+    sf == Sf::Typst && seg_ok(g) && !is_single(g) && sub_parts(g).is_none() && !is_formula(g)
+}
+
+/// `Math.setSegToks`: one segment of an index set's name.
+pub fn set_seg_toks(sf: Sf, g: &[char]) -> Vec<Tok> {
+    if up_set(sf, g) {
+        vec![Tok::Ups(vec![(g.iter().collect(), String::new())])]
+    } else {
+        seg_toks(sf, g)
+    }
+}
+
+/// `Math.setToks`: the tokens of an index set's name in a range row.
+pub fn set_toks(c: Ctx, s: &str) -> Vec<Tok> {
+    if explicit_name(c.s, s) {
+        vec![Tok::It(s.to_string())]
+    } else {
+        let cs: Vec<char> = s.chars().collect();
+        sep_by(
+            &[kw(Kw::Sdot)],
+            split_dots(&cs)
+                .iter()
+                .map(|g| set_seg_toks(c.sf, g))
+                .collect(),
+        )
+    }
+}
+
 /// `Math.rowToks`: a range row: `a \le k \le b`, `k \in S`, `k \in S(i, j)`.
 pub fn row_toks(c: Ctx, kv: (&str, &Json)) -> Vec<Tok> {
     let (k, v) = kv;
@@ -1571,12 +1602,12 @@ pub fn row_toks(c: Ctx, kv: (&str, &Json)) -> Vec<Tok> {
         ]),
         Json::Obj(kvs) => match kvs.as_slice() {
             [(f, Json::Str(s))] if f == "from" => {
-                cat(&[&name_toks(c, k), &[kw(Kw::Inn)], &name_toks(c, s)])
+                cat(&[&name_toks(c, k), &[kw(Kw::Inn)], &set_toks(c, s)])
             }
             [(f, Json::Str(s)), (o, Json::Arr(ps))] if f == "from" && o == "of" => cat(&[
                 &name_toks(c, k),
                 &[kw(Kw::Inn)],
-                &name_toks(c, s),
+                &set_toks(c, s),
                 &[kw(Kw::Lp)],
                 &sep_by(
                     &[kw(Kw::Comma)],

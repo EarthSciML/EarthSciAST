@@ -25,6 +25,10 @@
 #   (`:const_gather_computed`) because the subscript is provably in range, and
 #   agrees within the compiled tier's `algebraic` class. A read whose subscript can leave the array
 #   under the `error` policy is refused by name.
+#
+#   TEMPLATE CALLS. A template call passing the whole state array (one block)
+#   is refused by name under both `calls` placements, and reverse-mode
+#   gradients through a called template equal the inlined body's bit for bit.
 
 using Test
 using EarthSciAST
@@ -281,5 +285,71 @@ end
         de = EarthSciAST._find_direct_emit_error(err)
         @test de isa EarthSciAST.DirectEmitError
         @test occursin("computed subscript", de.construct)
+    end
+
+    # The whole state array as a template's array argument is stored as one
+    # block (its base a run-time argument). Neither call placement lowers its
+    # read; both refuse it by name, the form `compiler = :xla` reports.
+    @testset "a template call passing a block array is refused by name" begin
+        doc = _ct_doc(_ct_apply("searchsorted"; x = CT_X, xs = "x", n = 12), ["interp.esm"])
+        fo, u0, p, _, vmap = EarthSciAST.Internal.build(doc; form = :oop)
+        for calls in (:functions, :inline)
+            d = CT_EXT.direct_rhs(fo; var_map = vmap, options = CT_EXT.DirectEmitOptions(; calls))
+            err = try
+                CT_RX.@compile sync = true d(
+                    CT_RX.ConcreteRArray(copy(u0)), nothing, CT_RX.ConcreteRNumber(0.0)
+                )
+                nothing
+            catch e
+                e
+            end
+            de = EarthSciAST._find_direct_emit_error(err)
+            @test de isa EarthSciAST.DirectEmitError
+            de isa EarthSciAST.DirectEmitError &&
+                @test occursin("passing a block array", de.construct)
+        end
+    end
+
+    # A template reference emitted as a called function differentiates as the
+    # inlined body does. Enzyme is reached through `Reactant.Enzyme` (a
+    # dependency of Reactant, not of this environment).
+    @testset "reverse-mode gradients through a template call match `:inline`" begin
+        EZ = CT_RX.Enzyme
+        ex = Dict{String, Any}(
+            "ex" => Dict{String, Any}(
+                "params" => Any["w"],
+                "body" => _ct_o("+", _ct_o("*", _ct_o("exp", "w"), "w"), _ct_o("sin", "w")),
+            )
+        )
+        exdoc = _ct_doc(_ct_apply("ex"; w = CT_X), String[])
+        merge!(exdoc["models"]["M"]["operators"], ex)
+        lin = _ct_doc(
+            _ct_apply(
+                "linear"; table = _ct_cst([1.0, 0.25, 4.0, -2.0, 9.0]),
+                axis = _ct_cst([0.0, 0.5, 1.25, 2.0, 3.5]), x = CT_X, n = 5
+            ),
+            ["interp.esm"]
+        )
+        for (label, doc) in (("exp/sin", exdoc), ("linear", lin))
+            fo, u0, p, _, vmap = EarthSciAST.Internal.build(doc; form = :oop)
+            u = collect(range(-0.3, 1.7; length = length(u0)))
+            w = Float64[1.0 + 0.05k for k in eachindex(u)]
+            pr = p === nothing ? nothing : NamedTuple{keys(p)}(map(CT_RX.ConcreteRNumber, values(p)))
+            grads = Dict{Symbol, Vector{Float64}}()
+            for calls in (:functions, :inline)
+                d = CT_EXT.direct_rhs(fo; var_map = vmap, options = CT_EXT.DirectEmitOptions(; calls))
+                obj(uu, tt) = sum(w .* d(uu, pr, tt) .^ 2)
+                g(uu, tt) = EZ.gradient(EZ.Reverse, obj, uu, EZ.Const(tt))[1]
+                ur = CT_RX.ConcreteRArray(copy(u)); tr = CT_RX.ConcreteRNumber(0.0)
+                c = CT_RX.@compile sync = true g(ur, tr)
+                grads[calls] = Array(c(ur, tr))
+                calls === :functions && @test get(d.stats, :call, 0) >= 1
+            end
+            @testset "$label" begin
+                @test all(isfinite, grads[:inline]) && any(!iszero, grads[:inline])
+                # The same arithmetic in the same order once XLA inlines the call.
+                @test isequal(grads[:functions], grads[:inline])
+            end
+        end
     end
 end
