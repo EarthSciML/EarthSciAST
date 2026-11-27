@@ -281,6 +281,7 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
     # author's (or an earlier lift's) responsibility to index, and rewriting it
     # here would change working documents.
     newly_promoted = Set{String}(k for k in arrayvars if flat_was_scalar(flat, k))
+    _refuse_faq_bare_promoted_reads(flat, newly_promoted, shapes)
 
     # Rewrite equations: a promoted var's bare `x = expr` becomes `x = faq(…)`;
     # then, in EVERY equation, a bare reference to a newly promoted variable
@@ -370,6 +371,37 @@ function _check_declared_producer_extents(
                 "them, and a declared shape must agree)"
         )
     )
+end
+
+# esm-spec §4.3.1 `faq_bare_array_operand`, against the shapes this pass
+# inferred: the build decides the rule "against the shape the build gives each
+# variable — its declared `shape`, or, for a variable declared without one, the
+# array shape its defining equation evaluates to". A bare read of a newly
+# promoted name in an AUTHORED `faq` body or filter is refused, as it would be
+# had the shape been declared; the consumer rewrite below would otherwise pick
+# an alignment for it. A pointwise-lifted equation is exempt: the lift, not the
+# author, put the bare name in its `faq` body.
+function _refuse_faq_bare_promoted_reads(
+        flat::FlattenedSystem, promoted::Set{String}, shapes::Dict{String, Vector{String}}
+    )
+    isempty(promoted) && return nothing
+    promoted_shapes = Dict{String, Vector{String}}(n => shapes[n] for n in promoted)
+    for eq in flat.equations
+        _is_lifted(eq, flat.lifted_shapes) && continue
+        found = faq_bare_array_operands(
+            eq.rhs, promoted_shapes; exclude = faq_bare_exempt_names(eq.lhs)
+        )
+        isempty(found) && continue
+        field, name, shape = first(found)
+        throw(
+            DimensionPromotionError(
+                "$(ERROR_CODES.FAQ_BARE_ARRAY_OPERAND): '$(name)' is declared without a " *
+                    "shape and its definition makes it an array; " *
+                    faq_bare_array_operand_message(field, name, shape)
+            )
+        )
+    end
+    return nothing
 end
 
 """
