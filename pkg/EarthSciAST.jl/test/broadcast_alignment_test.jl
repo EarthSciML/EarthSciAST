@@ -167,6 +167,16 @@ _bc_oracle(name, body) = _bc_model(
         @test E.observed_field(square, "M.permuted") == [1, 3, 2, 4]
     end
 
+    @testset "bare transpose of an inline constant array" begin
+        matrix = jconst([[1, 2, 3], [4, 5, 6]])
+        vars = Dict{String, Any}(
+            "transposed" => _bc_obs(("lon", "lat"), _bc_op("transpose", matrix)),
+            "gathered" => _bc_obs(nothing, _bc_idx("transposed", 3, 2))
+        )
+        prob = E.esm_problem(_bc_doc("M", vars, Any[]), (0.0, 1.0); compiler = :native)
+        @test E.observed_field(prob, "M.transposed") == [1, 4, 2, 5, 3, 6]
+        @test E.observed_field(prob, "M.gathered") == [6]
+    end
 
     @testset "unary broadcast(fn=F,[x]) ≡ F(x)" begin
         # Scalar model: the identity is about the OPERATOR, so pin it on the

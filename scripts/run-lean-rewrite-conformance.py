@@ -16,6 +16,7 @@ DEFAULT_ADAPTER = ROOT / "formal/.lake/build/bin/esm-lean"
 EXPANDED = (
     "arrhenius_smoke",
     "constrained_match_scope",
+    "faq_reduction_pattern",
     "fixpoint_nested_deriv",
     "godunov_beats_inner_deriv",
     "opacity_rule_replacement",
@@ -27,6 +28,7 @@ EXPANDED = (
     "rule_writes_reference",
     "scalar_field_param",
     "template_instance_variants",
+    "time_axis_in_definition",
     "two_div_two_meshes",
     "where_priority_declaration_order",
 )

@@ -54,7 +54,10 @@ function _remap_operand_shape(e::ASTExpr, rc::_ResolveCtx; whole::Bool = false)
     end
     e isa OpExpr || return nothing
     o = e::OpExpr
-    if o.op == "reshape"
+    if o.op == "const" && o.value isa AbstractVector
+        ext = _const_op_dims(o.value)
+        return (ones(Int, length(ext)), ext)
+    elseif o.op == "reshape"
         (o.shape === nothing || !all(s -> s isa Integer, o.shape)) && return nothing
         ext = Int[Int(s) for s in o.shape]
         return (ones(Int, length(ext)), ext)

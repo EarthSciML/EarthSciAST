@@ -183,15 +183,16 @@ old names of esm-spec §9.6.12 and §4.2 read as the new ones (`renameKey`, `ren
 `ivAsTime`). `iv`: the document's renamed independent variable; `ps`: the parameters of the
 enclosing definition. Unproved adapter code, pinned by the
 golden files (`Esm.Document.Notation`). -/
-partial def spellWalk (iv : Option String) (w : Walk) (ps : List String) : Json → Json
-  | .arr xs => .arr (xs.map (spellWalk iv .plain ps))
+partial def spellWalk (iv : Option String) (omitFaqDefaults : Bool)
+    (w : Walk) (ps : List String) : Json → Json
+  | .arr xs => .arr (xs.map (spellWalk iv omitFaqDefaults .plain ps))
   | .obj kvs =>
     match w with
-    | .map => .obj (kvs.map fun (k, v) => (k, spellWalk iv .plain ps v))
+    | .map => .obj (kvs.map fun (k, v) => (k, spellWalk iv omitFaqDefaults .plain ps v))
     | .defs => .obj (kvs.map fun (k, v) =>
         (k, match v with
-          | .obj ekvs => spellWalk iv .defn (paramsOf ekvs) v
-          | _ => spellWalk iv .plain ps v))
+          | .obj ekvs => spellWalk iv omitFaqDefaults .defn (paramsOf ekvs) v
+          | _ => spellWalk iv omitFaqDefaults .plain ps v))
     | _ =>
       let kvs' := Source.sortKeys (kvs.map fun (k, v) =>
         let k := renameKey k
@@ -202,13 +203,13 @@ partial def spellWalk (iv : Option String) (w : Walk) (ps : List String) : Json 
           | _ => (k, .str (Esm.Units.canon u))
         | "units", _ =>
           match w with
-          | .defn => (k, spellWalk iv .plain ps v)
+          | .defn => (k, spellWalk iv omitFaqDefaults .plain ps v)
           | _ => (k, v)
         | "default_units", .str u => (k, .str (Esm.Units.canon u))
         | _, _ =>
           if freeKeys.contains k then (k, v)
-          else if defsKeys.contains k then (k, spellWalk iv .defs ps v)
-          else (k, spellWalk iv (if mapKeys.contains k then .map else .plain) ps v))
+          else if defsKeys.contains k then (k, spellWalk iv omitFaqDefaults .defs ps v)
+          else (k, spellWalk iv omitFaqDefaults (if mapKeys.contains k then .map else .plain) ps v))
       let kvs' := match Math.look "op" kvs' with
         | some (.str o) =>
           let o' := renameOp iv ps o kvs'
@@ -225,7 +226,7 @@ partial def spellWalk (iv : Option String) (w : Walk) (ps : List String) : Json 
         | some (.str "1"), some (.num n) => .num n
         | some (.str "1"), _ => .obj (kvs'.filter (fun kv => kv.1 != "units"))
         | _, _ => .obj kvs'
-      | some (.str "faq"), _ => .obj (faqDefaults kvs')
+      | some (.str "faq"), _ => .obj (if omitFaqDefaults then faqDefaults kvs' else kvs')
       | some (.str o), some (.arr as) =>
         match deprecatedTo o with
         | some (o', n) =>
@@ -242,9 +243,10 @@ partial def spellWalk (iv : Option String) (w : Walk) (ps : List String) : Json 
       | _, _ => .obj kvs'
   | j => j
 
-/-- The spelling rules from the root (`isMap`: the value is a name-keyed map). -/
-def spellRules (isMap : Bool) (j : Json) : Json :=
-  spellWalk (docIndependentVariable j) (if isMap then .map else .plain) [] j
+/-- The spelling rules from the root. Set `isMap` for a name-keyed map.
+Rewriting keeps authored FAQ fields as structural match constraints. -/
+def spellRules (isMap : Bool) (j : Json) (omitFaqDefaults : Bool := true) : Json :=
+  spellWalk (docIndependentVariable j) omitFaqDefaults (if isMap then .map else .plain) [] j
 
 /-- A number token with an exponent, respelled so `Lean.Json.parse` still sees a decimal.
 `Lean.Json.parse` folds a positive exponent into the mantissa, so `1.999999999999999e16`

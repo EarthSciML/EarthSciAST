@@ -95,7 +95,7 @@ private def MatchContext.spatialDerivative (ctx : MatchContext) (fields : List (
     match fields.lookup "wrt" with
     | some (.str parameter) =>
       match (ctx.instanceArgs.lookup parameter).bind (·.literal) with
-      | some (.str axis) => axis != ctx.independent
+      | some (.str axis) => axis != "t" && axis != ctx.independent
       | _ => false
     | _ => false
   else false

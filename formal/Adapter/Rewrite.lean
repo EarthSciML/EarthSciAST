@@ -305,7 +305,7 @@ def main (args : List String) : IO UInt32 := do
   let input ← IO.FS.readFile file
   let result : Except Failure Json := do
     let document ← (OrderedJson.parse input).mapError fun error => ⟨"invalid_document", error⟩
-    project (Doc.spellRules false document) component expanded
+    project (Doc.spellRules false document (omitFaqDefaults := false)) component expanded
   match result with
   | .ok output => IO.println (Doc.render output); return 0
   | .error error =>
