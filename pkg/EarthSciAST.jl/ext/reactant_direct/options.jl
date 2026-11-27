@@ -37,8 +37,8 @@ they exist as measurement levers and negative controls.
   compiles; the emitted module keeps them.
 
 `DirectEmitOptions(env)` reads `ESM_DIRECT_EMIT_READ`,
-`ESM_DIRECT_GATHER_INDEX_BITS`, `ESS_RX_LOCATE` and `ESS_RX_LOCATE_LADDER_MAX`
-from `env` (normally `ENV`); an unset variable keeps the default, and the other
+`ESM_DIRECT_GATHER_INDEX_BITS`, `ESM_DIRECT_EMIT_CALLS` (`functions` or
+`inline`), `ESS_RX_LOCATE` and `ESS_RX_LOCATE_LADDER_MAX` from `env` (normally `ENV`); an unset variable keeps the default, and the other
 fields take their defaults. This is the only place the emitter reads the environment. A value
 that does not parse, or names no mode, raises `DirectEmitError`.
 """
@@ -108,5 +108,6 @@ function DirectEmitOptions(env::AbstractDict)
             _de_env_int(env, "ESS_RX_LOCATE_LADDER_MAX", "locate_ladder_max"),
             d.locate_ladder_max
         ),
+        calls = something(_de_env_sym(env, "ESM_DIRECT_EMIT_CALLS"), d.calls),
     )
 end
