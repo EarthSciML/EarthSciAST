@@ -18,13 +18,19 @@
 # callable (a host-only trace leaf, one per key here) and the argument types.
 #
 # WHAT A FUNCTION BODY READS. Its scalar arguments (`_NK_ARG`), literals,
-# operators, folds, counted loops, literal tables (`_NK_CONST_GATHER`), const
-# array arguments (`_NK_ARG_GATHER` of a `:const` array, read as the inlined
-# body reads it, the table living in the function), time, and further calls,
-# which are functions too. A body that reads a state or live-forcing array
-# argument, or a parameter outside a vector `p`, is placed inline instead:
-# those reads resolve their subscripts on the host today, and a function
-# argument is not host data. `_de_tally!(ctx, :call_inlined)` counts them.
+# operators, folds, counted loops, literal tables (`_NK_CONST_GATHER`), time,
+# further calls (functions too), and its array arguments:
+#   * a `:const` array is read as the inlined body reads it, the table living
+#     in the function (`_de_body_with_tables`);
+#   * a `:state` array (a state or observed array of the extended state) and a
+#     `:live` forcing buffer are passed as one more tensor argument each, and
+#     the body reads them at traced subscripts (`_de_arg_gather`): a state read
+#     outside the array's box is the ghost zero, a forcing read uses the
+#     array's boundary policy as the const read does.
+# What is still placed inline (`_de_tally!(ctx, :call_inlined)`): a body that
+# reads a parameter, a block array (its base is a run-time argument), an array
+# a calling body passes on, a windowed tile forcing buffer, or a state array
+# some of whose slots a later emission section writes.
 # ========================================================================
 
 # The template call whose body a context is emitting as a function: the
@@ -35,6 +41,7 @@ struct _DECallFrame
     site::_E._CallSite
     args::Vector{_DEVal}
     ranges::Vector{Union{Nothing, NTuple{2, Float64}}}
+    arrays::Vector{Union{Nothing, _DEVal}}   # per array slot: its tensor (`:state`, `:live`)
 end
 
 # What a function emission needs from the calling context, all host data.
@@ -100,7 +107,8 @@ function _de_body_info(ctx::_DECtx, site::_E._CallSite)::_DEBodyInfo
         if k === _E._NK_ARG_GATHER
             ref = nd.payload::_E._ArgGatherRef
             a = site.arrays[site.target.passed[ref.j]]
-            (site.target.baseidx[ref.j] == 0 && a.kind === :const) || (callable[] = false)
+            (site.target.baseidx[ref.j] == 0 && !(a.data isa _E._FwdArr) &&
+                a.kind in (:const, :state, :live)) || (callable[] = false)
         elseif k === _E._NK_CALL
             inner = nd.payload::_E._CallSite
             # A nested call passing on one of this body's arrays is placed
@@ -128,6 +136,11 @@ function _de_call(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
         info === nothing || _de_tally!(ctx, :call_inlined)
         return _de_walk(ctx, fr, _de_inline_call(ctx, nd))
     end
+    arrays = _de_call_arrays(ctx, site)
+    if arrays === nothing
+        _de_tally!(ctx, :call_inlined)
+        return _de_walk(ctx, fr, _de_inline_call(ctx, nd))
+    end
     args = _DEVal[_de_walk(ctx, fr, ch) for ch in nd.children]
     # An argument's interval matters only where a subscript can read it; it is
     # then part of the function's key, as the inlined body's subscripts are
@@ -137,7 +150,10 @@ function _de_call(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
             for ch in nd.children
     ]
     T = ctx.precision
-    key = (site, ranges, T, ctx.tree_fold, info.uses_time)
+    # Sites that pass state or forcing arrays of one layout share a function
+    # (the arrays are its arguments); a const table lives in the function, so
+    # it is part of the key by identity.
+    key = (site.target, _de_array_key(site), ranges, T, ctx.tree_fold, info.uses_time)
     fn = get!(ctx.callfns, key) do
         _DECallFn(
             site, ranges, ctx.n_states, length(ctx.ue.m), T, ctx.tree_fold, ctx.opts,
@@ -145,6 +161,9 @@ function _de_call(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
         )
     end::_DECallFn
     traced = Any[_de_traced(a, T) for a in args]
+    for a in arrays
+        a === nothing || push!(traced, _de_traced(a, T))
+    end
     info.uses_time && push!(traced, _de_traced(ctx.t, T))
     _de_tally!(ctx, :call)
     return _de_untraced(Reactant.Ops.call(fn, traced...))
@@ -159,13 +178,21 @@ function _de_call_body(fn::_DECallFn, xs::TracedRArray...)
     tg = fn.site.target
     T = fn.precision
     nargs = length(tg.slots)
-    length(xs) == nargs + fn.uses_time || _de_refuse_at(
+    kinds = _de_passed_kinds(fn.site)
+    narr = count(k -> k === :state || k === :live, kinds)
+    length(xs) == nargs + narr + fn.uses_time || _de_refuse_at(
         fn.rule, "a call of the template `$(tg.name)`",
-        "it passes $(length(xs)) values for $(nargs) arguments."
+        "it passes $(length(xs)) values for $(nargs) arguments and $(narr) arrays."
     )
     args = _DEVal[_de_untraced(xs[i]) for i in 1:nargs]
+    arrays = Union{Nothing, _DEVal}[nothing for _ in kinds]
+    k = nargs
+    for j in eachindex(kinds)
+        (kinds[j] === :state || kinds[j] === :live) || continue
+        arrays[j] = _de_untraced(xs[k += 1])
+    end
     t = fn.uses_time ? _de_untraced(xs[end]) : _DEVal(_de_zero_time(T), 1)
-    frame = _DECallFrame(tg, fn.site, args, fn.ranges)
+    frame = _DECallFrame(tg, fn.site, args, fn.ranges, arrays)
     sub = _DECtx(
         fn.n_states, fn.n_total, nothing, t, nothing, (), Vector{Float64}[],
         Dict{Int, String}(), fn.opts; precision = T, tree_fold = fn.tree_fold,
@@ -195,18 +222,104 @@ function _de_arg(ctx::_DECtx, nd::_E._Node)::_DEVal
     return fr.args[nd.idx]
 end
 
-# `_NK_ARG_GATHER` of a `:const` array argument: the read the inlined body
-# makes, a const gather at the body's own subscripts (`_de_body_info` admits
-# no other array kind into a function).
+# `_NK_ARG_GATHER`: a read of array argument `j` at traced subscripts. A
+# `:const` array was substituted before the walk (`_de_body_with_tables`); a
+# `:state` or `:live` array is the tensor the call passed.
 function _de_arg_gather(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
     cf = ctx.frame::_DECallFrame
     ref = nd.payload::_E._ArgGatherRef
     a = cf.site.arrays[cf.target.passed[ref.j]]
-    g = _E._mknode(
-        kind = _E._NK_CONST_GATHER, payload = a.data::_E._ConstGatherArray,
-        children = nd.children
-    )
-    return _de_walk(ctx, fr, g)
+    src = cf.arrays[ref.j]
+    if a.kind === :const || src === nothing
+        g = _E._mknode(
+            kind = _E._NK_CONST_GATHER, payload = a.data::_E._ConstGatherArray,
+            children = nd.children
+        )
+        return _de_walk(ctx, fr, g)
+    elseif a.kind === :state
+        sg = a.data::_E._StateGather
+        subs = _DEVal[_de_un(ctx, _hlo.round_nearest_even, _de_walk(ctx, fr, ch)) for ch in nd.children]
+        L = maximum(x -> x.len, subs)
+        lanes = map(x -> _de_traced(_de_cast(_de_bcast(ctx, x, L), ctx.precision, Float64)), subs)
+        _de_tally!(ctx, :state_gather_traced)
+        return _de_untraced(
+            Reactant.call_with_reactant(
+                _de_sg_take, _de_traced(src, ctx.precision), Tuple(sg.lo), Tuple(sg.hi),
+                Tuple(sg.strides), lanes...
+            )
+        )
+    end
+    g = _E._mknode(kind = _E._NK_LIVE_GATHER, payload = a.data::_E._ConstGatherArray, children = nd.children)
+    return _de_cgather(ctx, g, ch -> _de_walk(ctx, fr, ch), x -> _de_cached_term(fr, x); src)
+end
+
+# A state array read at rounded traced subscripts: the element at
+# `1 + Σ (s_d - lo_d) * stride_d` of the array's tensor (its slots in offset
+# order), or the ghost zero where a subscript leaves `[lo_d, hi_d]`
+# (`_state_gather_slot`).
+function _de_sg_take(src::TracedRArray{T, 1}, lo, hi, strides, subs::TracedRArray{Float64, 1}...) where {T}
+    O = Reactant.Ops
+    n = length(subs[1])
+    int(x) = O.fill(Int64(x), [n])
+    inside = nothing
+    lin = int(1)
+    for d in eachindex(subs)
+        s = _rx_int(subs[d])
+        ok = O.and(
+            O.compare(s, int(lo[d]); comparison_direction = "GE"),
+            O.compare(s, int(hi[d]); comparison_direction = "LE")
+        )
+        inside = inside === nothing ? ok : O.and(inside, ok)
+        lin = O.add(lin, O.multiply(O.subtract(s, int(lo[d])), int(strides[d])))
+    end
+    lin = O.clamp(int(1), lin, int(length(src)))
+    v = O.gather_getindex(src, O.reshape(lin, n, 1))
+    return O.select(inside, v, O.fill(zero(T), [n]))
+end
+
+# Which array slots of `site`'s target are passed as tensors.
+_de_passed_kinds(site::_E._CallSite) = Symbol[
+    site.target.baseidx[j] == 0 && !(site.arrays[site.target.passed[j]].data isa _E._FwdArr) ?
+        site.arrays[site.target.passed[j]].kind : :block
+        for j in eachindex(site.target.passed)
+]
+
+# The tensors a call passes for its `:state` and `:live` array arguments, in
+# array-slot order (`nothing` for the others), or `nothing` when one of them
+# cannot be passed whole: a windowed tile forcing buffer, or a state array with
+# a slot a later emission section writes (the inlined body reads only the
+# slots it needs, so it may still be emitted).
+function _de_call_arrays(ctx::_DECtx, site::_E._CallSite)
+    kinds = _de_passed_kinds(site)
+    out = Union{Nothing, _DEVal}[nothing for _ in kinds]
+    for j in eachindex(kinds)
+        a = site.arrays[site.target.passed[j]]
+        if kinds[j] === :state
+            sg = a.data::_E._StateGather
+            ue = ctx.ue
+            srcs = Vector{_DESlot}(undef, sg.len)
+            for off in 0:(sg.len - 1)
+                s = _E._sg_slot(sg, off)
+                if s == 0
+                    srcs[off + 1] = nothing
+                    continue
+                end
+                (1 <= s <= length(ue.m)) || return nothing
+                e = ue.m[s]
+                e === nothing && ue.writer[s] > ctx.section && return nothing
+                srcs[off + 1] = e
+            end
+            out[j] = _de_emit_runs(ctx, srcs)
+        elseif kinds[j] === :live
+            cg = a.data::_E._ConstGatherArray
+            jb = findfirst(x -> x === cg.flat, ctx.hostkeys)
+            jb === nothing && return nothing
+            val = _de_buffer_read(ctx, cg.flat, collect(1:length(cg.flat)); why = :call_array)
+            val.len == length(cg.flat) || return nothing
+            out[j] = val
+        end
+    end
+    return out
 end
 
 # The interval of argument `idx`, as the caller's subrange walk found it.
@@ -231,8 +344,9 @@ function _de_body_with_tables(callfns::Dict{Any, Any}, site::_E._CallSite)::_E._
         got === nothing || return got
         isempty(x.children) && x.kind !== _E._NK_ARG_GATHER && return x
         ch = _E._Node[sub(c) for c in x.children]
-        r = if x.kind === _E._NK_ARG_GATHER && (x.payload::_E._ArgGatherRef).target === tg
-            a = site.arrays[tg.passed[(x.payload::_E._ArgGatherRef).j]]
+        a = x.kind === _E._NK_ARG_GATHER && (x.payload::_E._ArgGatherRef).target === tg ?
+            site.arrays[tg.passed[(x.payload::_E._ArgGatherRef).j]] : nothing
+        r = if a !== nothing && a.kind === :const
             _E._mknode(kind = _E._NK_CONST_GATHER, payload = a.data::_E._ConstGatherArray, children = ch)
         elseif all(i -> ch[i] === x.children[i], eachindex(ch))
             x
@@ -245,4 +359,22 @@ function _de_body_with_tables(callfns::Dict{Any, Any}, site::_E._CallSite)::_E._
     body = sub(tg.body)
     callfns[key] = body
     return body
+end
+
+# The layout of each array a site passes, for the function key.
+function _de_array_key(site::_E._CallSite)
+    return Tuple(
+        begin
+            a = site.arrays[site.target.passed[j]]
+            if a.kind === :state && site.target.baseidx[j] == 0
+                sg = a.data::_E._StateGather
+                (:state, Tuple(sg.lo), Tuple(sg.hi), Tuple(sg.strides), sg.len)
+            elseif a.kind === :live
+                cg = a.data::_E._ConstGatherArray
+                (:live, Tuple(cg.dims), Tuple(cg.strides), Tuple(cg.boundary))
+            else
+                (a.kind, objectid(a.data))
+            end
+        end for j in eachindex(site.target.passed)
+    )
 end
