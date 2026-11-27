@@ -434,6 +434,86 @@
       "surface": "markdown",
       "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{cc}1 & 2 \\\\ 3 & 4 \\end{array}\\right]\n$$\n",
       "error": "parse_error"
+    },
+    {
+      "id": "set_upright_letter_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a letter prints as a name (a), never upright.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"a\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_greek_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a Greek name prints as its symbol (alpha).",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"alpha\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_euler_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a letter prints as a name, never upright.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"e\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_subscript_shape_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: the x_i shape prints x_(upright(\"i\")).",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"x_i\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_formula_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a formula prints upright(\"NO\")_2.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"NO2\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_empty_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: an empty name is no name.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_digit_start_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a name starts with a letter or _.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"2lev\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_space_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a name is an identifier.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"le v\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_non_ascii_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a name is an ASCII identifier.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"lév\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_dotted_letter_typst",
+      "kind": "refusal",
+      "description": "Each segment of an upright scoped set name is read by the set rule: a letter segment is never upright.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"lev\")\".\"upright(\"a\")) w_i $\n",
+      "error": "parse_error"
     }
   ]
 }

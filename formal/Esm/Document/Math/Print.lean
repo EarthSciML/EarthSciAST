@@ -866,13 +866,34 @@ def faqOK (F : FaqForm) : Bool :=
     ((outNames F.out).contains kv.1 || occursJ kv.1 F.expr ||
       (match F.filter with | some x => occursJ kv.1 x | none => false)))
 
+/-- A segment of an index set's name that a Typst range row sets upright, `k in
+upright("lev")`: a set is named, as a function's name is (`upright("op")`), not a
+quantity, and an italic `lev` reads as the product l·e·v (decided 2026-11-26). It is
+exactly a segment that would otherwise print `italic("…")`: an identifier that is neither
+a letter, a Greek name, the `x_i` shape nor a formula. Each segment of a scoped set name
+follows the rule on its own (`upright("lev")"."upright("top")`, `a"."upright("bins")`), so
+those other segments print as in any name, and LaTeX prints every set name as a name. The reader accepts an upright set segment only when this holds, so
+the upright spelling of a set is unique. -/
+def upSet (sf : Sf) (g : List Char) : Bool :=
+  sf == .typst && segOK g && !isSingle g && subParts g == none && !isFormula g
+
+/-- One segment of an index set's name. -/
+def setSegToks (sf : Sf) (g : List Char) : List Tok :=
+  if upSet sf g then [.ups [(String.ofList g, "")]] else segToks sf g
+
+/-- The tokens of an index set's name in a range row: `nameToks` with `setSegToks` for
+each segment. -/
+def setToks (c : Ctx) (s : String) : List Tok :=
+  if explicitName c.S s then [.it s]
+  else sepBy [.kw .sdot] ((splitDots s.toList).map (setSegToks c.sf))
+
 /-- A range row: `a \le k \le b`, `k \in S`, `k \in S(i, j)`. -/
 def rowToks (c : Ctx) (P : Json → Out) (kv : String × Json) : List Tok :=
   match kv.2 with
   | .arr [a, b] => (P a).at c.sf 4 ++ .kw .le :: nameToks c kv.1 ++ .kw .le :: (P b).at c.sf 4
-  | .obj [("from", .str s)] => nameToks c kv.1 ++ .kw .inn :: nameToks c s
+  | .obj [("from", .str s)] => nameToks c kv.1 ++ .kw .inn :: setToks c s
   | .obj [("from", .str s), ("of", .arr ps)] =>
-    nameToks c kv.1 ++ .kw .inn :: nameToks c s ++ .kw .lp ::
+    nameToks c kv.1 ++ .kw .inn :: setToks c s ++ .kw .lp ::
       (sepBy [.kw .comma] (ps.map fun p => match p with | .str q => nameToks c q | _ => []) ++ [.kw .rp])
   | _ => []
 
