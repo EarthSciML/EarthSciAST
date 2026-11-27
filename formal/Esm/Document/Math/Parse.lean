@@ -968,15 +968,31 @@ def pEulerExp (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
     | some (y, r') => some (node "exp" [y], r')
     | none => none
 
-/-- An index set's name: a name, or in Typst one upright word (`upright("lev")`, see
-`upSet`). -/
+/-- One segment of an index set's name: an upright word that `upSet` sets upright, or a
+name segment. The two never overlap: `pSeg` reads an upright token only as a formula, and
+`upSet` excludes formulas. -/
+def pSetSeg (sf : Sf) (ts : List Tok) : Option (List Char × List Tok) :=
+  match ts with
+  | .ups [(g, "")] :: r => if upSet sf g.toList then some (g.toList, r) else pSeg sf ts
+  | _ => pSeg sf ts
+
+/-- The segments of an index set's name after the first, joined by the scope dot. -/
+def pSetLoop (sf : Sf) : Nat → List Char → List Tok → Option (List Char × List Tok)
+  | 0, _, _ => none
+  | f + 1, acc, ts =>
+    match ts with
+    | .kw .sdot :: r =>
+      match pSetSeg sf r with
+      | some (g, r') => pSetLoop sf f (acc ++ '.' :: g) r'
+      | none => none
+    | _ => some (acc, ts)
+
+/-- An index set's name (see `setToks`): a name whose segments may also be upright words
+in Typst (`upright("lev")`, `upright("lev")"."upright("top")`). -/
 def pSet (sf : Sf) (ts : List Tok) : Option (String × List Tok) :=
-  match pName sf ts with
-  | some p => some p
-  | none =>
-    match sf, ts with
-    | .typst, .ups [(s, "")] :: r => some (s, r)
-    | _, _ => none
+  match pSetSeg sf ts with
+  | some (g, r) => (pSetLoop sf (r.length + 1) g r).map fun p => (String.ofList p.1, p.2)
+  | none => none
 
 /-- A range row: `k \in S`, `k \in S(i, j)`, `a \le k \le b`. -/
 def pRange (c : Ctx) : Nat → List Tok → Option (Row × List Tok)

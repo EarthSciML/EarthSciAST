@@ -22,7 +22,7 @@ import ..MUnits
 using ..MExpr: DEPRECATED_OPS, REMOVED_OPS, is_formula, is_greek, is_letter, op_ok, pieces, Sym
 using ..MPrint: BMAT_COLS, CALL_OPS, CMP_KW, CORE_OPS, FIELD_CALL_OPS, FN_KW, MAT_HEAD, RED_TABLE, Ctx, call_form_node, FaqForm, MkForm, faq_json,
     formula_raw, ins_kv, mk_json, mk_node, node, simple_tok, tname_ok, tparams, unesc_k,
-    unesc_t, spell_unit_factors
+    unesc_t, spell_unit_factors, up_set
 using ..MSurface: neg_num
 using ..DLimits: nested, removed_op!, shallow
 
@@ -1382,13 +1382,33 @@ function p_euler_exp(c::Ctx, f::Int, ts::Toks)
     return node("exp", Any[y[1]]), y[2]
 end
 
-"""`Math.pSet`: an index set's name: a name, or in Typst one upright word."""
-function p_set(sf::Sf, ts::Toks)
-    y = p_name(sf, ts)
-    y === nothing || return y
+"""`Math.pSetSeg`: one segment of an index set's name: an upright word `upSet` sets
+upright, or a name segment."""
+function p_set_seg(sf::Sf, ts::Toks)
     t = tk(ts)
-    if sf == SF_TYPST && t isa TUps && length(t.ps) == 1 && t.ps[1][2] == ""
-        return t.ps[1][1], tdrop(ts)
+    if t isa TUps && length(t.ps) == 1 && t.ps[1][2] == ""
+        g = collect(Char, t.ps[1][1])
+        up_set(sf, g) && return g, tdrop(ts)
+    end
+    return p_seg(sf, ts)
+end
+
+"""`Math.pSet`: an index set's name, its segments joined by the scope dot."""
+function p_set(sf::Sf, ts::Toks)
+    x = p_set_seg(sf, ts)
+    x === nothing && return nothing
+    acc, r = x
+    acc = copy(acc)
+    while true
+        if kat(r, 1, KSdot)
+            y = p_set_seg(sf, tdrop(r))
+            y === nothing && return nothing
+            push!(acc, '.')
+            append!(acc, y[1])
+            r = y[2]
+        else
+            return String(acc), r
+        end
     end
     return nothing
 end

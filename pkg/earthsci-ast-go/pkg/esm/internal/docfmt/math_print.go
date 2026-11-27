@@ -1433,20 +1433,32 @@ func prFaqOk(f FaqForm) bool {
 	return true
 }
 
-// prUpSet is `Math.upSet`: an index set's name prints upright in a Typst range
-// row when it would otherwise print `italic("…")`.
-func prUpSet(sf Sf, s string) bool {
-	g := []rune(s)
+// prUpSet is `Math.upSet`: a segment of an index set's name prints upright in a
+// Typst range row when it would otherwise print `italic("…")`.
+func prUpSet(sf Sf, g []rune) bool {
 	_, _, sub := exprSubParts(g)
-	return sf == SfTypst && !slices.Contains(g, '.') && !exprIsSingle(g) && !sub && !exprIsFormula(g)
+	return sf == SfTypst && exprSegOk(g) && !exprIsSingle(g) && !sub && !exprIsFormula(g)
+}
+
+// prSetSegToks is `Math.setSegToks`: one segment of an index set's name.
+func prSetSegToks(sf Sf, g []rune) []Tok {
+	if prUpSet(sf, g) {
+		return []Tok{tUps([]UpsPair{{A: string(g), B: ""}})}
+	}
+	return prSegToks(sf, g)
 }
 
 // prSetToks is `Math.setToks`: the tokens of an index set's name in a range row.
 func prSetToks(c Ctx, s string) []Tok {
-	if prUpSet(c.sf, s) {
-		return []Tok{tUps([]UpsPair{{A: s, B: ""}})}
+	if prExplicitName(c.s, s) {
+		return []Tok{tIt(s)}
 	}
-	return prNameToks(c, s)
+	segs := exprSplitDots([]rune(s))
+	xs := make([][]Tok, len(segs))
+	for i, g := range segs {
+		xs[i] = prSetSegToks(c.sf, g)
+	}
+	return prSepBy([]Tok{tKw(KwSdot)}, xs)
 }
 
 // prRowToks is `Math.rowToks`: a range row: `a \le k \le b`, `k \in S`,

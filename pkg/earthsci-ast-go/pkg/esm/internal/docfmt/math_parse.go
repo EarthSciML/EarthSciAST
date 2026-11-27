@@ -1864,16 +1864,35 @@ func psPEulerExp(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 	return prNode("exp", []Json{y}), r, true
 }
 
-// psPSet is `Math.pSet`: an index set's name: a name, or in Typst one upright
-// word.
+// psPSetSeg is `Math.pSetSeg`: one segment of an index set's name: an upright
+// word `upSet` sets upright, or a name segment.
+func psPSetSeg(sf Sf, ts []Tok) ([]rune, []Tok, bool) {
+	if len(ts) > 0 && ts[0].K == TUps && len(ts[0].Ups) == 1 && ts[0].Ups[0].B == "" {
+		if g := []rune(ts[0].Ups[0].A); prUpSet(sf, g) {
+			return g, ts[1:], true
+		}
+	}
+	return psPSeg(sf, ts)
+}
+
+// psPSet is `Math.pSet`: an index set's name, its segments joined by the scope
+// dot.
 func psPSet(sf Sf, ts []Tok) (string, []Tok, bool) {
-	if s, r, ok := psPName(sf, ts); ok {
-		return s, r, true
+	acc, r, ok := psPSetSeg(sf, ts)
+	if !ok {
+		return "", nil, false
 	}
-	if sf == SfTypst && len(ts) > 0 && ts[0].K == TUps && len(ts[0].Ups) == 1 && ts[0].Ups[0].B == "" {
-		return ts[0].Ups[0].A, ts[1:], true
+	acc = append([]rune(nil), acc...)
+	for len(r) > 0 && r[0].isKw(KwSdot) {
+		g, r2, ok := psPSetSeg(sf, r[1:])
+		if !ok {
+			return "", nil, false
+		}
+		acc = append(acc, '.')
+		acc = append(acc, g...)
+		r = r2
 	}
-	return "", nil, false
+	return string(acc), r, true
 }
 
 // psPRange is `Math.pRange`: a range row: `k \in S`, `k \in S(i, j)`,

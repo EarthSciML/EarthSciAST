@@ -229,10 +229,15 @@ theorem allOK_nameToks (c : Ctx) (hc : c.sf = .latex) (s : String) : AllOK (name
 
 /-! ## JSON -/
 
-mutual
-theorem allOK_setToks (c : Ctx) (hc : c.sf = .latex) (s : String) : AllOK (setToks c s) := by
-  rw [setToks, if_neg (by simp [upSet, hc])]; exact allOK_nameToks c hc s
+/-- LaTeX sets no set name upright: a set prints as a name. -/
+theorem setToks_latex (c : Ctx) (hc : c.sf = .latex) (s : String) : setToks c s = nameToks c s := by
+  have hg : setSegToks c.sf = segToks c.sf := by funext g; simp [setSegToks, upSet, hc]
+  simp only [setToks, nameToks, hg]
 
+theorem allOK_setToks (c : Ctx) (hc : c.sf = .latex) (s : String) : AllOK (setToks c s) := by
+  rw [setToks_latex c hc s]; exact allOK_nameToks c hc s
+
+mutual
 theorem allOK_json : ∀ v : Json, jwf v = true → AllOK (jsonToks v)
   | .null, _ => by
     simp only [jsonToks]; exact allOK_cons2 ⟨(⟨rfl, by decide⟩ : tokOK (.word "null")), allOK_nil⟩

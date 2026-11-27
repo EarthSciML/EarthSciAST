@@ -1058,17 +1058,19 @@ function faq_ok(f::FaqForm)
     end
 end
 
-"""`Math.upSet`: an index set's name prints upright in a Typst range row when it
-would otherwise print `italic("…")`."""
-function up_set(sf::Sf, s::AbstractString)
-    g = collect(Char, s)
-    return sf == SF_TYPST && !('.' in g) && !is_single(g) && sub_parts(g) === nothing &&
-        !is_formula(g)
-end
+"""`Math.upSet`: a segment of an index set's name prints upright in a Typst range
+row when it would otherwise print `italic("…")`."""
+up_set(sf::Sf, g) = sf == SF_TYPST && seg_ok(g) && !is_single(g) && sub_parts(g) === nothing &&
+    !is_formula(g)
+
+"""`Math.setSegToks`: one segment of an index set's name."""
+set_seg_toks(sf::Sf, g) = up_set(sf, g) ? Tok[TUps([(s_of(g), "")])] : seg_toks(sf, g)
 
 """`Math.setToks`: the tokens of an index set's name in a range row."""
-set_toks(c::Ctx, s::AbstractString) =
-    up_set(c.sf, s) ? Tok[TUps([(String(s), "")])] : name_toks(c, s)
+function set_toks(c::Ctx, s::AbstractString)
+    explicit_name(c.s, s) && return Tok[TIt(String(s))]
+    return sep_by((kw(KSdot),), [set_seg_toks(c.sf, g) for g in split_dots(collect(Char, s))])
+end
 
 """`Math.rowToks`: a range row: `a \\le k \\le b`, `k \\in S`, `k \\in S(i, j)`."""
 function row_toks(c::Ctx, k::AbstractString, v)

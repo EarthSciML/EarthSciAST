@@ -53,6 +53,7 @@ import {
   callFormNode,
   unescK,
   unescT,
+  upSet,
   type Ctx,
   type FaqForm,
   type RedK,
@@ -1464,15 +1465,33 @@ export function pEulerExp(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
   return r && [node('exp', [r[0]]), r[1]]
 }
 
-/** `Math.pSet`: an index set's name: a name, or in Typst one upright word. */
-export function pSet(sf: Sf, ts: Toks, i: number): P<string> {
-  const r = pName(sf, ts, i)
-  if (r !== undefined) return r
+/** `Math.pSetSeg`: an upright word `upSet` sets upright, or a name segment. */
+function pSetSeg(sf: Sf, ts: Toks, i: number): P<string> {
   const t = ts[i]
-  if (sf === 'typst' && t !== undefined && t.t === 'ups' && t.ps.length === 1 && t.ps[0][1] === '') {
+  if (
+    t !== undefined &&
+    t.t === 'ups' &&
+    t.ps.length === 1 &&
+    t.ps[0][1] === '' &&
+    upSet(sf, t.ps[0][0])
+  ) {
     return [t.ps[0][0], i + 1]
   }
-  return undefined
+  return pSeg(sf, ts, i)
+}
+
+/** `Math.pSet`: an index set's name, its segments joined by the scope dot. */
+export function pSet(sf: Sf, ts: Toks, i: number): P<string> {
+  const first = pSetSeg(sf, ts, i)
+  if (first === undefined) return undefined
+  let [acc, r] = first
+  while (isKwTok(ts[r], 'Sdot')) {
+    const g = pSetSeg(sf, ts, r + 1)
+    if (g === undefined) return undefined
+    acc += `.${g[0]}`
+    r = g[1]
+  }
+  return [acc, r]
 }
 
 /** `Math.pRange`: a range row: `k \in S`, `k \in S(i, j)`, `a \le k \le b`. */

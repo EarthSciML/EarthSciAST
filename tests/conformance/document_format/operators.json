@@ -543,6 +543,15 @@
       "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  bins: (\n    kind: \"ragged\",\n    of: (\n      \"lev\",\n    ),\n    offsets: \"off\",\n    values: \"vals\",\n  ),\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n  tracer: (\n    kind: \"interval\",\n    size: 2,\n  ),\n))\n\n#model(\"M\")\n\n#param($q$)\n\n#param($u$)\n\n#var($y$)\n\n$ y = lr([sum_(k in upright(\"lev\") \\ m in upright(\"bins\")(k)) u_(k, s) q_(k, m)])_(s in upright(\"tracer\")) $\n"
     },
     {
+      "id": "faq_set_upright_dotted",
+      "kind": "print",
+      "description": "Each segment of a scoped set name follows the set rule on its own: a word segment is upright (upright(\"lev\")\".\"upright(\"top\")), a letter keeps its name form (a\".\"upright(\"bins\")).",
+      "esm": {"esm": "2.4.0", "index_sets": {"a.bins": {"kind": "ragged", "of": ["lev.top"], "offsets": "off", "values": "vals"}, "lev.top": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": [{"args": ["u", "k"], "op": "index"}, {"args": ["q", "k", "m"], "op": "index"}], "op": "*"}, "op": "faq", "output_idx": [], "ranges": {"k": {"from": "lev.top"}, "m": {"from": "a.bins", "of": ["k"]}}}}], "variables": {"q": {"type": "parameter"}, "u": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = \\sum_{\\substack{k \\in \\mathit{lev}.\\mathit{top} \\\\ m \\in a.\\mathit{bins}(k)}} u_{k} q_{k, m}", "typst": "y = sum_(k in upright(\"lev\")\".\"upright(\"top\") \\ m in a\".\"upright(\"bins\")(k)) u_k q_(k, m)"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\n\"a.bins\":\n  kind: \"ragged\"\n  of:\n    - \"lev.top\"\n  offsets: \"off\"\n  values: \"vals\"\n\"lev.top\":\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$q$]{}\n\n:param[$u$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{\\substack{k \\in \\mathit{lev}.\\mathit{top} \\\\ m \\in a.\\mathit{bins}(k)}} u_{k} q_{k, m}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  \"a.bins\": (\n    kind: \"ragged\",\n    of: (\n      \"lev.top\",\n    ),\n    offsets: \"off\",\n    values: \"vals\",\n  ),\n  \"lev.top\": (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($q$)\n\n#param($u$)\n\n#var($y$)\n\n$ y = sum_(k in upright(\"lev\")\".\"upright(\"top\") \\ m in a\".\"upright(\"bins\")(k)) u_k q_(k, m) $\n"
+    },
+    {
       "id": "faq_set_shapes",
       "kind": "print",
       "description": "A set named by a subscript shape (x_i) or a formula (NO) prints as that name, not upright text.",

@@ -726,7 +726,7 @@ def operators(g):
     )
     E(
         "faq_set_upright",
-        "A word-named index set is upright in Typst (k in upright(\"lev\")), as is the set "
+        'A word-named index set is upright in Typst (k in upright("lev")), as is the set '
         "of a ragged range; an output index's range row too. LaTeX prints it as a name.",
         faq(
             op("*", idx("u", "k", "s"), idx("q", "k", "m")),
@@ -738,6 +738,21 @@ def operators(g):
             "lev": {"kind": "interval", "size": 3},
             "tracer": {"kind": "interval", "size": 2},
             "bins": {"kind": "ragged", "of": ["lev"], "offsets": "off", "values": "vals"},
+        },
+    )
+    E(
+        "faq_set_upright_dotted",
+        "Each segment of a scoped set name follows the set rule on its own: a word segment "
+        'is upright (upright("lev")"."upright("top")), a letter keeps its name form '
+        '(a"."upright("bins")).',
+        faq(
+            op("*", idx("u", "k"), idx("q", "k", "m")),
+            {"k": {"from": "lev.top"}, "m": {"from": "a.bins", "of": ["k"]}},
+        ),
+        names=("u", "q"),
+        index_sets={
+            "lev.top": {"kind": "interval", "size": 3},
+            "a.bins": {"kind": "ragged", "of": ["lev.top"], "offsets": "off", "values": "vals"},
         },
     )
     E(
@@ -2894,6 +2909,40 @@ def refusals(g):
             (r"\begin{bmatrix}", r"\left[\begin{array}{cc}"),
             (r"\end{bmatrix}", r" \end{array}\right]"),
         ],
+    )
+    st = expr_doc(
+        faq(idx("w", "i"), {"i": {"from": "lev"}}),
+        ("w",),
+        index_sets={"lev": {"kind": "interval", "size": 3}},
+    )
+    for cid, spelled, why in [
+        ("letter", "a", "a letter prints as a name (a), never upright"),
+        ("greek", "alpha", "a Greek name prints as its symbol (alpha)"),
+        ("euler", "e", "a letter prints as a name, never upright"),
+        ("subscript_shape", "x_i", 'the x_i shape prints x_(upright("i"))'),
+        ("formula", "NO2", 'a formula prints upright("NO")_2'),
+        ("empty", "", "an empty name is no name"),
+        ("digit_start", "2lev", "a name starts with a letter or _"),
+        ("space", "le v", "a name is an identifier"),
+        ("non_ascii", "l\u00e9v", "a name is an ASCII identifier"),
+    ]:
+        R(
+            f"set_upright_{cid}_typst",
+            "An upright set name is read only as the printer writes one, a word that would "
+            f"otherwise print italic: {why}.",
+            st,
+            typ,
+            "parse_error",
+            [('upright("lev")', f'upright("{spelled}")')],
+        )
+    R(
+        "set_upright_dotted_letter_typst",
+        "Each segment of an upright scoped set name is read by the set rule: a letter "
+        "segment is never upright.",
+        st,
+        typ,
+        "parse_error",
+        [('upright("lev")', 'upright("lev")"."upright("a")')],
     )
     return a
 

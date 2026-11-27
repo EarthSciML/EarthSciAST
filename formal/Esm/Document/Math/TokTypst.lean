@@ -290,14 +290,29 @@ theorem good_nameToks (c : Ctx) (hc : c.sf = .typst) (s : String) :
     exact good_sepBy_names _ (by simpa using splitDots_ne s.toList)
       (fun x hx => by obtain ⟨g, -, rfl⟩ := List.mem_map.1 hx; exact good_segToks g)
 
+theorem good_setSegToks (g : List Char) :
+    Good (setSegToks .typst g) ∧ Nice (setSegToks .typst g) ∧ LastCall (setSegToks .typst g) := by
+  unfold setSegToks
+  split
+  · have hu : tokOK (.ups [(String.ofList g, "")]) := ⟨(by simp), fun p hp => by simp at hp; subst hp; left; rfl⟩
+    exact ⟨good_single hu, nice_cons _ (by simp) rfl, (by simp),
+      fun t ht => by simp at ht; subst ht; exact callEnd_ups _ hu⟩
+  · exact good_segToks g
+
 theorem good_setToks (c : Ctx) (hc : c.sf = .typst) (s : String) :
     Good (setToks c s) ∧ Nice (setToks c s) ∧ LastCall (setToks c s) := by
   unfold setToks
   split
-  · have hu : tokOK (.ups [(s, "")]) := ⟨(by simp), fun p hp => by simp at hp; subst hp; left; rfl⟩
-    exact ⟨good_single hu, nice_cons _ (by simp) rfl, (by simp),
-      fun t ht => by simp at ht; subst ht; exact callEnd_ups _ hu⟩
-  · exact good_nameToks c hc s
+  · refine ⟨good_single trivial, nice_cons _ (by simp) rfl, (by simp), ?_⟩
+    intro t ht; simp at ht; subst ht
+    simp only [callEnd, tokChars, Strings.quote]
+    rw [show "italic(".toList ++ ('"' :: Strings.escape true s.toList ++ ['"']) ++ [')'] =
+      ("italic(".toList ++ ('"' :: Strings.escape true s.toList ++ ['"'])) ++ [')'] by simp,
+      List.getLast?_concat]
+    rfl
+  · rw [hc]
+    exact good_sepBy_names _ (by simpa using splitDots_ne s.toList)
+      (fun x hx => by obtain ⟨g, -, rfl⟩ := List.mem_map.1 hx; exact good_setSegToks g)
 
 /-! ## Printer pieces -/
 

@@ -16,7 +16,7 @@ use super::expr::{REMOVED_OPS, is_deprecated_op, is_formula, is_greek, is_letter
 use super::print::{
     BMAT_MAX_COLS, Ctx, FIELD_CALL_OPS, FaqForm, MkForm, RedK, faq_json, formula_raw, ins_kv,
     is_call_op, is_notation_core, mk_json, mk_node, node, prints_as_call, simple_tok, tname_ok,
-    tparams, unesc_k, unesc_t,
+    tparams, unesc_k, unesc_t, up_set,
 };
 use super::surface::neg_num;
 use super::token::{Kw, Sf, Tok};
@@ -1779,16 +1779,35 @@ pub fn p_euler_exp<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
     Some((node("exp", vec![y]), r))
 }
 
-/// `Math.pSet`: an index set's name: a name, or in Typst one upright word.
-pub fn p_set(sf: Sf, ts: &[Tok]) -> P<'_, String> {
-    if let Some(r) = p_name(sf, ts) {
-        return Some(r);
-    }
-    match ts {
-        [Tok::Ups(ps), r @ ..] if sf == Sf::Typst && ps.len() == 1 && ps[0].1.is_empty() => {
-            Some((ps[0].0.clone(), r))
+/// `Math.pSetSeg`: one segment of an index set's name: an upright word `upSet` sets
+/// upright, or a name segment.
+fn p_set_seg(sf: Sf, ts: &[Tok]) -> P<'_, Vec<char>> {
+    if let [Tok::Ups(ps), r @ ..] = ts
+        && let [(g, d)] = ps.as_slice()
+        && d.is_empty()
+    {
+        let gc: Vec<char> = g.chars().collect();
+        if up_set(sf, &gc) {
+            return Some((gc, r));
         }
-        _ => None,
+    }
+    p_seg(sf, ts)
+}
+
+/// `Math.pSet`: an index set's name, its segments joined by the scope dot (`pSetLoop`
+/// as a loop).
+pub fn p_set(sf: Sf, ts: &[Tok]) -> P<'_, String> {
+    let (mut acc, mut r) = p_set_seg(sf, ts)?;
+    loop {
+        match r {
+            [Tok::Kw(Kw::Sdot), r1 @ ..] => {
+                let (g, r2) = p_set_seg(sf, r1)?;
+                acc.push('.');
+                acc.extend(g);
+                r = r2;
+            }
+            _ => return Some((s_of(&acc), r)),
+        }
     }
 }
 

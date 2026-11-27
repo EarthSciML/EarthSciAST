@@ -38,6 +38,7 @@ from .printer import (
     tparams,
     unesc_k,
     unesc_t,
+    up_set,
 )
 from .surface import neg_num
 
@@ -1359,15 +1360,27 @@ def _p_euler_exp(c: Ctx, f: int, ts: list, i: int):
     return None if r is None else (node("exp", [r[0]]), r[1])
 
 
-def _p_set(sf: str, ts: list, i: int):
-    """``Math.pSet``: a name, or in Typst one upright word."""
-    r = p_name(sf, ts, i)
-    if r is not None:
-        return r
+def _p_set_seg(sf: str, ts: list, i: int):
+    """``Math.pSetSeg``: an upright word ``up_set`` sets upright, or a name segment."""
     t = _at(ts, i)
-    if sf == K.TYPST and _tag(t) == "ups" and len(t[1]) == 1 and t[1][0][1] == "":
+    if _tag(t) == "ups" and len(t[1]) == 1 and t[1][0][1] == "" and up_set(sf, t[1][0][0]):
         return t[1][0][0], i + 1
-    return None
+    return p_seg(sf, ts, i)
+
+
+def _p_set(sf: str, ts: list, i: int):
+    """``Math.pSet``: an index set's name, its segments joined by the scope dot."""
+    r = _p_set_seg(sf, ts, i)
+    if r is None:
+        return None
+    acc, i = r
+    while _at(ts, i) == K.SDOT:
+        r = _p_set_seg(sf, ts, i + 1)
+        if r is None:
+            return None
+        acc = acc + "." + r[0]
+        i = r[1]
+    return acc, i
 
 
 def _p_range(c: Ctx, f: int, ts: list, i: int):

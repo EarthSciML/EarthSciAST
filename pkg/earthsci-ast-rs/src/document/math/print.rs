@@ -1558,23 +1558,34 @@ pub fn faq_ok(f: &FaqForm) -> bool {
         })
 }
 
-/// `Math.upSet`: an index set's name prints upright in a Typst range row when it would
-/// otherwise print `italic("…")`.
-pub fn up_set(sf: Sf, s: &str) -> bool {
-    let cs: Vec<char> = s.chars().collect();
-    sf == Sf::Typst
-        && !cs.contains(&'.')
-        && !is_single(&cs)
-        && sub_parts(&cs).is_none()
-        && !is_formula(&cs)
+/// `Math.upSet`: a segment of an index set's name prints upright in a Typst range row
+/// when it would otherwise print `italic("…")`.
+pub fn up_set(sf: Sf, g: &[char]) -> bool {
+    sf == Sf::Typst && seg_ok(g) && !is_single(g) && sub_parts(g).is_none() && !is_formula(g)
+}
+
+/// `Math.setSegToks`: one segment of an index set's name.
+pub fn set_seg_toks(sf: Sf, g: &[char]) -> Vec<Tok> {
+    if up_set(sf, g) {
+        vec![Tok::Ups(vec![(g.iter().collect(), String::new())])]
+    } else {
+        seg_toks(sf, g)
+    }
 }
 
 /// `Math.setToks`: the tokens of an index set's name in a range row.
 pub fn set_toks(c: Ctx, s: &str) -> Vec<Tok> {
-    if up_set(c.sf, s) {
-        vec![Tok::Ups(vec![(s.to_string(), String::new())])]
+    if explicit_name(c.s, s) {
+        vec![Tok::It(s.to_string())]
     } else {
-        name_toks(c, s)
+        let cs: Vec<char> = s.chars().collect();
+        sep_by(
+            &[kw(Kw::Sdot)],
+            split_dots(&cs)
+                .iter()
+                .map(|g| set_seg_toks(c.sf, g))
+                .collect(),
+        )
     }
 }
 

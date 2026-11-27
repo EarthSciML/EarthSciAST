@@ -1313,21 +1313,24 @@ export function faqOk(f: FaqForm): boolean {
   )
 }
 
-/** `Math.upSet`: an index set's name prints upright in a Typst range row when it would
- * otherwise print `italic("…")`. */
-export function upSet(sf: Sf, s: string): boolean {
-  return (
-    sf === 'typst' &&
-    !s.includes('.') &&
-    !isSingle(s) &&
-    subParts(s) === undefined &&
-    !isFormula(s)
-  )
+/** `Math.upSet`: a segment of an index set's name prints upright in a Typst range row
+ * when it would otherwise print `italic("…")`. */
+export function upSet(sf: Sf, g: string): boolean {
+  return sf === 'typst' && segOk(g) && !isSingle(g) && subParts(g) === undefined && !isFormula(g)
+}
+
+/** `Math.setSegToks`: one segment of an index set's name. */
+export function setSegToks(sf: Sf, g: string): Tok[] {
+  return upSet(sf, g) ? [tUps([[g, '']])] : segToks(sf, g)
 }
 
 /** `Math.setToks`: the tokens of an index set's name in a range row. */
 export function setToks(c: Ctx, s: string): Tok[] {
-  return upSet(c.sf, s) ? [tUps([[s, '']])] : nameToks(c, s)
+  if (explicitName(c.s, s)) return [tIt(s)]
+  return sepBy(
+    [kw('Sdot')],
+    splitDots(s).map((g) => setSegToks(c.sf, g)),
+  )
 }
 
 /** `Math.rowToks`: a range row: `a \le k \le b`, `k \in S`, `k \in S(i, j)`. */

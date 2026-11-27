@@ -866,19 +866,26 @@ def faqOK (F : FaqForm) : Bool :=
     ((outNames F.out).contains kv.1 || occursJ kv.1 F.expr ||
       (match F.filter with | some x => occursJ kv.1 x | none => false)))
 
-/-- An index set's name in a Typst range row is set upright, `k in upright("lev")`: a set
-is named, as a function's name is (`upright("op")`), not a quantity, and an italic `lev`
-reads as the product l·e·v (decided 2026-11-26). Only a name that would otherwise print
-`italic("…")` is: one segment of two or more characters, neither the `x_i` shape nor a
-formula. A letter, a Greek name, those shapes and a dotted name print as names, and LaTeX
-prints every set name as a name. -/
-def upSet (sf : Sf) (s : String) : Bool :=
-  sf == .typst && !s.toList.contains '.' && !isSingle s.toList && subParts s.toList == none &&
-    !isFormula s.toList
+/-- A segment of an index set's name that a Typst range row sets upright, `k in
+upright("lev")`: a set is named, as a function's name is (`upright("op")`), not a
+quantity, and an italic `lev` reads as the product l·e·v (decided 2026-11-26). It is
+exactly a segment that would otherwise print `italic("…")`: an identifier that is neither
+a letter, a Greek name, the `x_i` shape nor a formula. Each segment of a scoped set name
+follows the rule on its own (`upright("lev")"."upright("top")`, `a"."upright("bins")`), so
+those other segments print as in any name, and LaTeX prints every set name as a name. The reader accepts an upright set segment only when this holds, so
+the upright spelling of a set is unique. -/
+def upSet (sf : Sf) (g : List Char) : Bool :=
+  sf == .typst && segOK g && !isSingle g && subParts g == none && !isFormula g
 
-/-- The tokens of an index set's name in a range row. -/
+/-- One segment of an index set's name. -/
+def setSegToks (sf : Sf) (g : List Char) : List Tok :=
+  if upSet sf g then [.ups [(String.ofList g, "")]] else segToks sf g
+
+/-- The tokens of an index set's name in a range row: `nameToks` with `setSegToks` for
+each segment. -/
 def setToks (c : Ctx) (s : String) : List Tok :=
-  if upSet c.sf s then [.ups [(s, "")]] else nameToks c s
+  if explicitName c.S s then [.it s]
+  else sepBy [.kw .sdot] ((splitDots s.toList).map (setSegToks c.sf))
 
 /-- A range row: `a \le k \le b`, `k \in S`, `k \in S(i, j)`. -/
 def rowToks (c : Ctx) (P : Json → Out) (kv : String × Json) : List Tok :=
