@@ -428,6 +428,12 @@ function _recur_fold(fold::_ACFold, pc::Int, body::_Node, ue, p, t, ::Type{T}) w
     acc = fold.zerobar
     op = fold.op
     if _acfold_is_table(fold)
+        if isempty(fold.refs)
+            # A pointwise join contributes at most one value. Preserve it
+            # exactly, as in the generated sweep.
+            @inbounds return fold.seg[pc] < fold.seg[pc + 1] ?
+                _eval_node(body, ue, p, t, T) : acc
+        end
         @inbounds for e in fold.seg[pc]:(fold.seg[pc + 1] - 1)
             for r in eachindex(fold.refs)
                 fold.refs[r][] = fold.cols[r][e]

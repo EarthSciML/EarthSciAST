@@ -274,6 +274,7 @@ _geo_source_rank(r::_GeoRingRef) = _geo_source_rank(r.src) - length(r.idx)
 # compile.
 function _geo_compile_agg(expr::OpExpr, g::_GeoCompileCtx)::_Node
     loopvars = collect(keys(expr.ranges))
+    _has_on_clause(expr) && sort!(loopvars)
     exts = Int[
         _geo_index_extent(expr.ranges[v], g.ctx.index_sets, g.ctx.derived_extents)
             for v in loopvars
@@ -534,7 +535,7 @@ function _geo_eval_agg(spec::_GeoAggSpec, u, p, t, ::Type{T})::Float64 where {T}
     gates = spec.gates
     filt = spec.filter
     body = spec.body
-    for tup in Iterators.product((1:e for e in spec.exts)...)
+    for tup in _agg_tuples(map(e -> 1:e, spec.exts), gates !== nothing && !isempty(gates))
         @inbounds for k in eachindex(slots)
             u[slots[k]] = Float64(tup[k])
         end

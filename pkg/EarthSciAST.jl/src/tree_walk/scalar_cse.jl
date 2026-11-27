@@ -343,6 +343,7 @@ _cse_field_key(e::OpExpr, f::Symbol, ops::Vector{Any}) =
 # share a key exactly when they read the same element.
 _cse_value_key(::Nothing) = nothing
 _cse_value_key(v::_ConstGatherRef) = (:const_gather, v.name, objectid(v.vals))
+_cse_value_key(v::_GatherBoundsRef) = (:gather_bounds, v.name, Tuple(v.dims))
 _cse_value_key(v) = _emit_canonical_value(v)
 
 # The number of a canonical form that is a bare variable (`x * 1`), in the

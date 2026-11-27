@@ -249,6 +249,12 @@ function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
             ref = expr.value::_ConstGatherRef
             return _const_gather_node(ref.vals, children; name = ref.name)
         end
+        if expr.value isa _GatherBoundsRef
+            ref = expr.value::_GatherBoundsRef
+            rank = length(ref.dims)
+            payload = _ConstGatherArray([1.0], zeros(Int, rank), ref.dims, fill(:computed, rank), ref.name)
+            return _mknode(kind = _NK_CONST_GATHER, payload = payload, children = children)
+        end
         # A live forcing buffer read at a runtime-computed offset: the same
         # subscript children, read from the buffer at each call.
         if expr.value isa _LiveGatherRef

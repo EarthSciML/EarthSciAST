@@ -69,6 +69,7 @@ mod driver;
 pub(crate) use driver::IcStart;
 mod eval;
 mod gate_walk;
+mod index_cell;
 mod layout;
 mod normalize;
 pub(crate) mod range;

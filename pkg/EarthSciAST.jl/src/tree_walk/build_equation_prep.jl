@@ -459,7 +459,8 @@ end
 #
 #   * an array PRODUCER node — a `makearray`, or a `faq` that
 #     keeps at least one symbolic output index (a SCALAR reduction, whose
-#     `output_idx` is empty, produces a scalar and must NOT be gathered); or
+#     `output_idx` is empty, produces a scalar and must NOT be gathered), an
+#     inline array literal, or a shape remap; or
 #   * a variable leaf the caller recognizes as an array; or
 #   * an ELEMENTWISE combination (`_is_scalar_op`) that is array-valued by this
 #     same rule at any depth.
@@ -501,7 +502,7 @@ function _index_pushdown_arrayish(
         o = e::OpExpr
         cached = get(memo, o, nothing)
         cached === nothing || return cached::Bool
-        r = _is_array_producer(o) || o.op in _SHAPE_REMAP_OPS ||
+        r = _is_array_producer(o) || _is_inline_const_array(o) || o.op in _SHAPE_REMAP_OPS ||
             (
             _is_scalar_op(o.op) &&
                 _anyof(a -> _index_pushdown_arrayish(a, is_array_leaf, memo), o.args)

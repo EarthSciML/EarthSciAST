@@ -88,29 +88,16 @@ Pass `--fixture` more than once to replay several documents with one set of
 adapters. Formal CI replays the resolved cases in the `scalar` and `shaped`
 directories before the generated sweeps.
 
-The Lean array test runs
-`tests/differential/shaped/pending/lazy_cell_gather.esm`. Its first cell
-evaluates to `7` and selecting the second raises
-`E_TREEWALK_CONSTARRAY_OOB`. Native Python and Rust raise that fault even for
-the first cell. Native Julia refuses the first cell with
-`unevaluable_operator` when it reads the non-scalar inline `const`.
+`tests/differential/shaped/lazy_cell_gather.esm` reads the first cell of a
+conditional broadcast and returns `7`. `lazy_cell_gather_parameter_index.esm`
+selects that cell through a computed subscript using a parameter override.
+The companion
+`tests/conformance/const_array_gather_bounds/fixtures/lazy_cell_gather_selected_fault.esm`
+selects the second cell and requires `E_TREEWALK_CONSTARRAY_OOB`.
 
-The Lean array test also checks the pending equality joins in the same directory.
-Python and Rust native agree with Lean on these probes. Julia has four
-differences.
-
-- `join_fold_order.esm` returns `1` in native Julia and the Julia reference. The contracted
-  row order yields `0`.
-- `join_extra_range_fold_order.esm` returns `2` in native Julia and the Julia reference.
-  The row order within each season yields a total of `0`.
-- `join_explicit_symbols.esm` returns `1111` for the explicit `syms` assertion
-  in native Julia. The explicit reversal yields `11110`, which the Julia
-  reference also returns.
-- `join_both_outputs.esm` returns `compiler_refused_rule` in native Julia.
-  The Julia reference agrees on the matched values and zeros.
-
-Pass a pending document explicitly with `--fixture` to replay its disagreement
-across the native adapters.
+The shaped join replays pin the contracted fold order with and without an
+extra range, the distinction between explicit `syms` and default side order,
+and the semiring identity at unmatched cells when both axes are outputs.
 
 ```sh
 python scripts/difftest/scalar.py --timeout 300 \

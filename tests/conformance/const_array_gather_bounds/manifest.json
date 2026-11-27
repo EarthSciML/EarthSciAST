@@ -222,6 +222,19 @@
       "note": "Guarded: the out-of-range read is in an `ifelse` branch that IS taken."
     },
     {
+      "id": "lazy_cell_gather_selected_fault",
+      "path": "fixtures/lazy_cell_gather_selected_fault.esm",
+      "model": "Probe",
+      "test_id": "probe",
+      "base": "inline",
+      "index": [
+        0
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "Gathering output cell 2 selects the conditional branch that reads a literal array at index 0."
+    },
+    {
       "id": "guarded_filter_inline_not_taken",
       "path": "fixtures/guarded_filter_inline_not_taken.esm",
       "model": "M",

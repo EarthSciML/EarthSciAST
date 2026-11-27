@@ -65,6 +65,7 @@ from .numpy_interpreter import (
     _compile_expr,
     _const_gather_name,
     _gather_index,
+    _has_cell_conditional,
     _resolve_symbol,
     eval_expr,
 )
@@ -231,6 +232,13 @@ class _Emitter:
         if op == "index":
             if not args:
                 return ("dyn", self.delegate(expr))
+            if len(args) > 1 and _has_cell_conditional(args[0]):
+                # Emitting the operands independently would read both arms
+                # before the compiled gather can select its cell.
+                var = self.fresh("t")
+                self.line(f"{var} = {self.intern(_compile_expr(expr))}(ctx)")
+                self.sym_vars.clear()
+                return ("dyn", var)
             arr = self.emit(args[0])
             subs = [self.emit(a) for a in args[1:]]
             var = self.fresh("t")

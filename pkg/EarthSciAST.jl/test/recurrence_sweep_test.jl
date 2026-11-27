@@ -237,6 +237,29 @@ end
         end
     end
 
+    @testset "pointwise join preserves signed zero in both recurrence compilers" begin
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "differential", "shaped", "join_both_outputs.esm"
+        )
+        doc = JSON3.read(read(path, String), Dict{String, Any})
+        model = doc["models"]["Probe"]
+        model["variables"]["seed"] = Dict("type" => "parameter", "units" => "1", "default" => 0.0)
+        delete!(model, "tests")
+        equations = Dict(eq["lhs"] => eq["rhs"] for eq in model["equations"])
+        equations["left_group"]["value"] = fill(10, 4)
+        equations["left_bucket"]["value"] = fill(1, 4)
+        equations["right_bucket"]["value"] = fill(1, 3)
+        equations["matches"]["expr"] = jop(
+            "ifelse", jop("==", "l", 1), jop("-", "seed"),
+            jidx("matches", jop("-", "l", 1), "r")
+        )
+        expected = _rs_bits(repeat([-0.0, 0.0, -0.0], 4))
+        for compiler in (:native, :interpreter)
+            prob = esm_problem(doc, (0.0, 1.0); compiler)
+            @test _rs_bits(observed_field(prob, "matches")) == expected
+        end
+    end
+
     @testset "every route and both compilers agree on a state-dependent recurrence" begin
         doc = _rs_dynamic(48)
         u = [0.3 + 0.9 * sin(0.37 * i) for i in 1:48]

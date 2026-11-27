@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFORMANCE = ROOT / "tests" / "conformance"
+SHAPED_REPLAYS = ROOT / "tests" / "differential" / "shaped"
 SPEC = importlib.util.spec_from_file_location(
     "lean_inline_tests", ROOT / "scripts" / "run-lean-inline-tests.py"
 )
@@ -101,13 +102,11 @@ class StaticArrayAssertions(unittest.TestCase):
         )
 
     def test_lazy_cell_gather(self):
-        path = ROOT / "tests/differential/shaped/pending/lazy_cell_gather.esm"
-        selected = json.loads(path.read_text())
-        rejected = json.loads(path.read_text())
-        rejected["models"]["Probe"]["equations"][0]["rhs"]["args"][1] = 2
-        success, fault = self.request_static("Probe", [selected, rejected])
-        self.assertEqual([ADAPTER.decode_float_bits(v) for v in success["values"]], [7.0])
-        self.assertEqual(fault, {"error": "E_TREEWALK_CONSTARRAY_OOB"})
+        fixtures = ("lazy_cell_gather", "lazy_cell_gather_parameter_index")
+        documents = [json.loads((SHAPED_REPLAYS / f"{name}.esm").read_text()) for name in fixtures]
+        for name, result in zip(fixtures, self.request_static("Probe", documents), strict=True):
+            with self.subTest(fixture=name):
+                self.assertEqual([ADAPTER.decode_float_bits(v) for v in result["values"]], [7.0])
 
     def test_gather_respects_scalar_conditional_shape(self):
         def node(op, *args, **fields):
@@ -211,14 +210,18 @@ class StaticArrayAssertions(unittest.TestCase):
             with self.subTest(fixture=fixture):
                 self.assertEqual(result["error"].split(":", 1)[0], code)
 
-    def test_pending_join_replays(self):
+    def test_join_replays(self):
         manifest = CONFORMANCE / "static_array_semantics" / "manifest.json"
-        source = ROOT / "tests/differential/shaped/pending"
-        for path in sorted(source.glob("join_*.esm")):
-            with self.subTest(fixture=path.name):
+        for name in (
+            "join_both_outputs",
+            "join_explicit_symbols",
+            "join_extra_range_fold_order",
+            "join_fold_order",
+        ):
+            with self.subTest(fixture=name):
                 self.check_passes(
                     manifest,
-                    {"id": path.stem, "path": str(path), "model": "Probe"},
+                    {"id": name, "path": str(SHAPED_REPLAYS / f"{name}.esm"), "model": "Probe"},
                 )
 
     def test_static_faq(self):

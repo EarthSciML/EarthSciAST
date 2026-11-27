@@ -1582,7 +1582,7 @@ end
 # build-constant arrays. `nothing` otherwise.
 function _ac_param_gate(body::_Node, fold::Union{Nothing, _ACFold})
     (
-        fold !== nothing && _acfold_is_table(fold) && isempty(fold.row) &&
+        fold !== nothing && _acfold_is_table(fold) && !isempty(fold.refs) && isempty(fold.row) &&
             fold.op === :+ && fold.zerobar === 0.0
     ) || return nothing
     (body.kind === _NK_OP && body.op === :ifelse && length(body.children) == 3) ||
@@ -1695,6 +1695,16 @@ function _cg_fold(
         ctx::_CGFunction, fold::_ACFold, cv::Symbol, kvs::Vector{Symbol}, term,
         ev::Union{Nothing, Symbol} = nothing
     )
+    if _acfold_is_table(fold) && isempty(fold.refs)
+        # A pointwise join has one term or none. Return the admitted value
+        # directly, preserving its signed zero and skipping rejected reads.
+        seg = _ac_entry_local(ctx, fold.seg)
+        ev === nothing && (ev = _cg_name(ctx, "ent"))
+        return quote
+            local $ev = $seg[$cv]
+            $ev < $seg[$cv + 1] ? $term : $(fold.zerobar)
+        end
+    end
     fnsym = _cg_oplus_fn(fold.op)
     acc = _cg_name(ctx, "acc")
     upd = :($acc = $fnsym($acc, $term))

@@ -2,7 +2,7 @@
  "esm": "2.4.0",
  "metadata": {
   "name": "static_join_self",
-  "description": "Default self-join side selection follows canonical range order. Explicit reversed symbols read successors instead of predecessors.",
+  "description": "A self-join keeps explicit syms distinct from the default side order for scalar and shaped outputs. The shaped output symbol sorts after the contraction symbol, so its output position controls the default side.",
   "authors": [
    "EarthSciML Authors and Contributors"
   ]
@@ -44,6 +44,20 @@
     "explicit_sum": {
      "type": "unknown",
      "units": "1"
+    },
+    "predecessor": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "successor": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
     }
    },
    "equations": [
@@ -160,6 +174,82 @@
        }
       ]
      }
+    },
+    {
+     "lhs": "predecessor",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "b"
+      ],
+      "ranges": {
+       "a": {
+        "from": "rows"
+       },
+       "b": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "a"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "prior",
+          "id"
+         ]
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "successor",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "b"
+      ],
+      "ranges": {
+       "a": {
+        "from": "rows"
+       },
+       "b": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "a"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "prior",
+          "id"
+         ]
+        ],
+        "syms": [
+         "a",
+         "b"
+        ]
+       }
+      ]
+     }
     }
    ],
    "tolerance": {
@@ -183,6 +273,46 @@
        "variable": "explicit_sum",
        "time": 0,
        "expected": 11110
+      },
+      {
+       "variable": "predecessor",
+       "time": 0,
+       "coords": {
+        "rows": 1
+       },
+       "expected": 0
+      },
+      {
+       "variable": "predecessor",
+       "time": 0,
+       "coords": {
+        "rows": 5
+       },
+       "expected": 1000
+      },
+      {
+       "variable": "successor",
+       "time": 0,
+       "coords": {
+        "rows": 1
+       },
+       "expected": 10
+      },
+      {
+       "variable": "successor",
+       "time": 0,
+       "coords": {
+        "rows": 4
+       },
+       "expected": 10000
+      },
+      {
+       "variable": "successor",
+       "time": 0,
+       "coords": {
+        "rows": 5
+       },
+       "expected": 0
       }
      ]
     }
