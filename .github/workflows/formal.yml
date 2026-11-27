@@ -59,6 +59,10 @@ on:
       - 'typst/packages/**'
       - 'docs/content/rfcs/discretization.md'
       - 'scripts/run-canonical-lean.py'
+      - 'scripts/run-lean-rewrite-conformance.py'
+      - 'tests/conformance/expression_templates/**'
+      - 'tests/invalid/template_imports/body_*.esm'
+      - 'tests/invalid/expected_errors.json'
       - 'tests/conformance/canonical/**'
       - '.github/workflows/formal.yml'
   pull_request:
@@ -105,6 +109,10 @@ on:
       - 'typst/packages/**'
       - 'docs/content/rfcs/discretization.md'
       - 'scripts/run-canonical-lean.py'
+      - 'scripts/run-lean-rewrite-conformance.py'
+      - 'tests/conformance/expression_templates/**'
+      - 'tests/invalid/template_imports/body_*.esm'
+      - 'tests/invalid/expected_errors.json'
       - 'tests/conformance/canonical/**'
       - '.github/workflows/formal.yml'
   workflow_dispatch:
@@ -253,6 +261,9 @@ jobs:
 
     - name: Score the model on the canonical expression byte fixtures
       run: python3 scripts/run-canonical-lean.py
+
+    - name: Check component-local rewrite conformance
+      run: python3 scripts/run-lean-rewrite-conformance.py
 
     - uses: julia-actions/setup-julia@v3
       id: setup-julia

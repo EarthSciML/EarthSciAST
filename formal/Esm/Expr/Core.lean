@@ -355,14 +355,16 @@ def indexVal : Val α → List Int → Except EvalError α
   | _, _ => .error (.typeError "index: operand rank and index count disagree")
 
 /-- The row-major offset, checking each one-based subscript against its own axis. -/
-private def indexOffset (offset : Nat) : List Nat → List Int → Except EvalError Nat
+def indexOffset (offset : Nat) : List Nat → List Int → Except EvalError Nat
   | [], [] => .ok offset
   | dim :: dims, i :: is =>
     if 1 ≤ i ∧ i ≤ (dim : Int) then indexOffset (offset * dim + (i - 1).toNat) dims is
     else .error .outOfRange
   | _, _ => .error (.typeError "index: operand rank and index count disagree")
 
-private def indexRect (data : ArrayData (Val α)) (subscripts : List Int) :
+/-- Check leading coordinates and read a cell or a trailing slice from a
+rectangular array's row-major storage. -/
+def indexRect (data : ArrayData (Val α)) (subscripts : List Int) :
     Except EvalError (Val α) := do
   let n := subscripts.length
   if n > data.dims.length then
@@ -951,7 +953,8 @@ private def shapeResult {β : Type} (result : Option β) : Except EvalError β :
   | some result => pure result
   | none => throw .shapeMismatch
 
-private def applyCell (op : StrictOp) (values : List (Val α)) : Except EvalError (Val α) :=
+/-- Apply a strict primitive to one set of scalar cell operands. -/
+def applyCell (op : StrictOp) (values : List (Val α)) : Except EvalError (Val α) :=
   if hasInf values then strictWithInf op values else Val.num <$> applyStrict op values
 
 def broadcastArity (fn : String) (arity : Nat) : Bool :=

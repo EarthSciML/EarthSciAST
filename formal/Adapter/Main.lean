@@ -5,6 +5,7 @@ import Adapter.Units
 import Adapter.Doc
 import Adapter.Expressions
 import Adapter.CanonicalExpr
+import Adapter.Rewrite
 
 /-! The `esm-lean` adapter: `esm-lean <mode> <args>…`. Each mode reads the same
 fixture files the binding adapters read and prints the same result JSON. -/
@@ -13,6 +14,7 @@ def usage : String :=
   "usage: esm-lean <mode> <args>…\n" ++
   "modes:\n" ++
   "  templates <document.esm> [model [case.json]] evaluate the apply_operator equations of a document\n" ++
+  "  rewrite-templates [--expanded] <document.esm> <component> lower its local expression roots\n" ++
   "  static-assertions <doc.esm> <model> evaluate requested static assertions (JSON on stdin)\n" ++
   "  static-assertions-jsonl <model> evaluate static assertions for a stream of ESM documents\n" ++
   "  units <unit_verdicts.json> resolve every unit string in a unit-registry golden\n" ++
@@ -29,6 +31,7 @@ def main (args : List String) : IO UInt32 := do
   match args with
   | "determinism" :: rest => Adapter.Determinism.main rest
   | "templates" :: rest => Adapter.Templates.main rest
+  | "rewrite-templates" :: rest => Adapter.Rewrite.main rest
   | "static-assertions" :: rest => Adapter.Static.main rest
   | "static-assertions-jsonl" :: rest => Adapter.Static.batch rest
   | "units" :: rest => Adapter.Units.main rest

@@ -29,10 +29,11 @@ Pass `--shaped` to generate documents with static arrays. The shaped sweep
 allocates cases across seven families and compares every cell of the result.
 It covers filtered `faq` reductions, indirect gathers, transpose, reshape,
 concat, scalar broadcast, and overlapping `makearray` regions. Cases vary
-interval extents from one to four and use small integer inputs. The transpose,
-reshape, and concat cases start at extent two and observe each transformed
-cell through a literal gather. The shaped results compare exactly in
-binary64, including the sign of zero.
+interval extents from one to four and use small integer inputs. Transpose is
+tested as a bare array definition, including singleton axes. The reshape and
+concat cases start at extent two and observe each transformed cell through a
+literal gather. The shaped results compare exactly in binary64, including the
+sign of zero.
 
 Each participant stays alive for the sweep. Use `--adapter NAME=COMMAND` to
 add a participant. `--timeout` bounds each complete request and response.
@@ -78,10 +79,10 @@ The 1,200-case sweep with seed 20261026 shrank one disagreement to
 zero. The Lean model now returns negative zero for both operand orders.
 Replay `tests/differential/scalar/negative_zero_min.esm` to check those bits.
 
-`tests/differential/shaped/bare_transpose_1x1.esm` is a 1×1 bare transpose of a
-const array, and `tests/differential/shaped/permuted_static_alias.esm` is a
-state-free alias that reverses its operand's declared axes. Every participant
-returns positive zero for the first and `3` for the second.
+The 1×1 bare transpose in `tests/differential/shaped/bare_transpose_1x1.esm`
+preserves both axes of a one-cell const array and returns positive zero.
+`tests/differential/shaped/permuted_static_alias.esm` checks a state-free alias
+that reverses its operand's declared axes and returns `3` for the saved cell.
 
 Pass `--fixture` more than once to replay several documents with one set of
 adapters. Formal CI replays every document under `tests/differential` this way

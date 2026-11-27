@@ -1,0 +1,19 @@
+{
+  "esm": "2.4.0",
+  "metadata": {"name": "TimeAxisInDefinition"},
+  "domain": {"independent_variable": "clock"},
+  "models": {
+    "Probe": {
+      "variables": {
+        "u": {"type": "unknown", "default": 0},
+        "temporal": {"type": "unknown"},
+        "spatial": {"type": "unknown"}
+      },
+      "equations": [
+        {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": 1},
+        {"lhs": "temporal", "rhs": {"op": "D", "args": ["u"], "wrt": "t"}},
+        {"lhs": "spatial", "rhs": 17}
+      ]
+    }
+  }
+}

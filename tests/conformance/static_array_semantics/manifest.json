@@ -35,7 +35,7 @@
   "golden_atol": 1e-12,
   "detail": "Compare each state-free observation with its reference actual."
  },
- "description": "State-free counterparts and existing static native fixtures for the shaped parameter, elementwise observed gather, and simulate_faq tiers.",
+ "description": "State-free counterparts and existing static native fixtures for the shaped parameter, indexed equation, elementwise observed gather, and simulate_faq tiers.",
  "fixtures": [
   {
    "id": "shaped_parameter_defaults",
@@ -281,6 +281,62 @@
      "native"
     ],
     "python": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "static_rank2_indexed_lhs",
+   "path": "fixtures/static_rank2_indexed_lhs.esm",
+   "model": "RankTwoIndexedLhs",
+   "golden": "golden/static_rank2_indexed_lhs.json",
+   "tags": [
+    "static",
+    "indexed-lhs",
+    "faq",
+    "rank-2"
+   ],
+   "note": "A bare indexed LHS and a faq-shelled LHS define identical cells on an asymmetric rank-two frame.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "static_rank2_elementwise_gather",
+   "path": "fixtures/static_rank2_elementwise_gather.esm",
+   "model": "RankTwoElementwiseGather",
+   "golden": "golden/static_rank2_elementwise_gather.json",
+   "tags": [
+    "static",
+    "gather",
+    "elementwise",
+    "rank-2"
+   ],
+   "note": "Gathering a bare elementwise expression or its named observed agrees with gathering each leaf first.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
      "interpreter",
      "native"
     ]

@@ -220,6 +220,8 @@ end
 # lowering — is exactly the promoted-faq case, just spelled with the
 # public op name. A SCALAR reduction (empty `output_idx`) is not an array
 # producer and keeps the scalar-observed path.
+# A bare transpose also qualifies for per-cell gathers when the build cannot
+# fold it into a const array.
 function _collect_array_inline_vars(
         model::Model, equations::Vector{Equation},
         geom_setup_vars::Set{String}, geom_inline_vars::Set{String}
@@ -237,7 +239,7 @@ function _collect_array_inline_vars(
         (name in observed_here && _is_array_shape(v.shape)) || continue
         (
             eq.rhs isa OpExpr && (
-                (eq.rhs::OpExpr).op == "faq" ||
+                (eq.rhs::OpExpr).op in ("faq", "transpose") ||
                     _is_array_producer(eq.rhs)
             )
         ) || continue
@@ -630,11 +632,9 @@ end
 # (`_alias_in_own_axes`). A `transpose` or integer-shape `reshape` of such an
 # operand (esm-spec §4.3.5) is build-time data too and is folded the same way.
 # Only chains ending at a `const`-op observed / caller `const_arrays` entry
-# resolve; any other alias keeps the existing unsupported-shape error. Empty
-# (byte-identical) for documents without bare-alias array observeds. Mutates
-# `const_obs_arrays` / `const_obs_vars` in place. The ownership-exclusion sets
-# are keyword-only: they are all same-typed `Set{String}`s, so positional
-# passing could silently swap two of them.
+# resolve. A transpose the build cannot fold uses per-cell gathers.
+# Mutates `const_obs_arrays` and `const_obs_vars` and removes folded
+# transposes from `array_inline_vars`.
 function _register_bare_alias_arrays!(
         const_obs_arrays::Dict{String, Array{Float64}},
         const_obs_vars::Set{String},
@@ -687,7 +687,7 @@ function _register_bare_alias_arrays!(
         (haskey(obs_defs, name) && _is_array_shape(v.shape)) || continue
         (
             name in const_obs_vars || name in geom_setup_vars ||
-                name in geom_inline_vars || name in array_inline_vars
+                name in geom_inline_vars
         ) && continue
         rhs = get(alias_defs, name, nothing)
         (
@@ -698,6 +698,8 @@ function _register_bare_alias_arrays!(
         r === nothing && continue
         const_obs_arrays[name] = _alias_in_own_axes(r[1], v.shape, r[2])
         push!(const_obs_vars, name)
+        # A folded transpose is already available to every reader as a const array.
+        delete!(array_inline_vars, name)
     end
     return nothing
 end
