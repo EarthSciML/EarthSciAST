@@ -1145,9 +1145,11 @@ impl Rewriter<'_> {
     /// symbols), rewritten in that scope. Any other range of the `faq` (a
     /// contraction) stays a scalar `faq` over it, with the `faq`'s filter;
     /// with no contraction, a filter selects the body where it holds and
-    /// the reduction's identity elsewhere, as the array `faq`'s element is. A `faq` carrying a `key`,
-    /// `args`, `join` or `distinct` is refused: those name the output
-    /// indices too, and are not rewritten here.
+    /// the reduction's identity elsewhere, as the array `faq`'s element is.
+    /// An `args` list that names only operand variables is the list of
+    /// arrays the body reads (esm-spec §4.3.1) and changes nothing; any
+    /// other `args`, a `key`, a `join` or `distinct` is refused: those name
+    /// the output indices too, and are not rewritten here.
     fn faq_at(
         &mut self,
         f: &ExpressionNode,
@@ -1155,13 +1157,13 @@ impl Rewriter<'_> {
         sc: &LScope,
     ) -> RResult<Expr> {
         if f.key.is_some()
-            || !f.args.is_empty()
+            || !f.args.iter().all(|a| matches!(a, Expr::Variable(_)))
             || f.join.as_ref().is_some_and(|j| !j.is_empty())
             || f.distinct == Some(true)
         {
             return self.refuse(
-                "reads an array faq that carries a `key`, `args`, `join` or `distinct`, which a \
-                 lane does not rewrite",
+                "reads an array faq that carries a `key`, a `join`, `distinct`, or `args` that \
+                 are not only operand variables, which a lane does not rewrite",
             );
         }
         let Some(body) = f.expr.as_deref() else {

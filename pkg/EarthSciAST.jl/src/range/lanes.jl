@@ -460,13 +460,17 @@ function _lane_faq_read(
     )
     outs = _output_idx_strings(F)
     length(outs) == length(subs) || _lane_refuse(rule, "an array faq is read at the wrong rank")
-    # `args`, `key`, `join` and `distinct` are scoped to the node itself (they
-    # name its output indices); the body alone moves.
+    # `key`, `join` and `distinct` are scoped to the node itself (they name
+    # its output indices); the body alone moves. An `args` list that names
+    # only operand variables is the list of arrays the body reads (esm-spec
+    # §4.3.1) and changes nothing; any other `args` is refused.
     (
-        isempty(F.args) && F.key === nothing &&
+        all(a -> a isa VarExpr, F.args) && F.key === nothing &&
             (F.join === nothing || isempty(F.join)) && F.distinct !== true
     ) || _lane_refuse(
-        rule, "an array faq read inside the lane scope carries `args`, `key`, `join` or `distinct`"
+        rule,
+        "an array faq read inside the lane scope carries `key`, `join`, `distinct`, or `args` " *
+            "that are not only operand variables"
     )
     renames = Dict{String, ASTExpr}()
     names = Set{String}()

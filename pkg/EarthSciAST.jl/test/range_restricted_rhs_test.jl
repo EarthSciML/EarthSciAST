@@ -1400,14 +1400,15 @@ _rrt_lane_spec() = RRT._LaneSpec(
     )
     @test _rrt_lane_refusal(() -> lanes(rhs_program(prob), :columns, ["x"]; chunk = 4)) === :refused
 
-    # An array faq carrying `args` is refused.
+    # An array faq whose `args` name only its operand arrays (esm-spec
+    # §4.3.1) builds lanes; any other `args` is refused (below).
     withargs = merge(faq(["i", "j"], xy, op("*", -1.0, ix("u", "i", "j"))), Dict("args" => Any["u"]))
     prob = _rrt_doc_of(
         "laneargs", sets, Dict("u" => st(["x", "y"])), Any[
             Dict("lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"), "rhs" => withargs),
         ]
     )
-    @test _rrt_lane_refusal(() -> lanes(rhs_program(prob), :cells, ["x", "y"]; chunk = 4)) === :refused
+    @test lanes(rhs_program(prob), :cells, ["x", "y"]; chunk = 4) isa EarthSciAST.LaneProgram
 
     # An array faq carrying `join` or `distinct` is refused. No whole-domain
     # program reads one this way (it is a value-invention producer), so the
@@ -1428,6 +1429,16 @@ _rrt_lane_spec() = RRT._LaneSpec(
                 () -> ESA._lane_rewrite(spec, (; arrays = Dict{String, Any}()), read, scope, "rule")
             ) === :refused
         end
+        # `args` holding anything but operand variables is refused too.
+        F = ESA.OpExpr(
+            "faq", ESA.ASTExpr[ESA.NumExpr(1.0)]; output_idx = Any["i"],
+            ranges = Dict{String, Any}("i" => Dict("from" => "x")),
+            expr_body = ESA.OpExpr("index", ESA.ASTExpr[V("u"), V("i")])
+        )
+        read = ESA.OpExpr("index", ESA.ASTExpr[F, V("l")])
+        @test _rrt_lane_refusal(
+            () -> ESA._lane_rewrite(spec, (; arrays = Dict{String, Any}()), read, scope, "rule")
+        ) === :refused
     end
 
     # A bare read on a non-lane axis whose subscript runs over a range that

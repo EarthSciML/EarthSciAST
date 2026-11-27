@@ -1593,28 +1593,34 @@ fn makearray_faq_region_values_build_lanes() {
     );
 }
 
-/// An array `faq` carrying `args` (or a `key`) names its output indices
-/// outside the body, where a lane does not rewrite them: a structured lane
-/// refusal, not a wrong value or a panic.
+/// An array `faq` whose `args` name only its operand arrays (esm-spec
+/// §4.3.1) builds lanes, equal to the whole-domain program; `args` holding
+/// anything else is a structured lane refusal, not a wrong value or a panic.
 #[test]
-fn an_array_faq_carrying_args_is_refused_by_lanes() {
-    let doc = model(
-        json!({"x": {"kind": "interval", "size": 3}}),
-        json!({"u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0}}),
-        json!([{"lhs": d_of(json!("u")),
-                "rhs": {"op": "faq", "args": ["u"], "output_idx": ["i"],
-                        "ranges": {"i": {"from": "x"}},
-                        "expr": {"op": "*", "args": [-1.0, ix("u", vec![json!("i")])]}}}]),
-    );
-    let prog = program(&doc, Compiler::Native);
-    let err = prog
-        .lanes(
-            LaneKind::Cells {
-                sets: vec!["x".to_string()],
-            },
-            4,
+fn an_array_faq_carrying_args_builds_lanes_only_for_operand_names() {
+    let n = 3;
+    let doc_with = |args: serde_json::Value| {
+        model(
+            json!({"x": {"kind": "interval", "size": n}}),
+            json!({"u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0}}),
+            json!([{"lhs": d_of(json!("u")),
+                    "rhs": {"op": "faq", "args": args, "output_idx": ["i"],
+                            "ranges": {"i": {"from": "x"}},
+                            "expr": {"op": "*", "args": [-1.0, ix("u", vec![json!("i")])]}}}]),
         )
-        .expect_err("an array faq with args has no lane form");
+    };
+    let kind = || LaneKind::Cells {
+        sets: vec!["x".to_string()],
+    };
+    let prog = program(&doc_with(json!(["u"])), Compiler::Native);
+    let lanes = prog
+        .lanes(kind(), 2)
+        .expect("an operand list is no obstacle");
+    assert_lanes_match(&prog, &lanes, &[n], 0.5);
+    let prog = program(&doc_with(json!([2.0])), Compiler::Native);
+    let err = prog
+        .lanes(kind(), 2)
+        .expect_err("args that are not operand names have no lane form");
     assert!(err.to_string().contains("lane:"), "{err}");
     assert!(err.to_string().contains("`args`"), "{err}");
 }
@@ -1746,33 +1752,29 @@ fn an_observed_of_t_with_no_lane_form_builds_one_time_lanes() {
         .expect("one lane is never at mixed times");
 }
 
-/// Two wholesale array observeds of `t` over the lane set, `s = faq{…}` and
-/// `g = faq{args, …}`: `s` has a lane form and is computed per lane, while
-/// `g`, an array `faq` carrying `args`, has none and stays one
-/// whole-domain value per call. Every call at one time equals the
-/// whole-domain program, and a batch at mixed times is an error naming `g`
-/// alone.
+/// Two observeds of `t`: `s = faq{…}` over the lane set has a lane form
+/// and is computed per lane, while `g`, over a set that is not a lane set
+/// (read through a contraction), has none and stays one whole-domain value
+/// per call. Every call at one time equals the whole-domain program, and a
+/// batch at mixed times is an error naming `g` alone.
 #[test]
 fn only_the_observeds_of_t_with_no_lane_form_stay_whole_domain() {
     let n = 5;
-    let body = |k: f64| json!({"op": "cos", "args": [{"op": "+", "args": ["t", {"op": "*", "args": [k, "i"]}]}]});
+    let body = |k: f64, i: &str| json!({"op": "cos", "args": [{"op": "+", "args": ["t", {"op": "*", "args": [k, i]}]}]});
     let doc = model(
-        json!({"x": {"kind": "interval", "size": n}}),
+        json!({"x": {"kind": "interval", "size": n}, "w": {"kind": "interval", "size": 3}}),
         json!({
             "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
             "s": {"type": "unknown", "units": "1", "shape": ["x"]},
-            "g": {"type": "unknown", "units": "1", "shape": ["x"]},
-            "c": {"type": "parameter", "units": "1", "default": 0.25}
+            "g": {"type": "unknown", "units": "1", "shape": ["w"]}
         }),
         json!([
-            {"lhs": "s", "rhs": faq_node(&["i"], json!({"i": {"from": "x"}}), body(0.5))},
-            {"lhs": "g", "rhs": {"op": "faq", "args": ["c"], "output_idx": ["i"],
-                                 "ranges": {"i": {"from": "x"}},
-                                 "expr": {"op": "*", "args": ["c", body(0.25)]}}},
+            {"lhs": "s", "rhs": faq_node(&["i"], json!({"i": {"from": "x"}}), body(0.5, "i"))},
+            {"lhs": "g", "rhs": faq_node(&["m"], json!({"m": {"from": "w"}}), body(0.25, "m"))},
             {"lhs": d_of(json!("u")),
-             "rhs": faq_node(&["i"], json!({"i": {"from": "x"}}),
+             "rhs": faq_node(&["i"], json!({"i": {"from": "x"}, "m": {"from": "w"}}),
                  json!({"op": "*", "args": [ix("s", vec![json!("i")]),
-                     ix("g", vec![json!("i")]), ix("u", vec![json!("i")])]}))}
+                     ix("g", vec![json!("m")]), ix("u", vec![json!("i")])]}))}
         ]),
     );
     let prog = program(&doc, Compiler::Native);

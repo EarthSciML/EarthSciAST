@@ -114,14 +114,14 @@ function _rrc_op(c, prob)
 end
 
 # G: the whole-domain evaluation at the generated state.
-function _rrc_whole(op, p)
+function _rrc_whole(op, p, t = 0.0)
     L = RRC.tile_layout(op)
     ext = _rrc_extents(op)
     id = (b, g) -> g
     u = _rrc_fill(L.u, L.n_u, ext, id)
     aux = _rrc_fill(L.aux, L.n_aux, ext, id)
     du = fill(NaN, L.n_u)
-    RRC.rhs!(du, op, RRC.rhs_workspace(op), u, aux, p, 0.0, RRC.default_forcing_set(op))
+    RRC.rhs!(du, op, RRC.rhs_workspace(op), u, aux, p, t, RRC.default_forcing_set(op))
     return du, ext
 end
 
@@ -267,7 +267,8 @@ function _rrc_lanes(c, prob)
         end
         return buf
     end
-    function check(du, cells, n; expect = true)
+    # Lane `l` against `Gs[l]`: `G`, or the whole-domain program at its time.
+    function check(du, cells, n; Gs = fill(G, n))
         L = size(cells, 2)
         ok = true
         for b in LL.u
@@ -276,7 +277,7 @@ function _rrc_lanes(c, prob)
                 for (e, rest) in enumerate(CartesianIndices(Tuple(1:x for x in b.extents)))
                     g = _rrc_lane_cell(wb.sets, sets, cells[:, l], b.sets, Tuple(rest))
                     gs = RRC._tile_slot(wb, Tuple(g))
-                    ok &= _rrc_bits(du[(b.offset + e - 1) * L + l]) == _rrc_bits(G[gs])
+                    ok &= _rrc_bits(du[(b.offset + e - 1) * L + l]) == _rrc_bits(Gs[l][gs])
                 end
             end
         end
@@ -289,25 +290,39 @@ function _rrc_lanes(c, prob)
             u = gather(LL.u, LL.n_u, cells)
             aux = gather(LL.aux, LL.n_aux, cells)
             du = fill(NaN, LL.n_u * size(cells, 2))
-            RRC.rhs!(du, lp, ws, u, aux, prob.p, 0.0, fs, cells, n)
-            @test check(du, cells, n)
-            li = RRC.lane_inputs(lp, size(cells, 2))
-            RRC.gather_lane_inputs!(li, lp, prob.p, 0.0, fs, cells, n)
-            du2 = fill(NaN, LL.n_u * size(cells, 2))
-            RRC.rhs!(du2, lp, ws, u, aux, prob.p, 0.0, li, cells, n)
-            @test check(du2, cells, n)
-            if String(batch.id) == String(c.negative_control.batch)
-                a, b = Int.(c.negative_control.swap_lanes)
-                L = size(cells, 2)
-                swap!(buf, nper) = for e in 0:(nper - 1)
-                    buf[e * L + a], buf[e * L + b] = buf[e * L + b], buf[e * L + a]
+            if haskey(batch, :times)
+                # A time per lane (U19): lane `l` against the whole-domain
+                # program at `times[l]`, plain and pre-gathered.
+                ts = Float64[Float64(x) for x in batch.times]
+                Gs = [_rrc_whole(op, prob.p, ts[l])[1] for l in 1:n]
+                RRC.rhs!(du, lp, ws, u, aux, prob.p, ts, fs, cells, n)
+                @test check(du, cells, n; Gs)
+                li = RRC.lane_inputs(lp, size(cells, 2))
+                RRC.gather_lane_inputs!(li, lp, prob.p, ts[1], fs, cells, n)
+                du2 = fill(NaN, LL.n_u * size(cells, 2))
+                RRC.rhs!(du2, lp, ws, u, aux, prob.p, ts, li, cells, n)
+                @test check(du2, cells, n; Gs)
+            else
+                RRC.rhs!(du, lp, ws, u, aux, prob.p, 0.0, fs, cells, n)
+                @test check(du, cells, n)
+                li = RRC.lane_inputs(lp, size(cells, 2))
+                RRC.gather_lane_inputs!(li, lp, prob.p, 0.0, fs, cells, n)
+                du2 = fill(NaN, LL.n_u * size(cells, 2))
+                RRC.rhs!(du2, lp, ws, u, aux, prob.p, 0.0, li, cells, n)
+                @test check(du2, cells, n)
+                if String(batch.id) == String(c.negative_control.batch)
+                    a, b = Int.(c.negative_control.swap_lanes)
+                    L = size(cells, 2)
+                    swap!(buf, nper) = for e in 0:(nper - 1)
+                        buf[e * L + a], buf[e * L + b] = buf[e * L + b], buf[e * L + a]
+                    end
+                    u2, aux2 = copy(u), copy(aux)
+                    swap!(u2, LL.n_u)
+                    swap!(aux2, LL.n_aux)
+                    du3 = fill(NaN, LL.n_u * L)
+                    RRC.rhs!(du3, lp, ws, u2, aux2, prob.p, 0.0, fs, cells, n)
+                    @test !check(du3, cells, n)
                 end
-                u2, aux2 = copy(u), copy(aux)
-                swap!(u2, LL.n_u)
-                swap!(aux2, LL.n_aux)
-                du3 = fill(NaN, LL.n_u * L)
-                RRC.rhs!(du3, lp, ws, u2, aux2, prob.p, 0.0, fs, cells, n)
-                @test !check(du3, cells, n)
             end
         end
     end

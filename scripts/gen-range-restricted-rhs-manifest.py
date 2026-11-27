@@ -56,6 +56,7 @@ DOCS = {
     "lanes_surface_region": {"document": "fixtures/lanes_surface_region.esm"},
     "lanes_time_observed_ic": {"document": "fixtures/lanes_time_observed_ic.esm"},
     "lanes_data_and_time_observeds": {"document": "fixtures/lanes_data_and_time_observeds.esm"},
+    "lanes_args_operand_list": {"document": "fixtures/lanes_args_operand_list.esm"},
     "global_horizontal_sum": {"document": "fixtures/global_horizontal_sum.esm"},
     "global_scalar_state": {"document": "fixtures/global_scalar_state.esm"},
     "esd_ppm_1d_periodic": {
@@ -659,6 +660,32 @@ def lane_cases():
             ],
             "negative_control": {"batch": "mixed_levels", "swap_lanes": [1, 2]},
             "covers": ["lanes", "state_free_observed", "time_observed_per_lane"],
+        }
+    )
+    # An observed of t defined by an array faq whose `args` list only its
+    # operand arrays: computed per lane, in a batch whose lanes are each at
+    # their own time (`times`, one per lane; the harness compares lane l with
+    # the whole-domain program at times[l]) and in one at t = 0.
+    out.append(
+        {
+            "id": "lanes_args_operand_list",
+            "kind": "lanes",
+            **doc_ref("lanes_args_operand_list"),
+            "selection": SELECT_ALL,
+            "lane_kind": "cells",
+            "lane_sets": ["lon", "lat", "lev"],
+            "capacity": cap,
+            "batches": [
+                {
+                    "id": "mixed_times",
+                    "cells": perm[:cap],
+                    "n": cap,
+                    "times": [0.25 * l + (0.5 if l % 3 == 0 else 0.0) for l in range(cap)],
+                },
+                {"id": "one_time", "cells": perm[cap : 2 * cap], "n": cap},
+            ],
+            "negative_control": {"batch": "one_time", "swap_lanes": [1, 2]},
+            "covers": ["lanes", "faq_args_operand_list", "per_lane_times"],
         }
     )
     # A lane program over an operator that reads a neighbour is refused.
