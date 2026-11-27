@@ -90,6 +90,7 @@ __all__ = [
     "faq_bare_array_operand_message",
     "faq_bare_array_operands",
     "faq_bare_exempt_names",
+    "first_unalignable_operand",
     "iter_named_operands",
     "unalignable_axes",
 ]
@@ -200,19 +201,75 @@ def _elementwise_names(expr: Any) -> Iterator[str]:
             stack.extend(reversed(args))
 
 
-def _expression_axes(expr: Any, axes: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
-    """Union the named axes on the elementwise value path in operand order."""
+def _expression_axes(
+    expr: Any,
+    axes: dict[str, tuple[str, ...]],
+    target: str = "",
+    include_anonymous: bool = False,
+) -> tuple[str, ...]:
+    """Union the named axes on the elementwise value path in operand order.
+
+    The operands are the named variables and the ``faq``/``makearray``
+    producers that path reaches, at any depth: ``k * faq(...)`` spans the
+    producer's index sets, as Julia's ``_expr_axes`` reads it (esm-spec §4.3.4,
+    "An undeclared result takes the union").
+    """
     return tuple(
-        dict.fromkeys(axis for _, frame in iter_named_operands(expr, axes) for axis in frame)
+        dict.fromkeys(
+            axis
+            for frame in _value_path_frames(expr, axes, target, include_anonymous)
+            for axis in frame
+        )
     )
+
+
+def _value_path_frames(
+    expr: Any, axes: dict[str, tuple[str, ...]], target: str, include_anonymous: bool
+) -> Iterator[tuple[str, ...]]:
+    """Each operand frame on ``expr``'s elementwise value path, left to right."""
+    for _, frame in _value_path_operands(expr, axes, target, include_anonymous):
+        yield frame
+
+
+def _value_path_operands(
+    expr: Any, axes: dict[str, tuple[str, ...]], target: str, include_anonymous: bool
+) -> Iterator[tuple[Any, tuple[str, ...]]]:
+    if isinstance(expr, str):
+        frame = axes.get(expr)
+        if frame:
+            yield expr, frame
+        return
+    produced = _producer_axes(expr, target, include_anonymous)
+    if produced:
+        yield expr, produced
+        return
+    op, args = _op_and_args(expr)
+    if op is not None and op in ELEMENTWISE_OPS:
+        for arg in args:
+            yield from _value_path_operands(arg, axes, target, include_anonymous)
+
+
+def first_unalignable_operand(
+    expr: Any, target_axes: tuple[str, ...], var_axes: dict[str, tuple[str, ...]]
+) -> tuple[Any, tuple[str, ...], str] | None:
+    """``(operand, operand_axes, first_foreign_axis)`` for the first operand on
+    ``expr``'s value path (a named variable or a nested ``faq``/``makearray``)
+    carrying an index set ``target_axes`` lacks — the ``array_shape_mismatch``
+    of esm-spec §4.3.4 rule 1 — or ``None`` when every operand aligns."""
+    for operand, frame in _value_path_operands(expr, var_axes, "", False):
+        extra = unalignable_axes(frame, target_axes)
+        if extra:
+            return operand, frame, extra[0]
+    return None
 
 
 def _producer_axes(rhs: Any, target: str, include_anonymous: bool) -> tuple[str, ...]:
     """Index sets declared by a producer, or labels for an inline FAQ box."""
-    if not isinstance(rhs, ExprNode) or rhs.op not in {"faq", "makearray"}:
+    op = _faq_field(rhs, "op")
+    if op not in {"faq", "makearray"}:
         return ()
-    ranges = rhs.ranges or {}
-    outputs = rhs.output_idx or []
+    ranges = _faq_field(rhs, "ranges") or {}
+    outputs = _faq_field(rhs, "output_idx") or []
     if not outputs or not all(isinstance(sym, str) for sym in outputs):
         return ()
     operands = [ranges.get(sym) for sym in outputs]
@@ -264,7 +321,7 @@ def promoted_axes(
         ready = order.get_ready()
         for name in ready:
             rhs = definitions[name]
-            axes[name] = _producer_axes(rhs, name, include_anonymous) or _expression_axes(rhs, axes)
+            axes[name] = _expression_axes(rhs, axes, name, include_anonymous)
         order.done(*ready)
     return {name: shape for name, shape in axes.items() if shape}
 
@@ -408,15 +465,16 @@ def alignment_plan(
 
 
 def _align_leaf(
-    name: str,
+    operand: Any,
     axes: tuple[str, ...],
     target_axes: tuple[str, ...],
     sizes: dict[str, int],
 ) -> Any:
-    """``name``, wrapped in the transpose/reshape that puts it in the result's
-    frame. Returns the bare name unchanged when nothing is needed."""
+    """``operand`` (a name or a ``faq``/``makearray`` producer), wrapped in the
+    transpose/reshape that puts it in the result's frame. Returns it unchanged
+    when nothing is needed."""
     perm, present = alignment_plan(axes, target_axes)
-    node: Any = name
+    node: Any = operand
     if perm != tuple(range(len(axes))):
         node = ExprNode(op="transpose", args=[node], perm=list(perm))
     # Post-transpose shape vs. the shape the result's frame calls for.
@@ -453,6 +511,22 @@ def align_expression(
             if unalignable_axes(axes, frame) or any(a not in sizes for a in frame):
                 return node
             return _align_leaf(node, axes, frame, sizes)
+        produced = _producer_axes(node, "", False)
+        if produced:
+            # A producer consumes its own operands whole (they get no frame);
+            # its value is placed in the enclosing frame by the sets it names.
+            inner = rewrite_node(node, None)
+            if (
+                not frame
+                or produced == frame
+                or unalignable_axes(produced, frame)
+                or any(a not in sizes for a in frame)
+            ):
+                return inner
+            return _align_leaf(inner, produced, frame, sizes)
+        return rewrite_node(node, frame)
+
+    def rewrite_node(node: Any, frame: tuple[str, ...] | None) -> Any:
         op, args = _op_and_args(node)
         if not args:
             return node
