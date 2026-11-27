@@ -92,7 +92,7 @@
       "id": "P-full-elementwise-gather-reads-selected-cell",
       "clauses": ["conf.5.29.gather-distributes-to-leaves", "conf.5.5.5.untaken-read-no-fault"],
       "statement": "A complete gather of an elementwise expression with inferred extents returns the per-cell evaluator's result at the selected in-range coordinate.",
-      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (base : Esm.Expr.Ast) (args : List Esm.Expr.Ast) (dims ix : List Nat) (values : List (Esm.Expr.Val α)), Esm.Expr.isElementwiseGatherBase base = true → Esm.Expr.expressionDims base env = .ok (some dims) → dims ≠ [] → dims.length = args.length → Esm.Expr.evalList args env = .ok values → Esm.Expr.gatherSubscripts values = .ok (Esm.Expr.oneBased ix) → List.Forall₂ (fun n i : Nat => i < n) dims ix → Esm.Expr.eval (.node \"index\" (base :: args)) env = Esm.Expr.evalCell base env ix",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (base : Esm.Expr.Ast) (args : List Esm.Expr.Ast) (dims ix : List Nat) (values : List (Esm.Expr.Val α)), Esm.Expr.isElementwiseGatherBase base = true → Esm.Expr.expressionDims base env (forGather := true) = .ok (some dims) → dims ≠ [] → dims.length = args.length → Esm.Expr.evalList args env = .ok values → Esm.Expr.gatherSubscripts values = .ok (Esm.Expr.oneBased ix) → List.Forall₂ (fun n i : Nat => i < n) dims ix → Esm.Expr.eval (.node \"index\" (base :: args)) env = Esm.Expr.evalCell base env ix",
       "status": "proven",
       "theorem": "Esm.Expr.eval_index_elementwise_cell"
     },
@@ -100,7 +100,7 @@
       "id": "P-full-elementwise-gather-checks-every-axis",
       "clauses": ["conf.5.29.gather-distributes-to-leaves", "conf.5.5.5.gather-boundary-agree"],
       "statement": "A complete gather of an elementwise expression detects an out-of-range subscript on any axis before evaluating the selected cell.",
-      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (base : Esm.Expr.Ast) (args : List Esm.Expr.Ast) (dims : List Nat) (values : List (Esm.Expr.Val α)) (indices : List Int), Esm.Expr.isElementwiseGatherBase base = true → Esm.Expr.expressionDims base env = .ok (some dims) → dims ≠ [] → dims.length = args.length → Esm.Expr.evalList args env = .ok values → Esm.Expr.gatherSubscripts values = .ok indices → dims.length = indices.length → (¬ List.Forall₂ (fun (n : Nat) (i : Int) => 1 ≤ i ∧ i ≤ (n : Int)) dims indices) → Esm.Expr.eval (.node \"index\" (base :: args)) env = .error .outOfRange",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (base : Esm.Expr.Ast) (args : List Esm.Expr.Ast) (dims : List Nat) (values : List (Esm.Expr.Val α)) (indices : List Int), Esm.Expr.isElementwiseGatherBase base = true → Esm.Expr.expressionDims base env (forGather := true) = .ok (some dims) → dims ≠ [] → dims.length = args.length → Esm.Expr.evalList args env = .ok values → Esm.Expr.gatherSubscripts values = .ok indices → dims.length = indices.length → (¬ List.Forall₂ (fun (n : Nat) (i : Int) => 1 ≤ i ∧ i ≤ (n : Int)) dims indices) → Esm.Expr.eval (.node \"index\" (base :: args)) env = .error .outOfRange",
       "status": "proven",
       "theorem": "Esm.Expr.eval_index_elementwise_outOfRange"
     },
