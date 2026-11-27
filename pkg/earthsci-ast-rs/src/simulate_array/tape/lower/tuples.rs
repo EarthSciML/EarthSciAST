@@ -148,6 +148,27 @@ pub(super) struct BuiltGate {
     in_filter: bool,
 }
 
+/// The plan of `gates` when it is the same for every output cell, as a
+/// [`GatePlan`] over `contract_names`: `None` when a gate's symbol is an
+/// output index, which pins or tests a cell. The equality scatter walks such
+/// a plan once for the whole output box ([`TapeBuilder::lower_equality_scatter`]).
+pub(super) fn cell_free_gate_plan<'g>(
+    gates: &'g [BuiltGate],
+    idx_names: &[String],
+    contract_names: &[String],
+) -> Option<GatePlan<'g>> {
+    let axis = |s: &str| crate::simulate_array::eval::gate_axis(s, idx_names, contract_names);
+    let mut placed = Vec::with_capacity(gates.len());
+    for g in gates {
+        let (src, tgt) = (axis(&g.sym_src), axis(&g.sym_tgt));
+        if matches!(src, GateAxis::Output) || matches!(tgt, GateAxis::Output) {
+            return None;
+        }
+        placed.push((&g.index, src, tgt));
+    }
+    Some(GatePlan::new(contract_names.len(), placed))
+}
+
 /// The build-time value of one observed a folded tuple-list contraction
 /// reads ([`TapeBuilder::tuple_fold_inputs`]): its shape (empty for a scalar)
 /// and row-major values, shared by every chunk's tape.
@@ -359,6 +380,17 @@ impl TapeBuilder<'_> {
             filter,
             init: reduce.identity(),
         };
+        // A filter that pins an output index by equality, under gates that
+        // bind no output index: the gates' candidate tuples are walked once
+        // and each is scattered into the cell its pin names, instead of
+        // walking every candidate once per output cell ([`scatter`]).
+        if filter.is_some() && !gates.is_empty() {
+            if let Ok(Some(v)) = self.attempt(|b| b.lower_equality_scatter(c, &lo, &shape, &gates))
+            {
+                log_tuple_walk(&spec, "scattered", None);
+                return Ok(v);
+            }
+        }
         // One walk lists the tuples while they fit what is left of the
         // program's budget and, once they outgrow it, folds them a chunk at a
         // time as it goes ([`Self::walk_tuple_contraction`]): a list that fits

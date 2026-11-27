@@ -31,10 +31,25 @@
 //! remaining conjunct the build cannot evaluate stays in the filter the tuple
 //! list lowers as a run-time mask, which skips a term exactly as the
 //! interpreter's `continue` does.
+//!
+//! A `faq` with a join walks its gates' candidate tuples instead of the
+//! contracted box (CONFORMANCE_SPEC §5.5.6 / §5.5.8): the scatter of a
+//! transposed regrid product `out[r] = Σ_{c, s : s == r} g(c, s)·λ[c]`
+//! under an `overlap` join over `(s, c)` visits the join's candidate pairs
+//! once, not once per output cell. The candidates are the interpreter's gated
+//! walk, in its order, so each cell's run is again the terms the per-cell
+//! walk admits, in the same order. That needs a walk that is the same in
+//! every cell: no gate symbol may be an output index and the contracted
+//! bounds must be static, else the join's own tuple-list form
+//! ([`super::tuples`]) serves.
 
-use super::tuples::{DimBound, Parent, TupleList, TupleSpec, parent_first_order, walk_nest};
+use super::tuples::{
+    BuiltGate, DimBound, Parent, TupleList, TupleSpec, cell_free_gate_plan, parent_first_order,
+    walk_nest,
+};
 use super::*;
 use crate::simulate_array::eval::{apply_binary, apply_unary, fold_scalar};
+use crate::simulate_array::gate_walk::TupleSink;
 
 /// The most points one scatter's build-time walk visits: a bound on build
 /// time only (the dense lowering's own box limit is
@@ -332,6 +347,7 @@ impl TapeBuilder<'_> {
         c: &Contraction,
         lo: &DimI,
         shape: &DimU,
+        gates: &[BuiltGate],
     ) -> LResult<Option<LV>> {
         let Contraction {
             idx_names,
@@ -392,7 +408,24 @@ impl TapeBuilder<'_> {
         let Ok(combine_op) = self.array_combine_op(reduce, "contracted") else {
             return Ok(None);
         };
-        if let Some(v) = self.lower_shift_scatter(c, lo, shape, &bounds, &parts, &pins)? {
+        // A join's gates (CONFORMANCE_SPEC §5.5.6 / §5.5.8) narrow the walk
+        // to their candidate tuples, the interpreter's gated walk: possible
+        // here only when they bind no output index (the walk is then the same
+        // for every cell) and the contracted bounds are static.
+        let gate_plan = if gates.is_empty() {
+            None
+        } else {
+            if bounds.iter().any(|b| !matches!(b, DimBound::Static(..))) {
+                return Ok(None);
+            }
+            match cell_free_gate_plan(gates, idx_names, contract_names) {
+                Some(p) => Some(p),
+                None => return Ok(None),
+            }
+        };
+        if gate_plan.is_none()
+            && let Some(v) = self.lower_shift_scatter(c, lo, shape, &bounds, &parts, &pins)?
+        {
             return Ok(Some(v));
         }
         // A point's values: the output indices, then the contracted names
@@ -524,7 +557,19 @@ impl TapeBuilder<'_> {
                     }
                 }
             };
-            let done = walk_nest(&bounds, &order, 0, &cell_ix, &mut cur, &mut point);
+            let done = match &gate_plan {
+                None => walk_nest(&bounds, &order, 0, &cell_ix, &mut cur, &mut point),
+                // The gated walk: the candidate tuples in the order the
+                // interpreter's gated walk visits them, a superset of the
+                // admitted ones that the filter still decides.
+                Some(plan) => {
+                    let ranges: Vec<(i64, i64)> =
+                        bounds.iter().map(|b| b.at(&cell_ix, &cur)).collect();
+                    let mut bufs = plan.bufs();
+                    !plan.restrict_cell(&ranges, |_, _| None, &mut bufs)
+                        || plan.walk_cell(&ranges, &mut bufs, &mut LeafSink(&mut point))
+                }
+            };
             if declined {
                 return Ok(None);
             }
@@ -566,6 +611,9 @@ impl TapeBuilder<'_> {
                     }
                 }
             }
+        }
+        if !walked_once && gate_plan.is_some() {
+            return Ok(None);
         }
         if !walked_once {
             // The per-cell walk: a bound reads a free index, so each free
@@ -799,6 +847,20 @@ impl TapeBuilder<'_> {
 
 /// `k` when `e` is `i + k`, `k + i`, `i - k` (as `-k`) or `i` (`0`), with
 /// `k` an integer literal.
+/// A [`TupleSink`] handing each admitted contracted tuple to `f`; `false`
+/// from `f` stops the walk.
+struct LeafSink<F>(F);
+
+impl<F: FnMut(&[i64]) -> bool> TupleSink for LeafSink<F> {
+    #[inline]
+    fn bind(&mut self, _d: usize, _v: i64) {}
+
+    #[inline]
+    fn leaf(&mut self, cur: &[i64]) -> bool {
+        (self.0)(cur)
+    }
+}
+
 fn unit_shift(e: &Expr, i_name: &str) -> Option<i64> {
     let int = |e: &Expr| match e {
         Expr::Integer(n) => Some(*n),
