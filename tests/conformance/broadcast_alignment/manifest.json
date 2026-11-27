@@ -2,7 +2,7 @@
   "category": "broadcast_alignment",
   "runner": "inline_tests",
   "version": "1.0",
-  "description": "Cross-binding conformance for esm-spec \u00a74.3.4's NAME-BASED operand alignment in an array-level equation, and for the scope boundary that rule has. An operand of a bare array-level expression aligns to the result by INDEX-SET NAME: it supplies the axes it is declared over, replicates along the ones it is not, and TRANSPOSES when its declaration order differs from the result's. An operand whose shape is ANONYMOUS \u2014 a `faq` result, whose axes carry node-local output symbols rather than index-set names \u2014 stays POSITIONAL, and the `broadcast` node spelling is governed by exactly the same rule as the bare one. Every binding got the alignment half wrong in its own vocabulary and in OPPOSITE directions (EarthSciML/EarthSciAST#100): Rust flattened the operand into the result's linear layout and zero-filled the tail, Python right-aligned the way NumPy does, and both produced finite, plausible, wrong fields. A one-operand `broadcast` separately dropped its `fn` and behaved as the identity (#101), which turns a negated flux into an un-negated one \u2014 also finite and plausible. The fixtures are documents that carry their own \u00a76.6 `tests` blocks, so the authored expectation travels with the physics; the goldens are the Julia `interpreter`'s actuals for the same assertions.",
+  "description": "Cross-binding conformance for esm-spec \u00a74.3.4's NAME-BASED operand alignment in an array-level equation, and for the scope boundary that rule has. An operand of a bare array-level expression aligns to the result by INDEX-SET NAME: it supplies the axes it is declared over, replicates along the ones it is not, and TRANSPOSES when its declaration order differs from the result's. An operand whose shape is ANONYMOUS \u2014 one that names no index sets, such as a `faq` over inline intervals \u2014 stays POSITIONAL, while a `faq` over `{from}` index sets is placed by those names, and the `broadcast` node spelling is governed by exactly the same rule as the bare one. Every binding got the alignment half wrong in its own vocabulary and in OPPOSITE directions (EarthSciML/EarthSciAST#100): Rust flattened the operand into the result's linear layout and zero-filled the tail, Python right-aligned the way NumPy does, and both produced finite, plausible, wrong fields. A one-operand `broadcast` separately dropped its `fn` and behaved as the identity (#101), which turns a negated flux into an un-negated one \u2014 also finite and plausible. The fixtures are documents that carry their own \u00a76.6 `tests` blocks, so the authored expectation travels with the physics; the goldens are the Julia `interpreter`'s actuals for the same assertions.",
   "reference_binding": "julia",
   "reference_compiler": "interpreter",
   "bindings_required": [
@@ -334,7 +334,7 @@
         "faq-producer",
         "esm-spec-4.3.4"
       ],
-      "note": "Authored here. An undeclared result spans the union of its operands' index sets, a faq producer contributing its own at any depth on the value path.",
+      "note": "Authored here. An undeclared result spans the union of its operands' index sets, a faq producer contributing its own wherever it sits on the value path.",
       "required": {
         "julia": [
           "interpreter",
@@ -355,7 +355,9 @@
         "zw[1,2]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
         "zv[2,3]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
         "zv[1,1]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
-        "zt": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch."
+        "zt": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zi[2,3]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zi[1,2]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch."
       }
     },
     {

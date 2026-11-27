@@ -2,7 +2,7 @@
   "esm": "2.3.0",
   "metadata": {
     "name": "NestedProducerUnion",
-    "description": "An undeclared result takes the UNION of its operands' index sets (esm-spec §4.3.4), and a `faq` producer over `{from: lat}` contributes `lat` whether it is a variable's whole definition (`w`) or nested under an elementwise operator (`v = k * faq`). `q` and `c` have disjoint index sets of unequal extents, so `w + c` spans [lat, lon] and is neither a scalar nor a [lat] field; the declared results check that each operand is placed in the result's frame by NAME, including under a transposed declaration (`zt` over [lon, lat]).",
+    "description": "An undeclared result takes the UNION of its operands' index sets (esm-spec §4.3.4), and a `faq` producer over `{from: lat}` contributes `lat` whether it is a variable's whole definition (`w`), nested under an elementwise operator (`v = k * faq`), or an operand of the result itself (`zi = k * faq + c`). `q` and `c` have disjoint index sets of unequal extents, so `w + c` spans [lat, lon] and is neither a scalar nor a [lat] field; the declared results check that each operand is placed in the result's frame by NAME, including under a transposed declaration (`zt` over [lon, lat]).",
     "authors": [
       "EarthSciML Authors and Contributors"
     ]
@@ -67,6 +67,11 @@
           "type": "unknown",
           "units": "1",
           "description": "Undeclared; v + c spans [lat, lon]: zv[i,j] = k q[i] + c[j]."
+        },
+        "zi": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Undeclared; k * faq + c with the producer an operand of the result itself: zi[i,j] = k q[i] + c[j]."
         },
         "zd": {
           "type": "unknown",
@@ -159,6 +164,40 @@
           }
         },
         {
+          "lhs": "zi",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  {
+                    "op": "faq",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "ranges": {
+                      "i": {
+                        "from": "lat"
+                      }
+                    },
+                    "expr": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        "i"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "c"
+            ]
+          }
+        },
+        {
           "lhs": "zd",
           "rhs": {
             "op": "+",
@@ -210,6 +249,16 @@
               "variable": "zv[1,1]",
               "time": 0,
               "expected": 13
+            },
+            {
+              "variable": "zi[2,3]",
+              "time": 0,
+              "expected": 36
+            },
+            {
+              "variable": "zi[1,2]",
+              "time": 0,
+              "expected": 20
             },
             {
               "variable": "zd",

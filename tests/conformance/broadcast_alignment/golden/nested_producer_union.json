@@ -30,24 +30,36 @@
     {
       "test_id": "union_axes",
       "assertion_idx": 5,
-      "variable": "zd",
+      "variable": "zi[2,3]",
       "actual": 36.0
     },
     {
       "test_id": "union_axes",
       "assertion_idx": 6,
+      "variable": "zi[1,2]",
+      "actual": 20.0
+    },
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 7,
+      "variable": "zd",
+      "actual": 36.0
+    },
+    {
+      "test_id": "union_axes",
+      "assertion_idx": 8,
       "variable": "zd",
       "actual": 26.0
     },
     {
       "test_id": "union_axes",
-      "assertion_idx": 7,
+      "assertion_idx": 9,
       "variable": "zt",
       "actual": 28.0
     },
     {
       "test_id": "union_axes",
-      "assertion_idx": 8,
+      "assertion_idx": 10,
       "variable": "zt",
       "actual": 15.0
     }

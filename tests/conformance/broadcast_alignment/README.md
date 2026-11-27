@@ -19,10 +19,13 @@ name**. It supplies the axes it is declared over, **replicates** along the ones
 it is not, and **transposes** when its declaration order differs from the
 result's. A `broadcast` node is governed by the same rule as the bare spelling.
 
-An operand whose shape is **anonymous** — a `faq` result, whose axes carry
-node-local output symbols rather than index-set names — stays **positional**.
+An operand whose shape is **anonymous** — one that names no index sets, such
+as a `makearray`, a shape op, a `const` array, or a `faq` whose output indices
+range over inline intervals — stays **positional** (esm-spec §4.3.4 rule 2).
 That is the rule's boundary, and it is a rule in its own right rather than an
-omission.
+omission. A `faq` whose output indices range `{"from": <index set>}` is not
+anonymous: it names those index sets and is placed by them, like a declared
+variable (`nested_producer_union`).
 
 Every executing binding got the alignment half wrong, in its own vocabulary and
 in **opposite directions** (EarthSciML/EarthSciAST#100):
@@ -59,11 +62,12 @@ tests/conformance/broadcast_alignment/
 └── golden/<id>.json          # the Julia-interpreter actual for every assertion
 ```
 
-Four of the seven fixtures are **referenced, not authored**:
+Four of the ten fixtures are **referenced, not authored**:
 `tests/valid/array_broadcast/*.esm` already carried the §4.3.4 documents and
 their inline `tests` blocks, and copying them would have created a second place
-to keep them in step. Three are authored here because no shared document
-covered them:
+to keep them in step. A fifth, `permuted_static_alias`, replays a saved
+differential document from `tests/differential/shaped/`. The other five are
+authored here because no shared document covered them:
 
 | Fixture | What it holds | Migrated from |
 |---|---|---|
@@ -71,15 +75,20 @@ covered them:
 | `bare_mixed_rank_product` | `[lon,lat]` × `[lev]` forms the outer product over the union | already shared |
 | `bare_axis_permuted_operand` | an equal-rank operand declared `[lat,lon]` **transposes** | already shared |
 | `broadcast_node_mixed_rank` | the `broadcast` spelling of `bare_mixed_rank_product`, cell for cell | already shared |
-| `anonymous_shape_positional` | a `faq` result's axes are ANONYMOUS and stay positional, beside a named operand in the same document | `broadcast_alignment_test.jl` testset (j) |
+| `anonymous_shape_positional` | a `faq` over inline intervals names no index sets, so its axes are ANONYMOUS and stay positional, beside a named operand in the same document | `broadcast_alignment_test.jl` testset (j) |
 | `unary_broadcast_fn` | `broadcast(fn: "-", [x])` ≡ the bare `-(x)`, both reaching `exp(0.3)` | the #101 arms of `broadcast_alignment_test.jl` and `test_broadcast_and_index_alignment.py` |
 | `observed_expression_aligned` | alignment reaches THROUGH an observed's body | `test_observed_expression_is_aligned_too` (Python), `array_shaped_observed_broadcasts_by_name` (Rust) |
+| `static_named_broadcast` | state-free: `[rows]` and `[cols]` parameters of unequal extents align by name into a `[cols, rows]` and a `[rows, cols]` result | authored here |
+| `nested_producer_union` | state-free: an undeclared result spans the union of its operands' index sets, a `faq` over `{from: lat}` contributing `lat` as a whole definition, under `k *`, or as an operand of the result itself; declared and transposed results place it by name | authored here |
+| `permuted_static_alias` | state-free: a bare alias whose declared axes reverse its operand's reads its cells in its own axis order | `tests/differential/shaped/` replay |
 
-Each authored fixture integrates a **constant tendency from a zero initial
-condition**, so `dp(t=1)` reads the array-level right-hand side back cell by
-cell and no integrator stands between the rule and the number. The exception is
-`unary_broadcast_fn`, which is a scalar exponential per cell so that a dropped
-`fn` lands on `exp(-0.3)` instead of `exp(0.3)` — two numbers 4.5e-1 apart.
+Each authored fixture with state integrates a **constant tendency from a zero
+initial condition**, so `dp(t=1)` reads the array-level right-hand side back
+cell by cell and no integrator stands between the rule and the number. The
+exception is `unary_broadcast_fn`, which is a scalar exponential per cell so
+that a dropped `fn` lands on `exp(-0.3)` instead of `exp(0.3)` — two numbers
+4.5e-1 apart. The state-free fixtures assert their observeds at `t = 0`, and
+are the ones the Lean model scores.
 
 ## Tolerances
 
