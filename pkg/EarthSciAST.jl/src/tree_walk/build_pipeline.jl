@@ -794,7 +794,8 @@ end
 # The cadence of the materialized observeds the in-place right-hand side fills
 # outside every call: `const`, filled only when `p` moves; `forcing`, which read
 # a live buffer but neither `t` nor the state, filled only when `p` or the
-# forcing epoch moves; and `time`, filled only when `(p, t, forcing epoch)`
+# forcing epoch moves (and `t` too unless the build's writers are declared
+# announced, cadence_stamp.jl); and `time`, filled only when `(p, t, forcing epoch)`
 # moves. None under the untiered interpreter, which refills everything on every
 # call, nor in the out-of-place product, which has no such skip.
 _fill_cadences(::_OutOfPlace, split, mat_vars, layout, scope) =

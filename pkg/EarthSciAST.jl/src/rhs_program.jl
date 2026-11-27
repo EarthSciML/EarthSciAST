@@ -367,8 +367,9 @@ function _ws_fresh(x::_ObsExtVec, c)
 end
 _ws_fresh(x::_AccScratch, c) = c.memo[x] = _AccScratch(_inst(x.f64, c), nothing)
 function _ws_fresh(x::_ForcingEpoch, c)
-    # A workspace tracks its forcing set's epoch itself.
-    e = _ForcingEpoch(UInt64(0))
+    # A workspace tracks its forcing set's epoch itself: its buffers change
+    # only when it loads a new set, which bumps it (announced).
+    e = _ForcingEpoch(UInt64(0), true)
     push!(c.epochs, e)
     return c.memo[x] = e
 end

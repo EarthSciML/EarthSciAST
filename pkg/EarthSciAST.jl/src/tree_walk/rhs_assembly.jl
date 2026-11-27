@@ -166,7 +166,9 @@ end
 # hold the forcing-cadence ones, which read a live buffer but neither `t` nor
 # the state (a regridded emission field); they read only const ones and each
 # other, and run next, only when `p` or the build's forcing epoch moved, so a
-# value derived from forcing data alone is computed once per forcing refresh.
+# value derived from forcing data alone is computed once per forcing refresh;
+# when not every writer of the build's buffers announces (`announced`,
+# cadence_stamp.jl) they also run whenever `t` moved, as the time ones do.
 # `time_levels` hold the time-cadence ones, which read only the tiers above and
 # each other; they run next, and only when `(p, t, the build's forcing epoch)`
 # moved, so the columns of a Jacobian, all at one `t`, fill them once. `levels`
@@ -219,13 +221,20 @@ function (f::_Rhs)(du, u, p, t)
             _fill_obs_levels!(obs.const_levels, duv, uv, p, t, T)
             _obsext_mark_const!(ext, T, p)
         end
-        if !isempty(obs.forcing_levels) && _obsext_forcing_stale(ext, T, p)
-            _fill_obs_levels!(obs.forcing_levels, duv, uv, p, t, T)
-            _obsext_mark_forcing!(ext, T, p)
-        end
-        if !isempty(obs.time_levels) && _obsext_t_stale(ext, T, p, t)
-            _fill_obs_levels!(obs.time_levels, duv, uv, p, t, T)
-            _obsext_mark_t!(ext, T, p, t)
+        if !isempty(obs.forcing_levels) || !isempty(obs.time_levels)
+            tstale = _obsext_t_stale(ext, T, p, t)
+            # Unless every writer of the build's buffers announces its writes,
+            # a new `t` refills the forcing tier too (cadence_stamp.jl).
+            if !isempty(obs.forcing_levels) && (
+                    _obsext_forcing_stale(ext, T, p) || (tstale && !ext.epoch.announced)
+                )
+                _fill_obs_levels!(obs.forcing_levels, duv, uv, p, t, T)
+                _obsext_mark_forcing!(ext, T, p)
+            end
+            if tstale
+                _fill_obs_levels!(obs.time_levels, duv, uv, p, t, T)
+                _obsext_mark_t!(ext, T, p, t)
+            end
         end
         _fill_obs_levels!(obs.levels, duv, uv, p, t, T)
         _run_stage!(f.state, du, uv, p, t, T)

@@ -1580,6 +1580,11 @@ function _esm_problem(
     # The discrete-cadence materializer (`_problem_build_run`): the caller's,
     # or a fresh one.
     dm = _problem_materializer(req.materialize_out)
+    # With no caller `param_arrays`, every live buffer of the build is a
+    # discrete provider's, written only by this Problem's refresh callback,
+    # which announces its writes: forcing-only observeds may then be kept
+    # across a new `t` (cadence_stamp.jl, `announced`).
+    isempty(req.param_arrays) && (dm.epoch.announced = true)
     # What the build produces besides the right-hand side; the Problem owns it.
     # A caller's `inspect` record is claimed now and pointed at it when the
     # build ends, refused or not.
@@ -1778,7 +1783,7 @@ function _problem_callbacks(req::_ProblemRequest, refresh)
     cbs = Any[]
     tstops = Float64[]
     if refresh !== nothing
-        cb, ts = build_refresh_callback(;
+        cb, ts = _refresh_callback(;
             providers = refresh.providers,
             buffers = RefreshBuffers(refresh.buffers),
             owner = refresh.owner,
@@ -2007,6 +2012,7 @@ end
 
 
 notify_forcing_refresh!(prob::EsmProblem) = _bump_epoch!(prob.build.products.forcing_epoch)
+_declare_announced!(prob::EsmProblem) = (prob.build.products.forcing_epoch.announced = true; nothing)
 
 function notify_forcing_refresh!(prob::EsmProblem, name::AbstractString)
     haskey(prob.param_buffers, name) || throw(
