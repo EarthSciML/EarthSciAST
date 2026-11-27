@@ -7,6 +7,7 @@ include("testutils.jl")
 using Random
 using EarthSciAST
 using DiffEqCallbacks, SciMLBase     # the discrete providers' refresh callback
+import OrdinaryDiffEqTsit5 as ODE
 
 # A 2-D diffusion `u` forced by a gridded `F` (a live buffer), and a 0-d `y`
 # driven by one cell of `F` and a parameter.
@@ -404,4 +405,86 @@ end
     # fetches its selection once: the program is built from those samples.
     @test all(p.n == 1 for p in values(pv) if p isa _PbtConst)
     @test all(p.calls == [:selection] for p in values(pv) if p isa _PbtGated)
+end
+
+# A forcing-only contraction `g` of a forcing `F` (no state, no `t`): in a
+# program build, a forcing-cadence observed.
+function _pbt_contraction_doc(n::Int)
+    faq(e; ranges = Dict("i" => Dict("from" => "x"))) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => ranges,
+        "expr" => e
+    )
+    d = jop("-", "k", "i")
+    return Dict{String, Any}(
+        "esm" => "2.0.0",
+        "metadata" => Dict("name" => "pbt_contraction"),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => n)),
+        "models" => Dict(
+            "M" => Dict(
+                "variables" => Dict(
+                    "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 0.0),
+                    "g" => Dict("type" => "unknown", "shape" => ["x"])
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => "g",
+                        "rhs" => faq(
+                            jop("/", jidx("F", "k"), jop("+", 1.0, jop("*", d, d)));
+                            ranges = Dict("i" => Dict("from" => "x"), "k" => Dict("from" => "x"))
+                        )
+                    ),
+                    Dict(
+                        "lhs" => faq(Dict("op" => "D", "args" => Any[jidx("u", "i")], "wrt" => "t")),
+                        "rhs" => faq(jidx("g", "i"))
+                    ),
+                ]
+            )
+        )
+    )
+end
+
+# The Problem's own refresh callback announces to the epoch its program
+# right-hand side reads. With provider-only forcing every write is announced,
+# so a forcing-only observed is kept across a new `t` and refilled when the
+# callback fires; a caller's `param_arrays`, which may be written without an
+# announcement, keep it refilled at every new `t`.
+@testset "program_build: forcing-only observeds and the refresh callback" begin
+    n = 4
+    doc = _pbt_contraction_doc(n)
+    prov = _PbtDiscrete([1.0], Dict(0.0 => fill(1.0, n), 1.0 => fill(3.0, n)), 0)
+    prob = esm_problem(doc, (0.0, 2.0); providers = Dict("F" => prov), program_build = true)
+    products = prob.build.products
+    @test products.stats.n_mat_forcing_levels == 1
+    @test prob.dm.epoch === products.forcing_epoch
+    @test products.forcing_epoch.announced
+    F = only(values(prob.param_buffers))
+    u0 = copy(prob.u0)
+    du = similar(u0)
+    prob.f!(du, u0, prob.p, 0.5)
+    d0 = copy(du)
+    @test all(>(0), d0)
+    # No refresh: a new `t` reuses g. A write nobody announced (only to
+    # observe that reuse) is not seen.
+    F .= 7.0
+    prob.f!(du, u0, prob.p, 0.75)
+    @test du == d0
+    F .= 1.0
+    # The provider callback fires at its anchor, t = 1: g is refilled from
+    # the new forcing.
+    ode = ODE.ODEProblem(prob.f!, u0, (0.0, 2.0), prob.p)
+    sol = ODE.solve(ode, ODE.Tsit5(); callback = prob.callback, tstops = prob.tstops)
+    @test sol.retcode == SciMLBase.ReturnCode.Success
+    @test F == fill(3.0, n)
+    prob.f!(du, u0, prob.p, 2.5)
+    @test du ≈ 3 .* d0
+
+    # A caller's buffer: not declared announced, so a new `t` refills g.
+    Fc = fill(1.0, n)
+    probc = esm_problem(doc, (0.0, 2.0); param_arrays = Dict("F" => Fc), program_build = true)
+    @test !probc.build.products.forcing_epoch.announced
+    probc.f!(du, u0, probc.p, 0.5)
+    @test du == d0
+    Fc .= 3.0
+    probc.f!(du, u0, probc.p, 0.75)
+    @test du ≈ 3 .* d0
 end

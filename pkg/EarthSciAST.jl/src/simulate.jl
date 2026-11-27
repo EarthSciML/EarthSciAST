@@ -1580,11 +1580,6 @@ function _esm_problem(
     # The discrete-cadence materializer (`_problem_build_run`): the caller's,
     # or a fresh one.
     dm = _problem_materializer(req.materialize_out)
-    # With no caller `param_arrays`, every live buffer of the build is a
-    # discrete provider's, written only by this Problem's refresh callback,
-    # which announces its writes: forcing-only observeds may then be kept
-    # across a new `t` (cadence_stamp.jl, `announced`).
-    isempty(req.param_arrays) && (dm.epoch.announced = true)
     # What the build produces besides the right-hand side; the Problem owns it.
     # A caller's `inspect` record is claimed now and pointed at it when the
     # build ends, refused or not.
@@ -1648,6 +1643,18 @@ function _esm_problem(
     finally
         req.inspect === nothing || _publish_inspection!(req.inspect, products)
     end
+    # One forcing epoch per Problem: the one its right-hand side reads. A
+    # build given the materializer shares its epoch already. A program build
+    # is not given one (it has no discrete-cadence cut, so `dm` holds no
+    # cache and no fill closes over its epoch) and makes its own, which `dm`
+    # takes: the refresh callback announces to `dm`, and `observed_field`
+    # reads its epoch.
+    req.program_build && (dm.epoch = products.forcing_epoch)
+    # With no caller `param_arrays`, every live buffer of the build is a
+    # discrete provider's, written only by this Problem's refresh callback,
+    # which announces its writes: forcing-only observeds may then be kept
+    # across a new `t` (cadence_stamp.jl, `announced`).
+    isempty(req.param_arrays) && (dm.epoch.announced = true)
 
     if compiler === :xla
         f! = _xla_problem_rhs(
