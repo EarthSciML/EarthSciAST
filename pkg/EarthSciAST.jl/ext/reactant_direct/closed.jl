@@ -222,9 +222,9 @@ _de_cg_take(flat::Vector{Float64}, dims, strides, wraps, subs::TracedRArray{Floa
 
 _de_bcast_any(v::_DEVal) = v
 
-_de_cg_take_traced(src::TracedRArray, dims, strides, wraps, subs::TracedRArray{Float64, 1}...) =
-    let lin = _de_cg_linear(map(_rx_int, subs), dims, strides, wraps)
-    Reactant.Ops.gather_getindex(src, Reactant.Ops.reshape(lin, length(lin), 1))
+function _de_cg_take_traced(src::TracedRArray, dims, strides, wraps, subs::TracedRArray{Float64, 1}...)
+    lin = _de_cg_linear(map(_rx_int, subs), dims, strides, wraps)
+    return Reactant.Ops.gather_getindex(src, Reactant.Ops.reshape(lin, length(lin), 1))
 end
 
 # ---- the count ---------------------------------------------------------------
