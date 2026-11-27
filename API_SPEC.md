@@ -1716,9 +1716,9 @@ keep their global 1-based values.
   evaluated from `cells`: coordinate expressions, level gates, and affine reads
   of forcing, array parameters, const arrays and state-free observeds.
   State-free observeds keep their whole-domain build-time values and are
-  gathered per lane. A read that leaves the cell (pointwise) or the column
-  (column) is refused with `compiler_refused_rule`, naming the rule and saying
-  "lane".
+  gathered per lane, or computed per lane, bitwise equal. A read that leaves
+  the cell (pointwise) or the column (column) is refused with
+  `compiler_refused_rule`, naming the rule and saying "lane".
 - **Array `faq` reads.** An array `faq` read at loop subscripts (a whole-array
   right-hand side `D(x) = faq{…}`, or a `makearray` region value) is its body at
   the lane's cell, and a range that is not an output index stays a contraction.
@@ -1746,6 +1746,17 @@ keep their global 1-based values.
   one-time call is unchanged, and a call whose lanes `1..n` have different
   times is an error naming that observed (Rust `RhsError::MixedTimes`, Julia
   `ArgumentError`).
+- **Cost.** A call does work proportional to its lanes, never to the domain.
+  Each observed of a state or of `t` that has a lane form is computed per
+  lane, in a call at one time too; only one with no lane form (and the
+  observeds of `t` it reads) is evaluated over the domain, once per call.
+  A state-free observed (one that reads neither a state nor `t`) is computed
+  at most once per parameter vector and forcing set: over the domain, either
+  per workspace or once for the lane program and shared by its workspaces,
+  and then gathered at each lane's cell; or per lane, bitwise equal to the
+  whole-domain value at the lane's cell. The two are equivalent. So the first
+  call on a workspace, or the first after a new parameter vector or forcing
+  set, may do domain-sized work for these observeds; every other call does not.
 - **Capacity.** Julia loops over lanes with a run-time count, so one build
   serves every `L` (`L = size(cells, 2)`). Rust slot boxes are static, so a lane
   program is built per capacity (re-lowering only, no document rebuild) and `L`
