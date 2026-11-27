@@ -28,6 +28,7 @@ def identityArgs (identity : α → Bool) (retain : List α → List α → Opti
   | none => rest
   | some arg => arg :: rest
 
+@[to_additive flattenArgs_preserves_sum]
 theorem flattenArgs_preserves [Monoid M] (children : α → Option (List α))
     (value : α → M) (args : List α)
     (sameOp : ∀ arg inner, children arg = some inner → (inner.map value).prod = value arg) :
@@ -53,7 +54,7 @@ private theorem flattenArgs_leaves (children : α → Option (List α)) (args : 
     simpa [eq] using hparent
   | some inner => exact normalizedChildren parent member inner hparent arg (by simpa [hparent] using branch)
 
-private theorem flattenArgs_of_leaves (children : α → Option (List α)) (args : List α)
+theorem flattenArgs_of_leaves (children : α → Option (List α)) (args : List α)
     (leaves : ∀ arg ∈ args, children arg = none) : flattenArgs children args = args := by
   unfold flattenArgs
   calc
@@ -79,12 +80,14 @@ theorem orderArgs_eq_mergeSort (key : α → κ) (before : κ → κ → Bool) (
     obtain ⟨b, _, rfl⟩ := List.mem_map.mp hb
     rfl
 
+@[to_additive orderArgs_preserves_sum]
 theorem orderArgs_preserves [CommMonoid M] (key : α → κ) (before : κ → κ → Bool)
     (value : α → M) (args : List α) :
     ((orderArgs key before args).map value).prod = (args.map value).prod := by
   rw [orderArgs_eq_mergeSort]
   exact ((List.mergeSort_perm args _).map value).prod_eq
 
+@[to_additive filter_identities_preserves_sum]
 private theorem filter_identities_preserves [Monoid M] (identity : α → Bool) (value : α → M)
     (args : List α) (neutral : ∀ arg, identity arg = true → value arg = 1) :
     ((args.filter fun arg => !identity arg).map value).prod = (args.map value).prod := by
@@ -95,6 +98,7 @@ private theorem filter_identities_preserves [Monoid M] (identity : α → Bool) 
     · simp [h, ih]
     · simp [h, ih, neutral arg h]
 
+@[to_additive identityArgs_preserves_sum]
 theorem identityArgs_preserves [Monoid M] (identity : α → Bool)
     (retain : List α → List α → Option α) (value : α → M) (args : List α)
     (neutral : ∀ arg, identity arg = true → value arg = 1)

@@ -1,0 +1,55 @@
+{
+  "fixture": "static_array_operators",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "shape_operators",
+      "assertion_idx": 1,
+      "variable": "matrix",
+      "actual": 3.0
+    },
+    {
+      "test_id": "shape_operators",
+      "assertion_idx": 2,
+      "variable": "roundtrip",
+      "actual": 6.0
+    },
+    {
+      "test_id": "shape_operators",
+      "assertion_idx": 3,
+      "variable": "transposed",
+      "actual": 3.0
+    },
+    {
+      "test_id": "shape_operators",
+      "assertion_idx": 4,
+      "variable": "joined",
+      "actual": 4.0
+    },
+    {
+      "test_id": "shape_operators",
+      "assertion_idx": 5,
+      "variable": "overlap",
+      "actual": 9.0
+    },
+    {
+      "test_id": "shape_operators",
+      "assertion_idx": 6,
+      "variable": "gap",
+      "actual": 0.0
+    },
+    {
+      "test_id": "shape_operators",
+      "assertion_idx": 7,
+      "variable": "mapped",
+      "actual": 5.0
+    },
+    {
+      "test_id": "shape_operators",
+      "assertion_idx": 8,
+      "variable": "sample",
+      "actual": 4.0
+    }
+  ]
+}

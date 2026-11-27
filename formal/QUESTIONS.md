@@ -194,7 +194,7 @@ with a pending question among its own clauses.
 - Phase: 2
 - Found by: inventory
 - Problem: The same paragraph refers to 'the ten strict transcendentals', but the §4.8.3 table says the strict set is 'EXACTLY ... nine ops, and no others'.
-- Ruling: (pending)
+- Ruling: The nine operators listed in the table define the closed set. Both prose references now use the same count.
 
 ## Q-27 esm-spec.md §4.8.3: sum operands share unit
 - Clauses: `spec.4.8.3.sum-operands-share-unit`
@@ -208,7 +208,7 @@ with a pending question among its own clauses.
 - Phase: 2
 - Found by: inventory
 - Problem: (`spec.4.9.5.evaluator-fail-closed`) The supporting claim that 'IEEE-754 max and min return the non-NaN operand' is not true in general: IEEE 754-2019 `maximum`/`minimum` propagate NaN (only `maximumNumber`/`minimumNumber`, and 2008's maxNum, return the number), and of the binding languages Julia `max`, JS `Math.max`, Go `math.Max` and NumPy `maximum` propagate NaN while Rust `f64::max` and C `fmax` do not. / (`conf.5.23.unbound-name-is-fault`) The supporting sentence that follows ('IEEE-754 `max` and `min` return the non-NaN operand') is not true of IEEE 754 as a whole: 754-2008 maxNum/minNum do, but 754-2019 maximum/minimum propagate NaN, and e.g. Julia's max(NaN, 0.0) returns NaN; the clause stands without it, but the stated fact is a property of particular functions, not of IEEE-754.
-- Ruling: Propagate (2026-10-26): if any operand is NaN the result is NaN, also for the max/min ⊕ of faq; the false sentence is rewritten. Spec fix in the phase-0 PR; the Rust divergence (#568) is held for phase 2 to find.
+- Ruling: Propagate (2026-10-26): if any operand is NaN the result is NaN, also for the max/min ⊕ of faq; the false sentence is rewritten. Phase 0 corrected the spec. Scalar extrema and filtered scalar FAQ are covered by the [NaN extrema fixture](../tests/conformance/scalar_operator_semantics/fixtures/nan_extrema.esm) for issue #568. The equality-scatter tier covers shaped extrema.
 
 ## Q-29 esm-spec.md §6.6.3: nonfinite actual fails
 - Clauses: `spec.6.6.3.nonfinite-actual-fails`

@@ -1,0 +1,31 @@
+{
+  "fixture": "elementwise_observed_gather",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "gathers",
+      "assertion_idx": 1,
+      "variable": "gathered",
+      "actual": 15.0
+    },
+    {
+      "test_id": "gathers",
+      "assertion_idx": 2,
+      "variable": "gathered",
+      "actual": 32.0
+    },
+    {
+      "test_id": "gathers",
+      "assertion_idx": 3,
+      "variable": "explicit",
+      "actual": 15.0
+    },
+    {
+      "test_id": "gathers",
+      "assertion_idx": 4,
+      "variable": "explicit",
+      "actual": 32.0
+    }
+  ]
+}

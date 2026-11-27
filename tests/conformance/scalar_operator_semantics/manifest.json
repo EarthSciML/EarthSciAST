@@ -69,6 +69,36 @@
       }
     },
     {
+      "id": "nan_extrema",
+      "path": "fixtures/nan_extrema.esm",
+      "model": "Probe",
+      "golden": "golden/nan_extrema.json",
+      "tags": [
+        "scalar",
+        "operators",
+        "faq",
+        "nan",
+        "esm-spec-4.2",
+        "static-evaluation"
+      ],
+      "note": "Authored here to pin issue #568. Self-inequality gives a finite control for NaN propagation, including under a selected FAQ max term.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
       "id": "boolean_literal_false",
       "path": "fixtures/boolean_literal_false.esm",
       "model": "FalseOp",

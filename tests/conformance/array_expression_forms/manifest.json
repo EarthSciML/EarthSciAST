@@ -2,7 +2,7 @@
  "category": "array_expression_forms",
  "runner": "inline_tests",
  "version": "1.0",
- "description": "Cross-binding conformance for array expression and equation forms that are relabellings of cells: `index` over a `reshape`, `transpose` or `concat` (esm-spec §4.3.5), which is an element of the operand at other subscripts; a positional `broadcast` of anonymous operands of different shapes (§4.3.4); and an arrayed definition `faq{i}(index(v, i)) ~ rhs` of an observed whose shape was never declared (§6.3.1), which defines the whole of `v` over the frame. Each document carries its own §6.6 `tests` block, so the authored expectation travels with the maths; the goldens are the Julia `interpreter`'s actuals for the same assertions.",
+ "description": "Cross-binding conformance for array expression and equation forms that are relabellings of cells: `index` over a `reshape`, `transpose` or `concat` (esm-spec §4.3.5), which is an element of the operand at other subscripts; a bare transpose assigned to a shaped observed; a positional `broadcast` of anonymous operands of different shapes (§4.3.4); and an arrayed definition `faq{i}(index(v, i)) ~ rhs` of an observed whose shape was never declared (§6.3.1), which defines the whole of `v` over the frame. Each document carries its own §6.6 `tests` block, so the authored expectation travels with the maths; the goldens are the Julia `interpreter`'s actuals for the same assertions.",
  "reference_binding": "julia",
  "reference_compiler": "interpreter",
  "bindings_required": [
@@ -34,7 +34,7 @@
  "tolerances": {
   "golden_rtol": 1e-09,
   "golden_atol": 1e-11,
-  "detail": "The band between a producer's actual and the Julia-interpreter golden, separate from and tighter than each assertion's own §6.6.4 band. Every probe here integrates a constant tendency from a zero initial condition, or a linear decay, so an integrator contributes nothing near this floor."
+  "detail": "The band between a producer's actual and the Julia-interpreter golden, separate from and tighter than each assertion's own §6.6.4 band. The state-free probes test relabelled cells directly. The trajectory probes integrate a constant tendency from a zero initial condition, or a linear decay."
  },
  "fixtures": [
   {
@@ -62,7 +62,16 @@
      "native"
     ]
    },
-   "named_exclusions": []
+   "named_exclusions": [
+    {
+     "binding": "lean",
+     "compilers": [
+      "interpreter"
+     ],
+     "code": "unsupported_construct",
+     "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+    }
+   ]
   },
   {
    "id": "transpose_2d",
@@ -88,7 +97,16 @@
      "native"
     ]
    },
-   "named_exclusions": []
+   "named_exclusions": [
+    {
+     "binding": "lean",
+     "compilers": [
+      "interpreter"
+     ],
+     "code": "unsupported_construct",
+     "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+    }
+   ]
   },
   {
    "id": "concat_1d",
@@ -114,7 +132,16 @@
      "native"
     ]
    },
-   "named_exclusions": []
+   "named_exclusions": [
+    {
+     "binding": "lean",
+     "compilers": [
+      "interpreter"
+     ],
+     "code": "unsupported_construct",
+     "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+    }
+   ]
   },
   {
    "id": "broadcast_elementwise",
@@ -141,7 +168,16 @@
      "native"
     ]
    },
-   "named_exclusions": []
+   "named_exclusions": [
+    {
+     "binding": "lean",
+     "compilers": [
+      "interpreter"
+     ],
+     "code": "unsupported_construct",
+     "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+    }
+   ]
   },
   {
    "id": "mixed_ode_algebraic",
@@ -167,7 +203,16 @@
      "native"
     ]
    },
-   "named_exclusions": []
+   "named_exclusions": [
+    {
+     "binding": "lean",
+     "compilers": [
+      "interpreter"
+     ],
+     "code": "unsupported_construct",
+     "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+    }
+   ]
   },
   {
    "id": "weno_wide_stencil",
@@ -194,7 +239,16 @@
      "native"
     ]
    },
-   "named_exclusions": []
+   "named_exclusions": [
+    {
+     "binding": "lean",
+     "compilers": [
+      "interpreter"
+     ],
+     "code": "unsupported_construct",
+     "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+    }
+   ]
   },
   {
    "id": "shape_ops_symbolic_subscripts",
@@ -224,7 +278,16 @@
      "native"
     ]
    },
-   "named_exclusions": []
+   "named_exclusions": [
+    {
+     "binding": "lean",
+     "compilers": [
+      "interpreter"
+     ],
+     "code": "unsupported_construct",
+     "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+    }
+   ]
   },
   {
    "id": "computed_array_argument",
@@ -238,6 +301,94 @@
     "esm-spec-9.6.11"
    ],
    "note": "Authored here: an array parameter bound to a makearray of an array-valued application, and to an array-valued application read at other subscripts.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": [
+    {
+     "binding": "lean",
+     "compilers": [
+      "interpreter"
+     ],
+     "code": "unsupported_construct",
+     "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+    }
+   ]
+  },
+  {
+   "id": "static_array_operators",
+   "path": "fixtures/static_array_operators.esm",
+   "model": "StaticArrayOperators",
+   "golden": "golden/static_array_operators.json",
+   "tags": [
+    "static",
+    "array"
+   ],
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "bare_transpose_1x1",
+   "path": "differential/shaped/bare_transpose_1x1.esm",
+   "model": "Probe",
+   "golden": "golden/bare_transpose_1x1.json",
+   "tags": [
+    "static",
+    "transpose",
+    "differential-replay"
+   ],
+   "note": "Exact minimized replay of the Julia native classification refusal for a bare transpose.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "static_bare_transpose_2x3",
+   "path": "fixtures/static_bare_transpose_2x3.esm",
+   "model": "Probe",
+   "golden": "golden/static_bare_transpose_2x3.json",
+   "tags": [
+    "static",
+    "transpose",
+    "rank-2"
+   ],
+   "note": "An asymmetric bare transpose checks every cell in the reversed declared axes.",
    "required": {
     "julia": [
      "interpreter",

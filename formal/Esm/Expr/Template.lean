@@ -93,6 +93,8 @@ def substRanges (σ : Bindings) : Ranges → Ranges
   | .nil => .nil
   | .cons k t rs => .cons k (substList σ t) (substRanges σ rs)
   | .fromSet k set rs => .fromSet k (fieldSub σ set) (substRanges σ rs)
+  | .fromRagged k set parents rs =>
+    .fromRagged k (fieldSub σ set) (parents.map (fieldSub σ)) (substRanges σ rs)
 
 def substBinds (σ : Bindings) : Binds → Binds
   | .nil => .nil
@@ -151,6 +153,7 @@ def walkRefsRanges (f : String → Binds → Except ExpandError Ast) :
   | .nil => .ok .nil
   | .cons k t rs => do return .cons k (← walkRefsList f t) (← walkRefsRanges f rs)
   | .fromSet k set rs => do return .fromSet k set (← walkRefsRanges f rs)
+  | .fromRagged k set parents rs => do return .fromRagged k set parents (← walkRefsRanges f rs)
 
 def walkRefsBinds (f : String → Binds → Except ExpandError Ast) :
     Binds → Except ExpandError Binds

@@ -1,0 +1,43 @@
+{
+  "fixture": "shaped_parameter_defaults",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "array_override",
+      "assertion_idx": 1,
+      "variable": "copied",
+      "actual": 4.0
+    },
+    {
+      "test_id": "array_override",
+      "assertion_idx": 2,
+      "variable": "weighted",
+      "actual": 6.0
+    },
+    {
+      "test_id": "override_array_default",
+      "assertion_idx": 1,
+      "variable": "weighted",
+      "actual": 2.75
+    },
+    {
+      "test_id": "scalar_default",
+      "assertion_idx": 1,
+      "variable": "copied",
+      "actual": 0.5
+    },
+    {
+      "test_id": "scalar_default",
+      "assertion_idx": 2,
+      "variable": "weighted",
+      "actual": 2.0
+    },
+    {
+      "test_id": "scalar_override",
+      "assertion_idx": 1,
+      "variable": "weighted",
+      "actual": 10.0
+    }
+  ]
+}

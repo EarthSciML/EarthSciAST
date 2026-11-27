@@ -253,24 +253,41 @@ not assign a conversion scale to a bare number (§4.8.4–4.8.6).
 -/
 
 inductive Unary where
-  | neg | abs | sqrt
+  | neg | abs | sqrt | not | sign | exp | log | log10
 
 def Unary.spelling : Unary → String
   | .neg => "-"
   | .abs => "abs"
   | .sqrt => "sqrt"
+  | .not => "not"
+  | .sign => "sign"
+  | .exp => "exp"
+  | .log => "log"
+  | .log10 => "log10"
 
 def Unary.op : Unary → StrictOp
   | .neg => .sub
   | .abs => .abs
   | .sqrt => .sqrt
+  | .not => .not
+  | .sign => .sign
+  | .exp => .exp
+  | .log => .log
+  | .log10 => .log10
 
-def Unary.unit : Unary → U → U
-  | .sqrt, u => u.rpow (1 / 2)
-  | _, u => u
+/-- Strict transcendentals admit a scale-one pure number, including the
+pure-angle exception of §4.8.3. -/
+def checkPure (u : U) : Verdict :=
+  if Compatible u U.one then .ok (some .one) else .error .dimensionMismatch
+
+def Unary.check : Unary → U → Verdict
+  | .sqrt, u => .ok (some (u.rpow (1 / 2)))
+  | .not, _ | .sign, _ => .ok (some .one)
+  | .exp, u | .log, u | .log10, u => checkPure u
+  | .neg, u | .abs, u => .ok (some u)
 
 inductive Binary where
-  | add | sub | mul | div | min | max | le | ge | lt | gt | eq | ne
+  | add | sub | mul | div | min | max | le | ge | lt | gt | eq | ne | and | or | atan2
 
 def Binary.spelling : Binary → String
   | .add => "+"
@@ -285,6 +302,9 @@ def Binary.spelling : Binary → String
   | .gt => ">"
   | .eq => "=="
   | .ne => "!="
+  | .and => "and"
+  | .or => "or"
+  | .atan2 => "atan2"
 
 def Binary.op : Binary → StrictOp
   | .add => .add
@@ -299,6 +319,14 @@ def Binary.op : Binary → StrictOp
   | .gt => .gt
   | .eq => .eq
   | .ne => .ne
+  | .and => .and
+  | .or => .or
+  | .atan2 => .atan2
+
+/-- The two coordinates passed to `atan2` must have the same dimension and
+exact scale (§4.8.3). -/
+def checkAtan2 (y x : U) : Verdict :=
+  if y.Agree x then .ok (some (.base .rad)) else .error .dimensionMismatch
 
 def Binary.check (op : Binary) (left right : U) : Verdict :=
   match op with
@@ -306,6 +334,12 @@ def Binary.check (op : Binary) (left right : U) : Verdict :=
   | .div => .ok (some (left.div right))
   | .add | .sub | .min | .max => checkKnown [left, right]
   | .le | .ge | .lt | .gt | .eq | .ne => (checkKnown [left, right]).map (fun _ => some .one)
+  | .and | .or => .ok (some .one)
+  | .atan2 => checkAtan2 left right
+
+/-- A folded rational exponent is written as the exact numerator divided by
+its nonzero denominator, both integer literals. -/
+def rationalExponent (q : ℚ) : Ast := .node "/" [.num q.num 0, .num q.den 0]
 
 /-- A scalar expression over declared inputs and the operator forms handled by
 the exact unit rescaling theorem. Conditions can carry a unit of their own. -/
@@ -313,25 +347,31 @@ inductive ScalarTerm where
   | var (name : String)
   | unary (op : Unary) (arg : ScalarTerm)
   | binary (op : Binary) (left right : ScalarTerm)
+  | power (base : ScalarTerm) (exponent : ℚ)
   | ifelse (condition yes no : ScalarTerm)
 
 def ScalarTerm.ast : ScalarTerm → Ast
   | .var name => .var name
   | .unary op arg => .node op.spelling [arg.ast]
   | .binary op left right => .node op.spelling [left.ast, right.ast]
+  | .power base exponent => .node "^" [base.ast, rationalExponent exponent]
   | .ifelse condition yes no => .node "ifelse" [condition.ast, yes.ast, no.ast]
 
 /-- The checker for the resolved fragment. An absent declaration yields an
 undeterminable unit and keeps the tree outside the rescaling guarantee. -/
 def ScalarTerm.check (units : List (String × U)) : ScalarTerm → Verdict
   | .var name => .ok (units.lookup name)
-  | .unary op arg => (arg.check units).map (Option.map op.unit)
+  | .unary op arg => do
+    match ← arg.check units with
+    | some u => op.check u
+    | none => .ok none
   | .binary op left right => do
     let leftUnit ← left.check units
     let rightUnit ← right.check units
     match leftUnit, rightUnit with
     | some l, some r => op.check l r
     | _, _ => .ok none
+  | .power base exponent => (base.check units).map (Option.map (fun u => u.rpow exponent))
   | .ifelse condition yes no => do
     let conditionUnit ← condition.check units
     let yesUnit ← yes.check units
@@ -367,6 +407,15 @@ private theorem lookup_map_value {α β : Type} (f : α → β)
 private theorem scale_one (x : Num) : scaleValue U.one.scale.real x = x := by
   cases x <;> simp [U.one, Scale.real_nil, scaleValue, Scalar.mul, Num.lift₂]
 
+theorem checkPure_scales (u result : U) (h : checkPure u = .ok (some result)) :
+    u.scale.real = U.one.scale.real ∧ result = U.one := by
+  unfold checkPure at h
+  split at h
+  · rename_i agrees
+    cases h
+    exact ⟨Scale.real_congr _ _ agrees.1, rfl⟩
+  · contradiction
+
 private theorem compatible_scales {l r result : U}
     (h : checkKnown [l, r] = .ok (some result)) :
     l.scale.real = result.scale.real ∧ r.scale.real = result.scale.real := by
@@ -384,6 +433,15 @@ private theorem comparison_units {l r result : U}
     have compatible := of_decide_eq_true (List.all_eq_true.mp (List.all_eq_true.mp ok l (by simp))
       r (by simp))
     exact ⟨hr.symm, Scale.real_congr _ _ compatible.1⟩
+  · contradiction
+
+theorem checkAtan2_units (y x result : U) (h : checkAtan2 y x = .ok (some result)) :
+    y.Agree x ∧ result = .base .rad := by
+  unfold checkAtan2 at h
+  split at h
+  · rename_i agrees
+    cases h
+    exact ⟨agrees, rfl⟩
   · contradiction
 
 private theorem le_scale (s : ℝ) (hs : 0 < s) (x y : Num) :
@@ -416,22 +474,84 @@ private theorem unit_div_scale (u v : U) :
   simp [U.div, U.mul, U.inv, U.rpow, Scale.real_append, Scale.real_rpow, Real.rpow_neg_one,
     div_eq_mul_inv]
 
-private theorem unary_scale (op : Unary) (u : U) (x : Num) :
+private theorem realPow_scale (s x e : ℝ) (hs : 0 < s) :
+    realPow (s * x) e = scaleValue (s ^ e) (realPow x e) := by
+  have hneg : s * x < 0 ↔ x < 0 := by
+    simpa using (mul_lt_mul_iff_right₀ hs : s * x < s * 0 ↔ x < 0)
+  by_cases hx : x < 0
+  · simp only [realPow, hneg, hx, ite_true]
+    split
+    · rename_i integral
+      have hs_pow : s ^ e = s ^ (⌊e⌋ : ℤ) := by
+        calc
+          s ^ e = s ^ ((⌊e⌋ : ℤ) : ℝ) := congrArg (fun t : ℝ => s ^ t) integral.symm
+          _ = _ := Real.rpow_intCast s _
+      simp [scaleValue, Scalar.mul, Num.lift₂, hs_pow, mul_zpow]
+    · rfl
+  · simp only [realPow, hneg, hx, ite_false, mul_eq_zero, hs.ne', false_or]
+    split
+    · rfl
+    · simp [scaleValue, Scalar.mul, Num.lift₂, Real.mul_rpow hs.le (le_of_not_gt hx)]
+
+private theorem pow_rational_scale (u : U) (q : ℚ) (x : Num) :
+    Elem.pow (scaleValue u.scale.real x) (.fin (q : ℝ)) =
+      scaleValue (u.rpow q).scale.real (Elem.pow x (.fin (q : ℝ))) := by
+  cases x with
+  | nan => rfl
+  | fin x =>
+    change realPow (u.scale.real * x) (q : ℝ) =
+      scaleValue (Scale.real (Scale.rpow u.scale q)) (realPow x (q : ℝ))
+    rw [Scale.real_rpow, realPow_scale _ _ _ (Scale.real_pos _)]
+
+private theorem sign_scale (s : ℝ) (hs : 0 < s) (x : Num) :
+    applyStrict .sign [.num (scaleValue s x)] = applyStrict .sign [.num x] := by
+  cases x with
+  | nan => rfl
+  | fin x =>
+    have hneg : s * x < 0 ↔ x < 0 := by
+      simpa using (mul_lt_mul_iff_right₀ hs : s * x < s * 0 ↔ x < 0)
+    have hpos : 0 < s * x ↔ 0 < x := by
+      simpa using (mul_lt_mul_iff_right₀ hs : s * 0 < s * x ↔ 0 < x)
+    by_cases hn : x < 0
+    · simp [applyStrict, asNum, bind, Except.bind, pure, Except.pure, scaleValue, Scalar.mul,
+        Num.lift₂, Scalar.lt, Num.lt, zero, Lits.ofDec, hneg, hn]
+    · by_cases hp : 0 < x
+      · simp [applyStrict, asNum, bind, Except.bind, pure, Except.pure, scaleValue, Scalar.mul,
+          Num.lift₂, Scalar.lt, Num.lt, zero, Lits.ofDec, hneg, hn, hpos, hp]
+      · have hz : x = 0 := le_antisymm (le_of_not_gt hp) (le_of_not_gt hn)
+        simp [applyStrict, asNum, bind, Except.bind, pure, Except.pure, scaleValue, Scalar.mul,
+          Num.lift₂, Scalar.lt, Num.lt, zero, Lits.ofDec, hz]
+
+private theorem atan2_scale (s : ℝ) (hs : 0 < s) (y x : Num) :
+    Elem.atan2 (scaleValue s y) (scaleValue s x) = Elem.atan2 y x := by
+  cases y <;> cases x <;> try rfl
+  rename_i y x
+  change Num.fin (realAtan2 (s * y) (s * x)) = Num.fin (realAtan2 y x)
+  have scaledPoint : (⟨s * x, s * y⟩ : ℂ) = (s : ℂ) * ⟨x, y⟩ := by
+    apply Complex.ext <;> simp
+  unfold realAtan2
+  rw [scaledPoint, Complex.arg_real_mul _ hs]
+
+private theorem unary_scale (op : Unary) (u result : U) (x : Num)
+    (h : op.check u = .ok (some result)) :
     applyStrict op.op [.num (scaleValue u.scale.real x)] =
-      (applyStrict op.op [.num x]).map (scaleValue (op.unit u).scale.real) := by
+      (applyStrict op.op [.num x]).map (scaleValue result.scale.real) := by
   have hs := Scale.real_pos u.scale
   cases op with
   | neg =>
-    cases x <;> simp [Unary.op, Unary.unit, applyStrict, asNum, bind, Except.bind, pure,
+    cases h
+    cases x <;> simp [Unary.op, applyStrict, asNum, bind, Except.bind, pure,
       Except.pure, Except.map, scaleValue, Scalar.mul, Num.lift₂, Elem.neg]
   | abs =>
-    cases x <;> simp [Unary.op, Unary.unit, applyStrict, asNum, bind, Except.bind, pure,
+    cases h
+    cases x <;> simp [Unary.op, applyStrict, asNum, bind, Except.bind, pure,
       Except.pure, Except.map, scaleValue, Scalar.mul, Num.lift₂, Elem.abs, abs_mul, abs_of_pos hs]
   | sqrt =>
+    cases h
     cases x with
     | nan => rfl
     | fin x =>
-      simp only [Unary.op, Unary.unit, applyStrict, asNum, bind, Except.bind, pure, Except.pure,
+      simp only [Unary.op, applyStrict, asNum, bind, Except.bind, pure, Except.pure,
         Except.map, scaleValue, Scalar.mul, Num.lift₂, Elem.sqrt]
       have hneg : u.scale.real * x < 0 ↔ x < 0 := by
         simpa using (mul_lt_mul_iff_right₀ hs : u.scale.real * x < u.scale.real * 0 ↔ x < 0)
@@ -439,6 +559,18 @@ private theorem unary_scale (op : Unary) (u : U) (x : Num) :
       · simp [hneg, hx]
       · simp [hneg, hx, U.rpow, Scale.real_rpow, Real.sqrt_eq_rpow,
           Real.mul_rpow hs.le (le_of_not_gt hx)]
+  | not =>
+    cases h
+    simp [Unary.op, applyStrict, asNum, bind, Except.bind, pure, Except.pure, Except.map,
+      truthy_scaled _ hs, scale_one]
+  | sign =>
+    cases h
+    rw [Unary.op, sign_scale _ hs]
+    simp [applyStrict, asNum, bind, Except.bind, pure, Except.pure, Except.map, scale_one]
+  | exp | log | log10 =>
+    obtain ⟨inputScale, rfl⟩ := checkPure_scales _ _ h
+    simp [Unary.op, applyStrict, asNum, bind, Except.bind, pure, Except.pure, Except.map,
+      inputScale, scale_one]
 
 private theorem binary_scale (op : Binary) (l r result : U) (x y : Num)
     (h : op.check l r = .ok (some result)) :
@@ -461,6 +593,17 @@ private theorem binary_scale (op : Binary) (l r result : U) (x y : Num)
     have ⟨hu, hs⟩ := comparison_units h
     simp [Binary.op, applyStrict, asNum, hs, bind, Except.bind, pure, Except.pure, Except.map,
       hu, scale_one, le_scale _ (Scale.real_pos r.scale), lt_scale _ (Scale.real_pos r.scale)]
+  | and | or =>
+    cases h
+    simp [Binary.op, applyStrict, asNum, bind, Except.bind, pure, Except.pure, Except.map,
+      truthy_scaled _ (Scale.real_pos _), scale_one]
+  | atan2 =>
+    obtain ⟨agreement, rfl⟩ := checkAtan2_units _ _ _ h
+    have sameScale := U.real_hom.2.2.2 l r agreement
+    change applyStrict .atan2 [.num (scaleValue l.scale.real x), .num (scaleValue r.scale.real y)] =
+      (applyStrict .atan2 [.num x, .num y]).map (scaleValue U.one.scale.real)
+    simp [applyStrict, asNum, bind, Except.bind, pure, Except.pure, Except.map,
+      sameScale, atan2_scale _ (Scale.real_pos r.scale), scale_one]
 
 private theorem unary_evaluates (op : Unary) (x : Num) :
     ∃ value, applyStrict op.op [.num x] = .ok value := by
@@ -482,6 +625,12 @@ private theorem eval_strict_two (name : String) (op : StrictOp) (left right : As
     eval (.node name [left, right]) env = (applyStrict op [.num x, .num y]).map Val.num := by
   simp [eval, evalList, dispatch, hl, hr, Val.arrayData, hasInf, bind, Except.bind,
     pure, Except.pure, Except.map]
+
+theorem eval_rationalExponent (q : ℚ) (env : Env Num) :
+    eval (rationalExponent q) env = .ok (.num (.fin (q : ℝ))) := by
+  have nonzero : (q.den : ℝ) ≠ 0 := by exact_mod_cast (Rat.den_ne_zero q)
+  simp [rationalExponent, eval, evalList, Op.ofString, Val.arrayData, hasInf, bind, Except.bind,
+    pure, Except.pure, Lits.ofDec, applyStrict, asNum, Scalar.div, Num.div, nonzero, Rat.cast_def]
 
 /-- For any expression in the resolved scalar fragment, checking fixes the
 conversion scale of the result. Converting all of its declared inputs before
@@ -509,20 +658,22 @@ theorem checked_scalar_rescaling (bindings : ScalarBindings) (term : ScalarTerm)
         rfl
   | unary op arg ih =>
     cases h : arg.check (scalarUnits bindings) with
-    | error e => simp [ScalarTerm.check, h, Except.map] at checked
+    | error e => simp [ScalarTerm.check, h, bind, Except.bind] at checked
     | ok child =>
       cases child with
-      | none => simp [ScalarTerm.check, h, Except.map] at checked
+      | none => simp [ScalarTerm.check, h, bind, Except.bind] at checked
       | some unit =>
-        simp [ScalarTerm.check, h, Except.map] at checked
-        subst result
+        change (arg.check (scalarUnits bindings) >>= fun
+          | some u => op.check u | none => .ok none) = .ok (some result) at checked
+        rw [h] at checked
+        change op.check unit = .ok (some result) at checked
         obtain ⟨x, hx, sx⟩ := ih unit h
         obtain ⟨value, hv⟩ := unary_evaluates op x
         have dispatch : Op.ofString op.spelling = .strict op.op := by cases op <;> rfl
         refine ⟨value, ?_, ?_⟩
         · rw [ScalarTerm.ast, eval_strict_one _ _ _ _ dispatch x hx, hv]
           rfl
-        · rw [ScalarTerm.ast, eval_strict_one _ _ _ _ dispatch _ sx, unary_scale, hv]
+        · rw [ScalarTerm.ast, eval_strict_one _ _ _ _ dispatch _ sx, unary_scale op unit result x checked, hv]
           rfl
   | binary op left right il ir =>
     cases hl : left.check (scalarUnits bindings) <;> cases hr : right.check (scalarUnits bindings) <;>
@@ -540,6 +691,23 @@ theorem checked_scalar_rescaling (bindings : ScalarBindings) (term : ScalarTerm)
     · rw [ScalarTerm.ast, eval_strict_two _ _ _ _ _ dispatch _ _ sx sy,
         binary_scale op lu ru result x y checked, hv]
       rfl
+  | power base exponent ih =>
+    cases h : base.check (scalarUnits bindings) with
+    | error e => simp [ScalarTerm.check, h, Except.map] at checked
+    | ok found =>
+      cases found with
+      | none => simp [ScalarTerm.check, h, Except.map] at checked
+      | some unit =>
+        simp [ScalarTerm.check, h, Except.map] at checked
+        subst result
+        obtain ⟨x, hx, sx⟩ := ih unit h
+        refine ⟨Elem.pow x (.fin (exponent : ℝ)), ?_, ?_⟩
+        · rw [ScalarTerm.ast, eval_strict_two _ _ _ _ _ rfl _ _ hx (eval_rationalExponent _ _)]
+          rfl
+        · rw [ScalarTerm.ast, eval_strict_two _ _ _ _ _ rfl _ _ sx (eval_rationalExponent _ _)]
+          change (Except.ok (.num (Elem.pow (scaleValue unit.scale.real x) (.fin (exponent : ℝ)))) :
+            Except EvalError (Val Num)) = _
+          rw [pow_rational_scale]
   | ifelse condition yes no ic iy ino =>
     cases hc : condition.check (scalarUnits bindings) <;> cases hy : yes.check (scalarUnits bindings) <;>
       cases hn : no.check (scalarUnits bindings) <;>
@@ -601,6 +769,16 @@ example :
         [("x", (U.base .m).mul (.ofScale [(.pi, 1)])),
           ("y", (U.base .m).mul (.ofScale [(.pi, 1)]))] with
     | .ok (some u) => decide (u.Agree ((U.base .m).mul (.ofScale [(.pi, 1)])))
+    | _ => false) = true := by decide +kernel
+
+example :
+    (match checkPure (.ofScale [(.pi, 1)]) with
+    | .error .dimensionMismatch => true
+    | _ => false) = true := by decide +kernel
+
+example :
+    (match checkAtan2 (.base .rad) .one with
+    | .error .dimensionMismatch => true
     | _ => false) = true := by decide +kernel
 
 end Esm.Units.ScalarCheck

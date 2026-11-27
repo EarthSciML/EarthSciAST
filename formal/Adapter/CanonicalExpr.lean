@@ -1,8 +1,7 @@
 import Lean.Data.Json
 import Adapter.Decimal
 import Adapter.JsonString
-import Esm.Expr.Canonical
-import Esm.Units.Canonical
+import Esm.Expr.Canonical.Typed
 
 /-! The discretization RFC §5.4 `canonical_json` expression format. Its typed
 float tokens, signed zeros and algebraic rewrites are specific to this API.
@@ -11,11 +10,7 @@ entry points. -/
 
 namespace Adapter.CanonicalExpr
 
-open Esm.Expr.Canonical
-
-private inductive Literal where
-  | int (value : Int)
-  | float (negative : Bool) (significand : Nat) (exponent : Int)
+open Esm.Expr.Canonical.Typed
 
 private inductive Wire where
   | number (value : Option Literal)
@@ -26,8 +21,6 @@ private inductive Wire where
   | object (fields : List (String × Wire))
 
 open Std.Internal.Parsec Std.Internal.Parsec.String
-
-private def floatZero (negative : Bool) : Literal := .float negative 0 (-1074)
 
 private def roundFloat (negative : Bool) (coefficient : Nat) (shift : Int) : Option Literal :=
   if coefficient == 0 then some (floatZero negative)
@@ -94,35 +87,8 @@ private partial def readWire : Parser Wire := do
 
 /-! ### AST and rendering -/
 
-private inductive Payload where
-  | number (value : Literal)
-  | string (value : String)
-  | bool (value : Bool)
-  | null
-  | array (values : List Payload)
-
-private inductive Expression where
-  | number (value : Literal)
-  | reference (name : String)
-  | node (op : String) (args : List Expression) (fields : List (String × Payload))
-
-private structure Failure where
-  code : String
-  path : String
-  message : String
-  deriving Inhabited
-
-private def invalid (path message : String) : Failure :=
-  ⟨"E_CANONICAL_INVALID_EXPRESSION", path, message⟩
-
-private def nonFinite (path : String) : Failure :=
-  ⟨"E_CANONICAL_NONFINITE", path, "float is outside the finite binary64 range"⟩
-
 private def fieldPath (path key : String) : String :=
   path ++ "/" ++ ((key.replace "~" "~0").replace "/" "~1")
-
-private def look {α : Type} (fields : List (String × α)) (key : String) : Option α :=
-  (fields.find? (fun field => field.1 == key)).map Prod.snd
 
 private partial def decodePayload (path : String) : Wire → Except Failure Payload
   | .number (some n) => .ok (.number n)
@@ -163,165 +129,20 @@ private abbrev quote := JsonString.quote
 private def renderArray (items : List String) : String := "[" ++ ",".intercalate items ++ "]"
 
 private partial def Payload.render : Payload → String
-  | .number n => n.render
+  | .number n => Literal.render n
   | .string s => quote s
   | .bool b => if b then "true" else "false"
   | .null => "null"
   | .array xs => renderArray (xs.map Payload.render)
 
 private partial def Expression.render : Expression → String
-  | .number n => n.render
+  | .number n => Literal.render n
   | .reference s => quote s
   | .node op args fields =>
     let mandatory := [("args", renderArray (args.map Expression.render)), ("op", quote op)]
-    let fields := mandatory ++ fields.map fun (key, value) => (key, value.render)
+    let fields := mandatory ++ fields.map fun (key, value) => (key, Payload.render value)
     let fields := fields.mergeSort fun a b => a.1 ≤ b.1
     "{" ++ ",".intercalate (fields.map fun (key, value) => quote key ++ ":" ++ value) ++ "}"
-
-/-! ### Canonical form -/
-
-private def Literal.ratio : Literal → Int × Nat
-  | .int n => (n, 1)
-  | .float neg m k =>
-    let a : Int := m * (2 ^ k.toNat : Nat)
-    (if neg then -a else a, 2 ^ (-k).toNat)
-
-private def Literal.isFloat : Literal → Bool
-  | .int _ => false
-  | .float .. => true
-
-private def Literal.is (literal : Literal) (n : Int) : Bool :=
-  let (a, b) := literal.ratio
-  a == n * (b : Int)
-
-private def Literal.negate : Literal → Literal
-  | .int n => .int (-n)
-  | .float negative m k => .float (!negative) m k
-
-private def Literal.negativeZero : Literal → Bool
-  | .float true 0 _ => true
-  | _ => false
-
-private inductive SortKey where
-  | number (n : Literal)
-  | reference (name : String)
-  | node (canonical : String)
-
-private def sortKey : Expression → SortKey
-  | .number n => .number n
-  | .reference s => .reference s
-  | e@(.node ..) => .node e.render
-
-private def before : SortKey → SortKey → Bool
-  | .number a, .number b =>
-    let (na, da) := a.ratio
-    let (nb, db) := b.ratio
-    match compare (na * (db : Int)) (nb * (da : Int)) with
-    | .lt => true
-    | .gt => false
-    | .eq => !a.isFloat || b.isFloat
-  | .number _, _ => true
-  | _, .number _ => false
-  | .reference a, .reference b => a ≤ b
-  | .reference _, .node _ => true
-  | .node _, .reference _ => false
-  | .node a, .node b => a ≤ b
-
-private def withSortedArgs (op : String) (args : List Expression) (fields : List (String × Payload)) :
-    Expression :=
-  .node op (orderArgs sortKey before args) fields
-
-private def flatten (op : String) (args : List Expression) : List Expression :=
-  flattenArgs (fun a => match a with
-    | .node child children [] => if op == child then some children else none
-    | _ => none) args
-
-private def retainFloatIdentity (identity : Int) (neutral rest : List Expression) :
-    Option Expression :=
-  let floating := neutral.any fun a => match a with
-    | .number n => n.isFloat
-    | _ => false
-  let knownFloats := rest.all fun a => match a with
-    | .number n => n.isFloat
-    | _ => false
-  let floatIdentity := if identity == 0 then
-    floatZero (neutral.all fun a => match a with
-      | .number n => n.negativeZero
-      | _ => false)
-    else .float false (2 ^ 52) (-52)
-  if floating && (!knownFloats || rest.isEmpty) then some (.number floatIdentity) else none
-
-private def eraseIdentity (op : String) (identity : Int) (args : List Expression)
-    (fields : List (String × Payload)) : Expression :=
-  let rest := identityArgs (fun a => match a with
-    | .number n => n.is identity
-    | _ => false) (retainFloatIdentity identity) args
-  match rest, fields with
-  | [], [] => .number (.int identity)
-  | [a], [] => a
-  | _, _ => withSortedArgs op rest fields
-
-private def promoteInt (path : String) (n : Literal) : Except Failure Literal :=
-  match n with
-  | .int n =>
-    match roundFloat (n < 0) n.natAbs 0 with
-    | some v => .ok v
-    | none => .error (nonFinite path)
-  | v => .ok v
-
-private def canonicalConst (args : List Expression) (fields : List (String × Payload)) :
-    Expression :=
-  match look fields "units" with
-  | some (.string u) =>
-    let canonical := Esm.Units.canon u
-    if canonical == "1" then
-      match look fields "value" with
-      | some (.number n) => .number n
-      | _ => .node "const" args (fields.filter (fun entry => entry.1 != "units"))
-    else .node "const" args (fields.map fun (k, v) => (k, if k == "units" then .string canonical else v))
-  | _ => .node "const" args fields
-
-private def negate : Expression → Expression
-  | .number n => .number n.negate
-  | .node "-" [x] [] => x
-  | x => .node "-" [x] []
-
-private partial def canonicalize (path : String) : Expression → Except Failure Expression
-  | .node op args fields => do
-    let args ← args.zipIdx.mapM fun (a, i) => canonicalize (s!"{path}/args/{i}") a
-    let original := Expression.node op args fields
-    match op, args, fields with
-    | "const", _, _ => return canonicalConst args fields
-    | "+", _, _ => return eraseIdentity op 0 (flatten op args) fields
-    | "*", _, _ =>
-      let flattened := flatten op args
-      if fields.isEmpty then
-        let zero := flattened.findSome? fun a => match a with
-          | .number n => if n.is 0 then some n else none
-          | _ => none
-        if let some n := zero then return .number n
-      return eraseIdentity op 1 flattened fields
-    | "-", [a], [] | "neg", [a], [] => return negate a
-    | "neg", [_], _ => return .node "-" args fields
-    | "pow", [_, _], _ => return .node "^" args fields
-    | "-", [.number a, .number b], [] =>
-      if a.is 0 then
-        if b.is 0 && (a.isFloat || b.isFloat) then
-          return .number (floatZero (a.negativeZero && !b.negativeZero))
-        if a.isFloat then return .number (← promoteInt path b.negate)
-        return .number b.negate
-      if b.is 0 then return .number (← if b.isFloat then promoteInt path a else pure a)
-      return original
-    | "-", [a, .number b], [] => return if b.is 0 then a else original
-    | "/", [.number a, .number b], [] =>
-      if a.is 0 && b.is 0 then throw ⟨"E_CANONICAL_DIVBY_ZERO", path, "literal zero divided by zero"⟩
-      if b.is 1 then return .number (← if b.isFloat then promoteInt path a else pure a)
-      if a.is 0 then return .number a
-      return original
-    | "/", [a, .number b], [] => return if b.is 1 then a else original
-    | "/", [.number a, _], [] => return if a.is 0 then .number a else original
-    | _, _, _ => return original
-  | e => .ok e
 
 private partial def decode (path : String) : Wire → Except Failure Expression
   | .number (some n) => .ok (.number n)
@@ -339,7 +160,7 @@ private partial def decode (path : String) : Wire → Except Failure Expression
         | .object bindings =>
           for (name, child) in bindings do
             let childPath := fieldPath pointer name
-            let _ ← canonicalize childPath (← decode childPath child)
+            let _ ← canonicalize Expression.render roundFloat childPath (← decode childPath child)
           return none
         | _ => throw (invalid pointer "expected an object")
       if key == "value" then
@@ -365,7 +186,7 @@ private def run (input : String) (fixture : Bool) : Except Failure String := do
       | none => throw (invalid "" "expected input field")
     | _ => throw (invalid "" "expected fixture object")
   else pure wire
-  return (← canonicalize "" (← decode "" expression)).render
+  return Expression.render (← canonicalize Expression.render roundFloat "" (← decode "" expression))
 
 def main (args : List String) : IO UInt32 := do
   let options := match args with

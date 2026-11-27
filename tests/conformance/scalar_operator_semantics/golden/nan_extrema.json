@@ -1,0 +1,151 @@
+{
+  "fixture": "nan_extrema",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "admitted_nan",
+      "assertion_idx": 1,
+      "variable": "input_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "admitted_nan",
+      "assertion_idx": 2,
+      "variable": "left_min_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "admitted_nan",
+      "assertion_idx": 3,
+      "variable": "right_min_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "admitted_nan",
+      "assertion_idx": 4,
+      "variable": "middle_min_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "admitted_nan",
+      "assertion_idx": 5,
+      "variable": "left_max_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "admitted_nan",
+      "assertion_idx": 6,
+      "variable": "right_max_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "admitted_nan",
+      "assertion_idx": 7,
+      "variable": "middle_max_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "admitted_nan",
+      "assertion_idx": 8,
+      "variable": "selected_max_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "excluded_nan",
+      "assertion_idx": 1,
+      "variable": "input_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "excluded_nan",
+      "assertion_idx": 2,
+      "variable": "left_min_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "excluded_nan",
+      "assertion_idx": 3,
+      "variable": "right_min_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "excluded_nan",
+      "assertion_idx": 4,
+      "variable": "middle_min_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "excluded_nan",
+      "assertion_idx": 5,
+      "variable": "left_max_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "excluded_nan",
+      "assertion_idx": 6,
+      "variable": "right_max_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "excluded_nan",
+      "assertion_idx": 7,
+      "variable": "middle_max_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "excluded_nan",
+      "assertion_idx": 8,
+      "variable": "selected_max_nan",
+      "actual": 0.0
+    },
+    {
+      "test_id": "finite_inputs",
+      "assertion_idx": 1,
+      "variable": "input_nan",
+      "actual": 0.0
+    },
+    {
+      "test_id": "finite_inputs",
+      "assertion_idx": 2,
+      "variable": "left_min_nan",
+      "actual": 0.0
+    },
+    {
+      "test_id": "finite_inputs",
+      "assertion_idx": 3,
+      "variable": "right_min_nan",
+      "actual": 0.0
+    },
+    {
+      "test_id": "finite_inputs",
+      "assertion_idx": 4,
+      "variable": "middle_min_nan",
+      "actual": 0.0
+    },
+    {
+      "test_id": "finite_inputs",
+      "assertion_idx": 5,
+      "variable": "left_max_nan",
+      "actual": 0.0
+    },
+    {
+      "test_id": "finite_inputs",
+      "assertion_idx": 6,
+      "variable": "right_max_nan",
+      "actual": 0.0
+    },
+    {
+      "test_id": "finite_inputs",
+      "assertion_idx": 7,
+      "variable": "middle_max_nan",
+      "actual": 0.0
+    },
+    {
+      "test_id": "finite_inputs",
+      "assertion_idx": 8,
+      "variable": "selected_max_nan",
+      "actual": 0.0
+    }
+  ]
+}

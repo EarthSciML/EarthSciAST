@@ -24,6 +24,14 @@ agg(oi, ranges, body) = Dict{String, Any}(
 
 roundtrip(d) = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(d))))
 
+# Record `state` as pointwise-lifted over `extents`, as the §10.5 lift does: a
+# bare name in a lifted equation's `faq` body was put there by the lift, so the
+# consumer rewrite gathers it. In an AUTHORED `faq` body the same bare read is
+# `faq_bare_array_operand` (esm-spec §4.3.1).
+as_lifted(flat, state, extents) = E.FlattenedSystem(
+    flat; lifted_shapes = ESS.OrderedDict{String, Vector{Int}}(state => extents)
+)
+
 # The distilled Fast-JX structural pattern: an array source f[c], a
 # scalar-authored rate j = f*2 (promoted to [c] only by
 # promote_downstream_shapes), and a pre-lifted per-cell species ODE — the shape
@@ -76,7 +84,7 @@ consumer_rhs(sys) = only(
 ).rhs
 
 @testset "consumer refs to promoted vars are gathered in-loop" begin
-    flat = lifted_consumer_doc() |> roundtrip
+    flat = as_lifted(roundtrip(lifted_consumer_doc()), "M.s", [3])
     pre = E.algebraic_states_to_observeds(flat)
 
     @testset "with the fix: bare ref becomes an in-scope gather, evaluates" begin
@@ -129,16 +137,22 @@ end
             )
         )
     )
-    prom = E.promote_downstream_shapes(roundtrip(d))
-    body = consumer_rhs(prom).expr_body
+    flat = roundtrip(d)
+    # The rewrite binds the contracted loop: `j` is read at `k`.
+    body = E._index_promoted_consumer_refs(
+        consumer_rhs(flat), Set(["M.j"]), Dict("M.j" => ["c"])
+    ).expr_body
     @test body isa E.OpExpr && body.op == "index" &&
         body.args == E.ASTExpr[E.VarExpr("M.j"), E.VarExpr("k")]
-    f!, u0, p, _t, vmap = E.Internal.build(
-        prom;
-        const_arrays = Dict("M.f" => [1.0, 2.0, 3.0]), initial_conditions = Dict("M.z" => 0.0)
-    )
-    du = similar(u0); f!(du, u0, p, 0.0)
-    @test du[vmap["M.z"]] ≈ 12.0                     # Σ 2f = 2+4+6
+    # Authored, the same bare read of the now-array `j` is refused rather than
+    # aligned by the rewrite (esm-spec §4.3.1).
+    err = try
+        E.promote_downstream_shapes(flat)
+        nothing
+    catch e
+        e
+    end
+    @test err isa E.DimensionPromotionError && err.code == "faq_bare_array_operand"
 end
 
 @testset "name alignment transposes a permuted-shape operand" begin
@@ -175,7 +189,7 @@ end
             )
         )
     )
-    prom = E.promote_downstream_shapes(roundtrip(d))
+    prom = E.promote_downstream_shapes(as_lifted(roundtrip(d), "M.s2", [3, 2]))
     @test prom.observed_variables["M.jj"].shape == ["d", "c"]
     body = consumer_rhs(prom).expr_body
     gathers = [

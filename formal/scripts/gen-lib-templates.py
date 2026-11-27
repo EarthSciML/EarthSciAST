@@ -119,6 +119,20 @@ def ast(e, indent, path):
             if isinstance(r, dict) and set(r) == {"from"} and isinstance(r["from"], str):
                 ranges = f"(Ranges.fromSet {lean_str(k)} {lean_str(r['from'])} {ranges})"
                 continue
+            if isinstance(r, dict) and set(r) == {"from", "of"}:
+                parent_names = r["of"]
+                if not (
+                    isinstance(r["from"], str)
+                    and isinstance(parent_names, list)
+                    and parent_names
+                    and all(isinstance(parent, str) for parent in parent_names)
+                ):
+                    raise Unsupported(f"{path}: ragged faq range {k!r} needs a set and parent names")
+                parents = ", ".join(lean_str(parent) for parent in parent_names)
+                ranges = (
+                    f"(Ranges.fromRagged {lean_str(k)} {lean_str(r['from'])} [{parents}] {ranges})"
+                )
+                continue
             if not isinstance(r, list):
                 raise Unsupported(f"{path}: faq range {k!r} is neither a tuple nor a from-set")
             ranges = (f"(Ranges.cons {lean_str(k)} ["

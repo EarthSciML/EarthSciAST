@@ -1,0 +1,61 @@
+{
+  "fixture": "static_rank2_elementwise_gather",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "probe",
+      "assertion_idx": 1,
+      "variable": "gathered",
+      "actual": 56.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 2,
+      "variable": "gathered",
+      "actual": 32.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 3,
+      "variable": "gathered",
+      "actual": 90.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 4,
+      "variable": "explicit",
+      "actual": 56.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 5,
+      "variable": "explicit",
+      "actual": 32.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 6,
+      "variable": "explicit",
+      "actual": 90.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 7,
+      "variable": "direct",
+      "actual": 56.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 8,
+      "variable": "direct",
+      "actual": 32.0
+    },
+    {
+      "test_id": "probe",
+      "assertion_idx": 9,
+      "variable": "direct",
+      "actual": 90.0
+    }
+  ]
+}

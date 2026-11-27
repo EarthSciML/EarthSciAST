@@ -34,7 +34,7 @@
   "tolerances": {
     "golden_rtol": 1e-09,
     "golden_atol": 1e-11,
-    "detail": "The band between a producer's actual and the Julia-interpreter golden. It is separate from, and tighter than, each assertion's own \u00a76.6.4 band: the assertion states what the PHYSICS is (and is gated at the document's own tolerance by each binding's \u00a76.6.3 predicate), while this states how far two evaluations of the same arithmetic may drift. Every fixture here integrates a CONSTANT tendency from a zero initial condition, or a scalar exponential, so an integrator contributes nothing near this floor."
+    "detail": "The band between a producer's actual and the Julia-interpreter golden. It is separate from, and tighter than, each assertion's own \u00a76.6.4 band: the assertion states what the PHYSICS is (and is gated at the document's own tolerance by each binding's \u00a76.6.3 predicate), while this states how far two evaluations of the same arithmetic may drift. The state-free probes test named alignment directly. The trajectory probes integrate a constant tendency from a zero initial condition, or a scalar exponential."
   },
   "fixtures": [
     {
@@ -63,7 +63,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "bare_mixed_rank_product",
@@ -91,7 +100,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "bare_axis_permuted_operand",
@@ -119,7 +137,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "broadcast_node_mixed_rank",
@@ -147,7 +174,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "anonymous_shape_positional",
@@ -175,7 +211,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "unary_broadcast_fn",
@@ -204,7 +249,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "observed_expression_aligned",
@@ -218,6 +272,68 @@
         "issue-100"
       ],
       "note": "Authored here. Migrated from the Python `test_observed_expression_is_aligned_too` and the Rust `array_shaped_observed_broadcasts_by_name`.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
+    },
+    {
+      "id": "static_named_broadcast",
+      "path": "fixtures/static_named_broadcast.esm",
+      "model": "StaticNamedBroadcast",
+      "golden": "golden/static_named_broadcast.json",
+      "tags": [
+        "static",
+        "array"
+      ],
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "permuted_static_alias",
+      "path": "differential/shaped/permuted_static_alias.esm",
+      "model": "Probe",
+      "golden": "golden/permuted_static_alias.json",
+      "tags": [
+        "static",
+        "named-alignment",
+        "axis-permutation",
+        "differential-replay"
+      ],
+      "note": "Exact saved replay of the Julia native wrong-cell read through a bare shape-permuting alias.",
       "required": {
         "julia": [
           "interpreter",

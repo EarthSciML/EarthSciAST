@@ -1,0 +1,201 @@
+{
+ "esm": "2.3.0",
+ "metadata": {
+  "name": "ShapedParameterDefaults",
+  "description": "State-free companion to shaped_parameter_broadcast. A shaped scalar default or override replicates over all cells. A shaped array binds individual cells, and an override takes precedence.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ]
+ },
+ "index_sets": {
+  "lev": {
+   "kind": "interval",
+   "size": 4
+  }
+ },
+ "models": {
+  "ShapedParameterDefaults": {
+   "variables": {
+    "ramp": {
+     "type": "parameter",
+     "units": "1",
+     "shape": [
+      "lev"
+     ],
+     "default": 0.5
+    },
+    "scale": {
+     "type": "parameter",
+     "units": "1",
+     "shape": [
+      "lev"
+     ],
+     "default": [
+      1,
+      2,
+      3,
+      4
+     ]
+    },
+    "copied": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "lev"
+     ]
+    },
+    "weighted": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "lev"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "copied",
+     "rhs": "ramp"
+    },
+    {
+     "lhs": "weighted",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "lev"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "ramp",
+          "k"
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "scale",
+          "k"
+         ]
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "tolerance": {
+    "rel": 0,
+    "abs": 1e-12
+   },
+   "tests": [
+    {
+     "id": "scalar_default",
+     "time_span": {
+      "start": 0,
+      "end": 1
+     },
+     "assertions": [
+      {
+       "variable": "copied",
+       "time": 0,
+       "expected": 0.5,
+       "coords": {
+        "lev": 4
+       }
+      },
+      {
+       "variable": "weighted",
+       "time": 0,
+       "expected": 2,
+       "coords": {
+        "lev": 4
+       }
+      }
+     ]
+    },
+    {
+     "id": "scalar_override",
+     "time_span": {
+      "start": 0,
+      "end": 1
+     },
+     "assertions": [
+      {
+       "variable": "weighted",
+       "time": 0,
+       "expected": 10,
+       "coords": {
+        "lev": 4
+       }
+      }
+     ],
+     "parameter_overrides": {
+      "ramp": 2.5
+     }
+    },
+    {
+     "id": "array_override",
+     "time_span": {
+      "start": 0,
+      "end": 1
+     },
+     "assertions": [
+      {
+       "variable": "copied",
+       "time": 0,
+       "expected": 4,
+       "coords": {
+        "lev": 4
+       }
+      },
+      {
+       "variable": "weighted",
+       "time": 0,
+       "expected": 6,
+       "coords": {
+        "lev": 2
+       }
+      }
+     ],
+     "parameter_overrides": {
+      "ramp": [
+       2,
+       3,
+       5,
+       4
+      ]
+     }
+    },
+    {
+     "id": "override_array_default",
+     "time_span": {
+      "start": 0,
+      "end": 1
+     },
+     "assertions": [
+      {
+       "variable": "weighted",
+       "time": 0,
+       "expected": 2.75,
+       "coords": {
+        "lev": 3
+       }
+      }
+     ],
+     "parameter_overrides": {
+      "scale": 5.5
+     }
+    }
+   ]
+  }
+ }
+}

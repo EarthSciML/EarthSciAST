@@ -1,6 +1,22 @@
 {
   "properties": [
     {
+      "id": "P-rfc-canonical-typed-polynomial-preserves-value",
+      "defined_by": "formal/Esm/Expr/Canonical/Typed.lean",
+      "statement": "The recursive typed expression canonicalizer preserves the polynomial fragment and its exact value under every assignment.",
+      "lean_statement": "∀ {K : Type} [Field K] [CharZero K] (render : Esm.Expr.Canonical.Typed.Expression → String) (round : Bool → Nat → Int → Option Esm.Expr.Canonical.Typed.Literal) (env : String → K) (path : String) (input output : Esm.Expr.Canonical.Typed.Expression), Esm.Expr.Canonical.Typed.canonicalize render round path input = .ok output → Esm.Expr.Canonical.Typed.Polynomial input → Esm.Expr.Canonical.Typed.Polynomial output ∧ Esm.Expr.Canonical.Typed.polynomialValue env output = Esm.Expr.Canonical.Typed.polynomialValue env input",
+      "status": "proven",
+      "theorem": "Esm.Expr.Canonical.Typed.canonicalize_preserves_polynomial"
+    },
+    {
+      "id": "P-rfc-canonical-typed-polynomial-idempotent",
+      "defined_by": "formal/Esm/Expr/Canonical/Typed.lean",
+      "statement": "Recanonicalizing the successful output of the recursive typed canonicalizer leaves a polynomial expression unchanged at any diagnostic path.",
+      "lean_statement": "∀ (render : Esm.Expr.Canonical.Typed.Expression → String) (round : Bool → Nat → Int → Option Esm.Expr.Canonical.Typed.Literal) (path nextPath : String) (input output : Esm.Expr.Canonical.Typed.Expression), Esm.Expr.Canonical.Typed.canonicalize render round path input = .ok output → Esm.Expr.Canonical.Typed.Polynomial input → Esm.Expr.Canonical.Typed.canonicalize render round nextPath output = .ok output",
+      "status": "proven",
+      "theorem": "Esm.Expr.Canonical.Typed.canonicalize_polynomial_idempotent"
+    },
+    {
       "id": "P-rfc-canonical-flatten-idempotent",
       "defined_by": "formal/Esm/Expr/Canonical.lean",
       "statement": "Flattening an argument list a second time leaves it unchanged when the same-operator children were normalized first.",

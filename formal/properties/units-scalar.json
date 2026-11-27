@@ -84,14 +84,48 @@
       "id": "P-units-scalar-compositional-exact-rescaling",
       "clauses": [
         "spec.4.8.3.sum-operands-share-unit",
+        "spec.4.8.3.pow-exponent-dimensionless",
         "spec.4.8.3.sqrt-not-transcendental",
         "spec.4.8.3.comparison-operands-share-unit",
-        "spec.4.8.3.agreement-dimension-and-scale"
+        "spec.4.8.3.agreement-dimension-and-scale",
+        "spec.4.8.3.atan2-commensurate",
+        "spec.4.8.3.strict-transcendental-argument"
       ],
-      "statement": "For a checked scalar tree of declared inputs, arithmetic, extrema, comparisons, or conditionals, evaluating after converting the inputs gives the exact evaluator's authored result converted by the inferred unit's scale.",
+      "statement": "For a checked scalar tree of declared inputs, arithmetic, rational powers, extrema, comparisons, logic, sign, exp, log, log10, atan2, or conditionals, evaluating after converting the inputs gives the exact evaluator's authored result converted by the inferred unit's scale.",
       "lean_statement": "∀ (bindings : Esm.Units.ScalarCheck.ScalarBindings) (term : Esm.Units.ScalarCheck.ScalarTerm) (result : Esm.Units.U), term.check (Esm.Units.ScalarCheck.scalarUnits bindings) = .ok (some result) → ∃ value : Esm.Closed.Num, Esm.Expr.eval term.ast (Esm.Units.ScalarCheck.scalarInputs bindings) = .ok (.num value) ∧ Esm.Expr.eval term.ast (Esm.Units.ScalarCheck.canonicalInputs bindings) = .ok (.num (Esm.Units.ScalarCheck.scaleValue result.scale.real value))",
       "status": "proven",
       "theorem": "Esm.Units.ScalarCheck.checked_scalar_rescaling"
+    },
+    {
+      "id": "P-units-scalar-rational-exponent-evaluation",
+      "clauses": [
+        "spec.4.8.3.pow-exponent-dimensionless"
+      ],
+      "statement": "The exact expression evaluator reads the constant numerator-over-denominator expression for every rational exponent as that exact rational value, independently of the environment.",
+      "lean_statement": "∀ (q : ℚ) (env : Esm.Expr.Env Esm.Closed.Num), Esm.Expr.eval (Esm.Units.ScalarCheck.rationalExponent q) env = .ok (.num (.fin (q : ℝ)))",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.eval_rationalExponent"
+    },
+    {
+      "id": "P-units-scalar-transcendental-scale-one",
+      "clauses": [
+        "spec.4.8.3.strict-transcendental-argument",
+        "spec.4.8.3.no-silent-scale-normalization"
+      ],
+      "statement": "An accepted strict transcendental input already has real scale one and gives the ordinary dimensionless result unit, including under the pure-angle exception.",
+      "lean_statement": "∀ (u result : Esm.Units.U), Esm.Units.ScalarCheck.checkPure u = .ok (some result) → u.scale.real = Esm.Units.U.one.scale.real ∧ result = Esm.Units.U.one",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checkPure_scales"
+    },
+    {
+      "id": "P-units-scalar-atan2-commensurability",
+      "clauses": [
+        "spec.4.8.3.atan2-commensurate"
+      ],
+      "statement": "An accepted pair of atan2 coordinates agrees in dimension and exact scale, and its result unit is rad.",
+      "lean_statement": "∀ (y x result : Esm.Units.U), Esm.Units.ScalarCheck.checkAtan2 y x = .ok (some result) → y.Agree x ∧ result = .base .rad",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checkAtan2_units"
     },
     {
       "id": "P-units-scalar-bare-literal-needs-context",
