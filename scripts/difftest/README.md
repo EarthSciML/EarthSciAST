@@ -78,18 +78,18 @@ The 1,200-case sweep with seed 20261026 shrank one disagreement to
 zero. The Lean model now returns negative zero for both operand orders.
 Replay `tests/differential/scalar/negative_zero_min.esm` to check those bits.
 
-Native Julia refuses the 1×1 bare transpose in
-`tests/differential/shaped/bare_transpose_1x1.esm` with
-`E_TREEWALK_UNSUPPORTED_SHAPE`. Lean, native Python, and native Rust return
-positive zero for its sole cell. Replay the disagreement with the Julia adapter.
+`tests/differential/shaped/bare_transpose_1x1.esm` is a 1×1 bare transpose of a
+const array, and `tests/differential/shaped/permuted_static_alias.esm` is a
+state-free alias that reverses its operand's declared axes. Every participant
+returns positive zero for the first and `3` for the second.
+
+Pass `--fixture` more than once to replay several documents with one set of
+adapters. Formal CI replays every document under `tests/differential` this way
+before the generated sweeps.
 
 ```sh
-python scripts/difftest/scalar.py --shaped --timeout 300 \
+python scripts/difftest/scalar.py --timeout 300 \
   --fixture tests/differential/shaped/bare_transpose_1x1.esm \
+  --fixture tests/differential/shaped/permuted_static_alias.esm \
   --adapter 'julia=julia --project=formal/.lake/difftest-julia scripts/difftest/scalar_julia.jl'
 ```
-
-Use the same command with `tests/differential/shaped/permuted_static_alias.esm`
-to replay a state-free alias that reverses its operand's declared axes. Lean,
-native Python, and native Rust return `3`. The native Julia request reports
-`E_TREEWALK_CONSTARRAY_OOB` on the operand's second axis.

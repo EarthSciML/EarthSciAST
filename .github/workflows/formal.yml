@@ -298,6 +298,12 @@ jobs:
           --adapter 'julia=julia --project=formal/.lake/difftest-julia scripts/difftest/scalar_julia.jl'
           --adapter 'rust=pkg/earthsci-ast-rs/target/debug/earthsci-inline-tests-adapter-rust --jsonl'
         )
+        # Every recorded disagreement replays against all participants first.
+        replays=()
+        for fixture in tests/differential/*/*.esm; do
+          replays+=(--fixture "$fixture")
+        done
+        python scripts/difftest/scalar.py --timeout 300 "${adapters[@]}" "${replays[@]}"
         python scripts/difftest/scalar.py --seed "$seed" --cases "$scalar_cases" --timeout 300 "${adapters[@]}"
         python scripts/difftest/scalar.py --shaped --seed "$seed" --cases "$shaped_cases" --timeout 300 "${adapters[@]}"
 
