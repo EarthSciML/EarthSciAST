@@ -95,10 +95,11 @@ _index_wrap(node::ASTExpr, loops::Vector{String})::OpExpr =
 """
     _gather_by_name(v, shape, axes, loops) -> OpExpr or Tuple{Symbol, String}
 
-The variable `v`, declared over the index sets `shape`, read at the current
-cell of a grid whose loop `loops[d]` runs over the index set `axes[d]`: each
-declared index set is read at the loop over it (esm-spec §4.3.4). A shape equal
-to the grid's is the positional gather.
+The operand `v` (a variable declared over the index sets `shape`, or an array
+producer whose output indices range over them), read at the current cell of a
+grid whose loop `loops[d]` runs over the index set `axes[d]`: each of its index
+sets is read at the loop over it (esm-spec §4.3.4). A shape equal to the
+grid's is the positional gather.
 
 When there is no such read, returns why, with the index set at fault:
 `(:foreign, s)` for the first index set of `shape` the grid does not run over;
@@ -107,7 +108,7 @@ otherwise `(:repeated, s)` for the first that `shape` names twice, or
 decides what a refusal means in its position.
 """
 function _gather_by_name(
-        v::VarExpr, shape::Vector{String}, axes::Vector{String}, loops::Vector{String}
+        v::ASTExpr, shape::Vector{String}, axes::Vector{String}, loops::Vector{String}
     )
     shape == axes && return _index_wrap(v, loops)
     for s in shape
@@ -141,6 +142,36 @@ function _index_wrap_var(
     return on_foreign(v, vs, align.axes, last(r))
 end
 
+# The index sets a `faq` with output indices names, one per output index in
+# `output_idx` order, or `nothing` when any output index ranges over anything
+# but `{"from": X}` (an inline interval, an anonymous axis).
+function _producer_index_sets(e::OpExpr)::Union{Nothing, Vector{String}}
+    (_is_faq_op(e.op) && e.output_idx !== nothing && e.ranges !== nothing) || return nothing
+    axes = String[]
+    for sym in e.output_idx
+        spec = sym isa AbstractString ? get(e.ranges, String(sym), nothing) : nothing
+        spec isa IndexSetRef || return nothing
+        push!(axes, spec.from)
+    end
+    return axes
+end
+
+# An array producer read at the cell. A `faq` whose output indices range over
+# index sets is placed by those names under a usable alignment, like a variable
+# declared over them (esm-spec §4.3.4): `k * faq_i(q[i])` over `lat` in a
+# `[lat, lon]` result reads its element at the `lat` loop and replicates along
+# `lon`. Any other producer, or one naming an index set the result lacks or
+# one name twice, is gathered whole, positionally.
+function _index_wrap_producer(
+        e::OpExpr, loops::Vector{String}, align::Union{Nothing, _AxisAlign}
+    )::OpExpr
+    align === nothing && return _index_wrap(e, loops)
+    sets = _producer_index_sets(e)
+    (sets === nothing || isempty(sets) || !allunique(sets)) && return _index_wrap(e, loops)
+    r = _gather_by_name(e, sets, align.axes, loops)
+    return r isa OpExpr ? r : _index_wrap(e, loops)
+end
+
 _array_shape_mismatch_text(v::VarExpr, shape, axes, s) =
     "Operand '$(v.name)' of an array-level expression is declared over " *
     "index set '$(s)' (shape $(shape)), which the result shape " *
@@ -155,7 +186,7 @@ _throw_array_shape_mismatch(v::VarExpr, shape, axes, s) = throw(
 
 The walk every per-cell rewrite of a whole-array expression shares. A variable
 reference goes through `leaf(v, elementwise)`. An `OpExpr` goes through
-`node(e)` first: a result other than `nothing` replaces it (an array producer
+`node(e, elementwise)` first: a result other than `nothing` replaces it (an array producer
 wrapped whole, a self-indexed node kept, a refusal thrown). Otherwise its
 `args`, and only its `args`, are rewritten, each in element-wise position when
 `inner(e)` says the node is element-wise over them, and the node is rebuilt
@@ -180,7 +211,7 @@ function _read_at_cell(leaf::L, node::N, inner::I, expr::ASTExpr, elementwise::B
     tbl = elementwise ? memo[1] : memo[2]
     hit = get(tbl, expr, nothing)
     hit === nothing || return hit
-    result = node(expr)
+    result = node(expr, elementwise)
     if result === nothing
         child = inner(expr)
         result = reconstruct(
@@ -199,8 +230,10 @@ end
 `expr` read at the cell `loops` names: a reference to a variable in
 `arrayvars` becomes its gather ([`_index_wrap_var`](@ref)), by index-set name
 in element-wise position under a usable `align` and positionally elsewhere; an
-`OpExpr` for which `wrap_node` holds is gathered whole, positionally (checked
-before `stop_node`); one for which `stop_node` holds is kept as it is.
+`OpExpr` for which `wrap_node` holds is gathered whole
+([`_index_wrap_producer`](@ref): by the index sets it names in element-wise
+position under a usable `align`, else positionally; checked before
+`stop_node`); one for which `stop_node` holds is kept as it is.
 """
 function _wrap_bare_array_refs(
         expr::ASTExpr, arrayvars::Set{String}, loops::Vector{String};
@@ -209,7 +242,9 @@ function _wrap_bare_array_refs(
     align = _usable_align(align, loops)
     leaf(v, elementwise) = v.name in arrayvars ?
         _index_wrap_var(v, loops, elementwise ? align : nothing) : v
-    node(e) = wrap_node(e) ? _index_wrap(e, loops) : stop_node(e) ? e : nothing
+    node(e, elementwise) = wrap_node(e) ?
+        _index_wrap_producer(e, loops, elementwise ? align : nothing) :
+        stop_node(e) ? e : nothing
     # Without an alignment no position reads by name, so every node is read in
     # the one position.
     inner = align === nothing ? Returns(false) : _is_elementwise_node

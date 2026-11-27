@@ -106,14 +106,7 @@ function _expr_axes(env::_ShapeEnv, e::ASTExpr)::Union{Vector{String}, Nothing}
         return String[]
     elseif op == "faq"
         (e.output_idx === nothing || isempty(e.output_idx)) && return String[]
-        axes = String[]
-        for sym in e.output_idx
-            spec = (sym isa AbstractString && e.ranges !== nothing) ?
-                get(e.ranges, String(sym), nothing) : nothing
-            spec isa IndexSetRef || return nothing
-            push!(axes, spec.from)
-        end
-        return axes
+        return _producer_index_sets(e)
     elseif op == "D" && (e.wrt === nothing || e.wrt == "t") && length(e.args) == 1
         return _expr_axes(env, e.args[1])
     end

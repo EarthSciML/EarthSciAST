@@ -470,10 +470,14 @@ end
 #     replaced by that observed's published body when the build has one, and
 #     otherwise — the same deadness, one level down — by ITS authored body,
 #     resolved recursively. A name the build materialized into a const array is
-#     left alone: the buffer is the cheaper and more faithful answer.
+#     left alone: the buffer is the cheaper and more faithful answer. The
+#     replacement is made after step 2, so the lift gathers each array
+#     producer by the index sets its NAME has (a published body ranges over
+#     resolved extents, which name none).
 #  2. PER-CELL LIFT. The authored body is a WHOLE-ARRAY expression (`2 * u`),
 #     while `evaluate_cellwise` walks one output cell at a time. Wrapping it in
-#     a `faq` over the declared shape — through the same
+#     a `faq` over the variable's shape — declared, or inferred from its bare
+#     definition (esm-spec §4.3.4) — through the same
 #     `_index_array_leaves` the build's own promotion uses, with §4.3.4 name
 #     alignment — is exactly the form the published map would have carried, and
 #     its ranges are the extents already resolved for the cell enumeration, so
@@ -513,10 +517,10 @@ function _authored_observed_body(
         mv.shape === nothing && continue
         var_shapes[String(n)] = String[String(x) for x in mv.shape]
     end
-    arrayvars = Set{String}(
-        String(n) for (n, mv) in model.variables
-            if _is_array_shape(mv.shape)
-    )
+    # A variable declared without a `shape` has the one its bare definition
+    # spans (esm-spec §4.3.4), as shape promotion gives it in the build.
+    _infer_shapes!(var_shapes, _bare_definitions(model.equations), nothing)
+    arrayvars = Set{String}(n for (n, sh) in var_shapes if !isempty(sh))
 
     # (1) Resolve the other observeds this body names.
     subs = Dict{String, ASTExpr}()
@@ -527,10 +531,8 @@ function _authored_observed_body(
         _const_array_key(insp, mname, name) === nothing || continue
         producer = get(insp.observed_exprs, qual, get(insp.observed_exprs, name, nothing))
         if producer === nothing
-            nested = get(model.variables, name, nothing)
-            nested === nothing && continue
-            nshape = nested.shape === nothing ? String[] : nested.shape
-            nexts = _shape_extents(insp, file, nshape)
+            haskey(model.variables, name) || continue
+            nexts = _shape_extents(insp, file, get(var_shapes, name, String[]))
             producer = nexts === nothing ? nothing :
                 _authored_observed_body(
                     insp, file, model, mname, name, nexts, chain;
@@ -540,19 +542,21 @@ function _authored_observed_body(
         end
         producer === nothing || (subs[name] = producer)
     end
-    isempty(subs) || (body = substitute(body, subs))
 
     # (2) Lift the whole-array body to the per-cell `faq` form — through the
     # BUILD'S OWN `_lift_to_faq` (shape_promotion.jl), with the resolved
     # extents as ranges. Sharing it is the point: the `_p<k>` loop convention
     # and the §4.3.4 alignment then cannot drift from the promotion that minted
-    # the published bodies this one stands in for.
+    # the published bodies this one stands in for. The lift reads each named
+    # producer while it is still a name, so it is gathered by the index sets
+    # that name has; the producers resolved above take its place after.
     if !isempty(exts)
         body = _lift_to_faq(
             body, get(var_shapes, String(variable), String[]),
             arrayvars, var_shapes; bounds = exts
         )
     end
+    isempty(subs) || (body = substitute(body, subs))
 
     # (3) Rewrite bare operand names into the build's flattened scope.
     renames = Dict{String, ASTExpr}()
@@ -652,7 +656,7 @@ function _observed_field(
     model isa Model || return nothing
     v = get(model.variables, String(variable), nothing)
     (v !== nothing && String(variable) in observed_unknowns(model)) || return nothing
-    exts = _shape_extents(insp, file, v.shape === nothing ? String[] : v.shape)
+    exts = _shape_extents(insp, file, _observed_shape(v, ctx, mname, variable))
     exts === nothing && return nothing
     r = _ObservedRead(insp, file, model, mname, variable, exts, ctx, u, t, var_map, p)
     return _with_build_calls(insp) do
@@ -662,6 +666,21 @@ function _observed_field(
         end
         nothing
     end
+end
+
+# The index sets of observed `variable` of the component at `mname`: those it
+# declares, else those the build gave it. A variable declared without a `shape`
+# and defined by a bare equation has the shape its defining expression has
+# (esm-spec §4.3.4), which shape promotion wrote onto the build's variable.
+function _observed_shape(v::ModelVariable, ctx, mname::AbstractString, variable::AbstractString)
+    v.shape === nothing || return v.shape
+    ctx isa _ObsProgramCtx || return String[]
+    for n in (String(mname) * "." * String(variable), occursin('.', mname) ? nothing : String(variable))
+        n === nothing && continue
+        bv = get(ctx.model.variables, n, nothing)
+        (bv === nothing || bv.shape === nothing) || return bv.shape
+    end
+    return String[]
 end
 
 # One `_observed_field` request, as its routes read it.

@@ -307,7 +307,8 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
             out = _equation_from(eq, out_cs)
         elseif eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in arrayvars &&
                 haskey(defs, (eq.lhs::VarExpr).name) &&
-                (flat_was_scalar(flat, (eq.lhs::VarExpr).name))
+                (flat_was_scalar(flat, (eq.lhs::VarExpr).name)) &&
+                !_produces_shape(eq.rhs, shapes[(eq.lhs::VarExpr).name])
             wrapped = _lift_to_faq(eq.rhs, shapes[(eq.lhs::VarExpr).name], arrayvars, shapes)
             if wrapped !== eq.rhs
                 out_cs = Contribution[Contribution(wrapped, _union_origins(cs))]
@@ -332,6 +333,13 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
     # those flatten named (esm-spec §9.6.11).
     return _rename_flat_refs(promoted, _name_cellwise_variants!(registry))
 end
+
+# Whether `rhs` is already the array `shape` names: a `faq` whose output
+# indices range over exactly those index sets, in order. Its definition is the
+# promoted variable as it stands; wrapping it in a per-cell `faq` that gathers it
+# whole would only add a producer read at every cell.
+_produces_shape(rhs::ASTExpr, shape::Vector{String}) =
+    rhs isa OpExpr && _producer_index_sets(rhs) == shape
 
 # `[(output symbol, extent)…]` of a `faq` producer every one of whose output
 # indices ranges over an inline dense interval starting at 1, or `nothing`.
