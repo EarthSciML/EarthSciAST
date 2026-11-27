@@ -5638,6 +5638,208 @@
    ]
   },
   {
+   "id": "lanes_data_and_time_observeds",
+   "kind": "lanes",
+   "document": "fixtures/lanes_data_and_time_observeds.esm",
+   "selection": {
+    "writes": "all",
+    "terms": "all"
+   },
+   "lane_kind": "cells",
+   "lane_sets": [
+    "lon",
+    "lat",
+    "lev"
+   ],
+   "capacity": 16,
+   "batches": [
+    {
+     "id": "mixed_levels",
+     "cells": [
+      [
+       2,
+       5,
+       1
+      ],
+      [
+       2,
+       5,
+       4
+      ],
+      [
+       5,
+       2,
+       1
+      ],
+      [
+       2,
+       4,
+       2
+      ],
+      [
+       2,
+       3,
+       2
+      ],
+      [
+       6,
+       3,
+       4
+      ],
+      [
+       4,
+       5,
+       1
+      ],
+      [
+       2,
+       3,
+       3
+      ],
+      [
+       6,
+       2,
+       2
+      ],
+      [
+       1,
+       5,
+       3
+      ],
+      [
+       6,
+       3,
+       1
+      ],
+      [
+       5,
+       3,
+       3
+      ],
+      [
+       6,
+       5,
+       3
+      ],
+      [
+       4,
+       4,
+       3
+      ],
+      [
+       3,
+       4,
+       2
+      ],
+      [
+       5,
+       1,
+       1
+      ]
+     ],
+     "n": 16
+    },
+    {
+     "id": "mixed_levels_padded",
+     "cells": [
+      [
+       5,
+       4,
+       4
+      ],
+      [
+       1,
+       4,
+       4
+      ],
+      [
+       1,
+       2,
+       4
+      ],
+      [
+       6,
+       5,
+       4
+      ],
+      [
+       4,
+       3,
+       4
+      ],
+      [
+       2,
+       2,
+       3
+      ],
+      [
+       2,
+       1,
+       3
+      ],
+      [
+       2,
+       2,
+       2
+      ],
+      [
+       3,
+       1,
+       3
+      ],
+      [
+       1,
+       2,
+       2
+      ],
+      [
+       6,
+       4,
+       2
+      ],
+      [
+       5,
+       4,
+       4
+      ],
+      [
+       5,
+       4,
+       4
+      ],
+      [
+       5,
+       4,
+       4
+      ],
+      [
+       5,
+       4,
+       4
+      ],
+      [
+       5,
+       4,
+       4
+      ]
+     ],
+     "n": 11
+    }
+   ],
+   "negative_control": {
+    "batch": "mixed_levels",
+    "swap_lanes": [
+     1,
+     2
+    ]
+   },
+   "covers": [
+    "lanes",
+    "state_free_observed",
+    "time_observed_per_lane"
+   ]
+  },
+  {
    "id": "lanes_refuse_stencil",
    "kind": "lanes_error",
    "document": "fixtures/stencil_1d_centered.esm",

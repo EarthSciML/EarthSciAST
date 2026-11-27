@@ -1745,3 +1745,60 @@ fn an_observed_of_t_with_no_lane_form_builds_one_time_lanes() {
         .eval_times_into(&u, &[], &p, &[0.5, 1.0], &fs, &cells, 1, &mut du, &mut ws)
         .expect("one lane is never at mixed times");
 }
+
+/// Two wholesale array observeds of `t` over the lane set, `s = faq{…}` and
+/// `g = faq{args, …}`: `s` has a lane form and is computed per lane, while
+/// `g`, an array `faq` carrying `args`, has none and stays one
+/// whole-domain value per call. Every call at one time equals the
+/// whole-domain program, and a batch at mixed times is an error naming `g`
+/// alone.
+#[test]
+fn only_the_observeds_of_t_with_no_lane_form_stay_whole_domain() {
+    let n = 5;
+    let body = |k: f64| json!({"op": "cos", "args": [{"op": "+", "args": ["t", {"op": "*", "args": [k, "i"]}]}]});
+    let doc = model(
+        json!({"x": {"kind": "interval", "size": n}}),
+        json!({
+            "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+            "s": {"type": "unknown", "units": "1", "shape": ["x"]},
+            "g": {"type": "unknown", "units": "1", "shape": ["x"]},
+            "c": {"type": "parameter", "units": "1", "default": 0.25}
+        }),
+        json!([
+            {"lhs": "s", "rhs": faq_node(&["i"], json!({"i": {"from": "x"}}), body(0.5))},
+            {"lhs": "g", "rhs": {"op": "faq", "args": ["c"], "output_idx": ["i"],
+                                 "ranges": {"i": {"from": "x"}},
+                                 "expr": {"op": "*", "args": ["c", body(0.25)]}}},
+            {"lhs": d_of(json!("u")),
+             "rhs": faq_node(&["i"], json!({"i": {"from": "x"}}),
+                 json!({"op": "*", "args": [ix("s", vec![json!("i")]),
+                     ix("g", vec![json!("i")]), ix("u", vec![json!("i")])]}))}
+        ]),
+    );
+    let prog = program(&doc, Compiler::Native);
+    let lanes = prog
+        .lanes(
+            LaneKind::Cells {
+                sets: vec!["x".to_string()],
+            },
+            2,
+        )
+        .expect("lanes");
+    assert_lanes_match(&prog, &lanes, &[n], 0.75);
+    assert_lanes_match_at(&prog, &lanes, &[n], &|_| 0.75, true);
+    let p = prog
+        .parameter_vector(&Default::default())
+        .expect("defaults");
+    let fs = prog.default_forcing();
+    let u = vec![1.0; lanes.layout().u_len];
+    let mut du = vec![f64::NAN; lanes.layout().u_len];
+    let mut ws = lanes.new_workspace();
+    match lanes.eval_times_into(&u, &[], &p, &[0.5, 1.0], &fs, &[1, 2], 2, &mut du, &mut ws) {
+        Err(e @ RhsError::MixedTimes { .. }) => {
+            let msg = e.to_string();
+            assert!(msg.contains("M.g"), "{msg}");
+            assert!(!msg.contains("M.s"), "{msg}");
+        }
+        other => panic!("expected a mixed-times error, got {other:?}"),
+    }
+}

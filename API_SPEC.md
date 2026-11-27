@@ -1720,7 +1720,8 @@ keep their global 1-based values.
   (column) is refused with `compiler_refused_rule`, naming the rule and saying
   "lane".
 - **Array `faq` reads.** An array `faq` read at loop subscripts (a whole-array
-  right-hand side `D(x) = faq{…}`, or a `makearray` region value) is its body at
+  right-hand side `D(x) = faq{…}`, an observed of a state or of `t` defined
+  whole, `x = faq{…}`, or a `makearray` region value) is its body at
   the lane's cell, and a range that is not an output index stays a contraction.
   Each output axis must run over exactly what reads it: the whole lane set
   (`from` that set with no `of`, or `[1, n]`), the range of a non-lane loop
@@ -1746,6 +1747,13 @@ keep their global 1-based values.
   one-time call is unchanged, and a call whose lanes `1..n` have different
   times is an error naming that observed (Rust `RhsError::MixedTimes`, Julia
   `ArgumentError`).
+- **Cost.** A call does work proportional to its lanes, never to the domain.
+  Each observed of a state or of `t` that has a lane form is computed per
+  lane, in a call at one time too; only one with no lane form (and the
+  observeds of `t` it reads) is evaluated over the domain, once per call.
+  The whole-domain values of the state-free observeds are computed once per
+  parameter vector and forcing set and shared by every workspace of the
+  lane program; a workspace holds no whole-domain array for them.
 - **Capacity.** Julia loops over lanes with a run-time count, so one build
   serves every `L` (`L = size(cells, 2)`). Rust slot boxes are static, so a lane
   program is built per capacity (re-lowering only, no document rebuild) and `L`

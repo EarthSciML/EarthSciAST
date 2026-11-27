@@ -55,6 +55,7 @@ DOCS = {
     "lanes_column": {"document": "fixtures/lanes_column.esm"},
     "lanes_surface_region": {"document": "fixtures/lanes_surface_region.esm"},
     "lanes_time_observed_ic": {"document": "fixtures/lanes_time_observed_ic.esm"},
+    "lanes_data_and_time_observeds": {"document": "fixtures/lanes_data_and_time_observeds.esm"},
     "global_horizontal_sum": {"document": "fixtures/global_horizontal_sum.esm"},
     "global_scalar_state": {"document": "fixtures/global_scalar_state.esm"},
     "esd_ppm_1d_periodic": {
@@ -637,6 +638,27 @@ def lane_cases():
             "batches": [{"id": "mixed_levels", "cells": perm[:cap], "n": cap}],
             "negative_control": {"batch": "mixed_levels", "swap_lanes": [1, 2]},
             "covers": ["lanes", "time_observed_read_by_ic"],
+        }
+    )
+    # A whole-domain state-free observed of the data (no lane computes it
+    # from its own cell) and an array observed of t that reads it, both read
+    # by the state equation: the lane program gathers the first per lane and
+    # computes the second per lane. The same cells as the cases above.
+    out.append(
+        {
+            "id": "lanes_data_and_time_observeds",
+            "kind": "lanes",
+            **doc_ref("lanes_data_and_time_observeds"),
+            "selection": SELECT_ALL,
+            "lane_kind": "cells",
+            "lane_sets": ["lon", "lat", "lev"],
+            "capacity": cap,
+            "batches": [
+                {"id": "mixed_levels", "cells": perm[:cap], "n": cap},
+                {"id": "mixed_levels_padded", "cells": perm[cap : cap + 11] + [perm[cap]] * (cap - 11), "n": 11},
+            ],
+            "negative_control": {"batch": "mixed_levels", "swap_lanes": [1, 2]},
+            "covers": ["lanes", "state_free_observed", "time_observed_per_lane"],
         }
     )
     # A lane program over an operator that reads a neighbour is refused.
