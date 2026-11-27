@@ -68,17 +68,27 @@ end
 #  - anything else: a table over every index tuple of the lane sets it reads,
 #    already resolved: the axis position, 0 where the resolution throws (the
 #    read is 0.0), -1 where evaluating the subscript throws (the call raises
-#    that error).
-# So a call reads `cells` and integer tables only: no expression walk, no
-# dictionary, no allocation.
+#    that error);
+#  - anything else whose table would exceed `_LANE_SUBSCRIPT_TABLE_MAX`
+#    entries: evaluated per lane at the call (`_eval_const_int`), which
+#    allocates.
+# So a call of the first two forms reads `cells` and integer tables only: no
+# expression walk, no dictionary, no allocation.
 struct _LaneSubscript
     rows::Vector{Int}       # the `cells` row of each lane set it reads
     exts::Vector{Int}       # those sets' extents
     affine::Bool
+    tabled::Bool            # not affine: `table` holds it (else evaluated per lane)
     c0::Int
     coef::Vector{Int}       # per row (affine)
-    table::Vector{Int32}    # column-major over `rows` (otherwise)
+    table::Vector{Int32}    # column-major over `rows` (tabled)
 end
+
+# The largest subscript table built (entries, 4 bytes each). A table covers
+# every index tuple of the lane sets its subscript reads, which at production
+# extents (three full grid axes) is far too large to build or hold; a larger
+# subscript is evaluated at the call instead. A `Ref` so a test can lower it.
+const _LANE_SUBSCRIPT_TABLE_MAX = Ref(1 << 20)
 
 struct _LaneGatherPlan
     subs::Vector{_LaneSubscript}
@@ -717,9 +727,14 @@ function _lane_gather_plan(g::_LaneGather, S::Vector{String}, ext, params::Dict{
         aff = _lane_affine(e, Dict{String, Int}(v => 1 for v in reads), params)
         if aff !== nothing
             c0, coef = aff
-            return _LaneSubscript(rows, exts, true, c0, Int[get(coef, v, 0) for v in reads], Int32[])
+            return _LaneSubscript(
+                rows, exts, true, false, c0, Int[get(coef, v, 0) for v in reads], Int32[]
+            )
         end
-        table = Vector{Int32}(undef, prod(exts; init = 1))
+        ntab = prod(big.(exts); init = big(1))
+        ntab > _LANE_SUBSCRIPT_TABLE_MAX[] &&
+            return _LaneSubscript(rows, exts, false, false, 0, Int[], Int32[])
+        table = Vector{Int32}(undef, Int(ntab))
         env = copy(params)
         for (k, c) in enumerate(CartesianIndices(Tuple(1:x for x in exts)))
             for (j, v) in enumerate(reads)
@@ -732,7 +747,7 @@ function _lane_gather_plan(g::_LaneGather, S::Vector{String}, ext, params::Dict{
             end
             table[k] = i === nothing ? Int32(-1) : Int32(_lane_resolve(g, policy, d, i))
         end
-        return _LaneSubscript(rows, exts, false, 0, Int[], table)
+        return _LaneSubscript(rows, exts, false, true, 0, Int[], table)
     end
     return _LaneGatherPlan(subs, copy(g.dims), strides, policy)
 end
@@ -1119,6 +1134,8 @@ function _lane_gather_value(
                 i += s.coef[j] * Int(cells[s.rows[j], l])
             end
             i = _lane_resolve(lp.gathers[k], gp.policy, d, i)
+        elseif !s.tabled
+            i = _lane_resolve(lp.gathers[k], gp.policy, d, _lane_subscript_eval(lp, k, d, cells, l))
         else
             e = 0
             st = 1
@@ -1135,14 +1152,22 @@ function _lane_gather_value(
     return @inbounds src[lin + 1]
 end
 
-# A subscript whose evaluation throws at this cell: raise its error.
-@noinline function _lane_subscript_throw(lp::LaneProgram, k::Int, d::Int, cells, l::Int)
+# Subscript `d` of pre-gathered input `k` at the cell of lane `l`, evaluated
+# (not resolved on its axis): a subscript too large to table, or one whose
+# table says it throws here.
+@noinline function _lane_subscript_eval(lp::LaneProgram, k::Int, d::Int, cells, l::Int)
     g = lp.gathers[k]
     env = Dict{String, Int}(lp.params)
     for (v, row) in g.vars
         env[v] = Int(cells[row, l])
     end
-    _eval_const_int(g.subs[d], env, g.consts)
+    return _eval_const_int(g.subs[d], env, g.consts)::Int
+end
+
+# A subscript whose evaluation throws at this cell: raise its error.
+@noinline function _lane_subscript_throw(lp::LaneProgram, k::Int, d::Int, cells, l::Int)
+    _lane_subscript_eval(lp, k, d, cells, l)
+    g = lp.gathers[k]
     return error("internal error: lanes: the subscript $d of the pre-gathered read of '$(g.name)' threw at build but not now")
 end
 

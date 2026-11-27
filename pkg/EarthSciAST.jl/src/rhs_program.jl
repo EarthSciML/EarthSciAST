@@ -762,8 +762,26 @@ function _check_forcing_set(slots::Vector{ForcingSlot}, fs::ForcingSet, call::Ab
                 "$(join((s.name for s in slots), ", ")))"
         )
     )
+    # A set built by hand (`ForcingSet(slots, bufs, epoch)`) is not checked by
+    # `forcing_set`; the lane gathers read its buffers unchecked.
+    length(fs.bufs) == length(slots) || throw(
+        ArgumentError(
+            "$call: the forcing set holds $(length(fs.bufs)) buffers for " *
+                "$(length(slots)) forcing slots"
+        )
+    )
+    @inbounds for k in eachindex(slots)
+        n = prod(slots[k].shape; init = 1)
+        length(fs.bufs[k]) == n || _forcing_buffer_length_error(call, slots[k], fs.bufs[k], n)
+    end
     return nothing
 end
+@noinline _forcing_buffer_length_error(call, s::ForcingSlot, buf, n) = throw(
+    ArgumentError(
+        "$call: the forcing set's buffer for slot '$(s.name)' has $(length(buf)) " *
+            "elements; the slot's shape $(Tuple(s.shape)) has $n"
+    )
+)
 
 function _check_parameters(shared::_RhsShared, p, call::AbstractString)
     p isa AbstractVector || return nothing
