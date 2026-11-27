@@ -121,34 +121,26 @@ expected(F) = [(F[1] + 0.5 * F[2]) / 1.5, F[3]]
 
 @testset "overlap gate: ring envelope factors under a live forcing field" begin
     F = [1.0, 2.0, 3.0]
+    doc = document()
     # Build-time source field: the regrid materializes at setup (always worked).
-    ref = EA.esm_problem(document(), (0.0, 1.0); const_arrays = Dict{String, Any}("M.F" => copy(F)))
+    ref = EA.esm_problem(doc, (0.0, 1.0); const_arrays = Dict{String, Any}("M.F" => copy(F)))
     @test rhs(ref) ≈ expected(F)
 
-    # Live source field: the gated apply stays in the right-hand side.
-    for F2 in (F, [2.0, -4.0, 6.0])
-        prob = EA.esm_problem(
-            document(), (0.0, 1.0); compiler = :interpreter,
-            param_arrays = Dict{String, Any}("M.F" => copy(F2))
-        )
-        @test rhs(prob) ≈ expected(F2)
-    end
-    # The same through a flattened system, as a planner builds it.
-    flat = EA.flatten(EA.load_document(document()))
-    prob = EA.esm_problem(flat, (0.0, 1.0); compiler = :interpreter, param_arrays = Dict{String, Any}("M.F" => copy(F)))
-    @test rhs(prob) ≈ expected(F)
-
+    flat = EA.flatten(EA.load_document(doc))
+    # With a live source field the gated apply stays in the right-hand side.
     # The native compiler's whole-array contraction reads the live field at
     # the contracted index (`F[i]`) inside the gated sum, from the buffer at
     # each call, bit-identical to the interpreter (issue #657).
     for F2 in (F, [2.0, -4.0, 6.0])
         pa() = Dict{String, Any}("M.F" => copy(F2))
-        nat = rhs(EA.esm_problem(document(), (0.0, 1.0); compiler = :native, param_arrays = pa()))
-        ref = rhs(EA.esm_problem(document(), (0.0, 1.0); compiler = :interpreter, param_arrays = pa()))
+        nat = rhs(EA.esm_problem(doc, (0.0, 1.0); compiler = :native, param_arrays = pa()))
+        ref = rhs(EA.esm_problem(doc, (0.0, 1.0); compiler = :interpreter, param_arrays = pa()))
         @test nat ≈ expected(F2)
+        @test ref ≈ expected(F2)
         @test reinterpret(UInt64, nat) == reinterpret(UInt64, ref)
         flat_nat = rhs(EA.esm_problem(flat, (0.0, 1.0); compiler = :native, param_arrays = pa()))
         flat_ref = rhs(EA.esm_problem(flat, (0.0, 1.0); compiler = :interpreter, param_arrays = pa()))
+        F2 === F && @test flat_ref ≈ expected(F)
         @test reinterpret(UInt64, flat_nat) == reinterpret(UInt64, flat_ref)
         @test reinterpret(UInt64, flat_nat) == reinterpret(UInt64, nat)
     end
@@ -157,12 +149,12 @@ expected(F) = [(F[1] + 0.5 * F[2]) / 1.5, F[3]]
     # it in place and re-running the discrete fills (what a data refresh does)
     # moves the next right-hand side.
     buf = copy(F)
-    prob = EA.esm_problem(document(), (0.0, 1.0); compiler = :native, param_arrays = Dict{String, Any}("M.F" => buf))
+    prob = EA.esm_problem(doc, (0.0, 1.0); compiler = :native, param_arrays = Dict{String, Any}("M.F" => buf))
     @test rhs(prob) ≈ expected(F)
     buf .= [5.0, 7.0, -1.0]
     prob.dm.materialize!()
     @test rhs(prob) ≈ expected(buf)
-    ref = EA.esm_problem(document(), (0.0, 1.0); compiler = :interpreter, param_arrays = Dict{String, Any}("M.F" => copy(buf)))
+    ref = EA.esm_problem(doc, (0.0, 1.0); compiler = :interpreter, param_arrays = Dict{String, Any}("M.F" => copy(buf)))
     @test reinterpret(UInt64, rhs(prob)) == reinterpret(UInt64, rhs(ref))
 end
 
@@ -259,13 +251,13 @@ function _reindexed_source()
     return doc
 end
 
-function _program_du(prob, F)
-    prog = EA.rhs_program(prob)
+function _program_du(prog, F)
     n = EA.n_states(prog)
     u = Float64[0.3 + 0.1 * k for k in 1:n]
+    defaults = EA.default_forcing_set(prog)
     fs = EA.forcing_set(
         prog, Vector{Float64}[
-            s.name == "M.F" ? copy(F) : EA.default_forcing_set(prog).bufs[k]
+            s.name == "M.F" ? copy(F) : defaults.bufs[k]
                 for (k, s) in enumerate(EA.forcing_slots(prog))
         ]
     )
@@ -281,7 +273,7 @@ end
             "M.F" => label == "reindexed 2-D source" ? [1.0 2.0 3.0] : [1.0, 2.0, 3.0]
         )
         progs = Dict(
-            c => EA.esm_problem(src, (0.0, 1.0); compiler = c, param_arrays = pa())
+            c => EA.rhs_program(EA.esm_problem(src, (0.0, 1.0); compiler = c, param_arrays = pa()))
                 for c in (:native, :interpreter)
         )
         for F in ([1.0, 2.0, 3.0], [2.0, -4.0, 6.0])
@@ -305,7 +297,8 @@ end
     # forcing slot of its own, filled from the declared default.
     doc = document()
     for c in (:native, :interpreter)
-        _, _, du = _program_du(EA.esm_problem(doc, (0.0, 1.0); compiler = c), [2.0, -4.0, 6.0])
+        prog = EA.rhs_program(EA.esm_problem(doc, (0.0, 1.0); compiler = c))
+        _, _, du = _program_du(prog, [2.0, -4.0, 6.0])
         @test du ≈ expected([2.0, -4.0, 6.0])
     end
     # The regrid read in a gather subscript, where a per-call buffer cannot
@@ -321,7 +314,7 @@ end
     end
     prob = EA.esm_problem(doc, (0.0, 1.0); compiler = :native, param_arrays = Dict{String, Any}("M.F" => [1.0, 2.0, 3.0]))
     err = try
-        _program_du(prob, [1.0, 2.0, 3.0])
+        _program_du(EA.rhs_program(prob), [1.0, 2.0, 3.0])
         nothing
     catch e
         e

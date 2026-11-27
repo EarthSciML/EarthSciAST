@@ -273,8 +273,8 @@ end
         )
     end
     qs = vcat(Any[NaN, -Inf, Inf, -0.0], Any[ax[k] for k in 1:2:n], Any[ax[k] + 0.25 for k in 2:2:n])
+    ics = Dict{String, Any}("M.q[$i]" => qs[mod1(i, length(qs))] for i in 1:n)
     function agree(d)
-        ics = Dict{String, Any}("M.q[$i]" => qs[mod1(i, length(qs))] for i in 1:n)
         r = Dict{Any, Any}()
         for c in (:native, _TI_NOSHARE, :interpreter)
             f!, u0, p, _, vm, rep = _TI.Internal.build(d; initial_conditions = ics, compiler = c)
@@ -674,8 +674,9 @@ _ti_ngens(_) = 1
             "index_sets" => Dict("lev" => Dict("kind" => "interval", "size" => nl)),
             "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs, "operators" => _ti_templates()))
         )
-        dn, tn, (f!, u0, p) = _ti_eval(_ti_expanded(doc), :native)
-        di, _, _ = _ti_eval(_ti_expanded(doc), :interpreter)
+        expanded = _ti_expanded(doc)
+        dn, tn, (f!, u0, p) = _ti_eval(expanded, :native)
+        di, _, _ = _ti_eval(expanded, :interpreter)
         @test _ti_same(dn, di)
         dc, _, _ = _ti_eval(doc, :native)
         @test _ti_same(dc, dn)

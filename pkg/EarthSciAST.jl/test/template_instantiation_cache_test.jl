@@ -43,17 +43,17 @@ function _tic_agree(file)
         b = ESM._expansion_copy(model)
         sb = IdDict{ESM.OpExpr, ESM.OpExpr}()
         ESM._expand_model_refs!(b, reg; sites = sb, memo = nothing)
-        for (ea, eb) in zip(
-                vcat(a.equations, a.initialization_equations),
-                vcat(b.equations, b.initialization_equations)
-            )
-            ja, jb = _tic_json(ea.rhs), _tic_json(eb.rhs)
+        reference_eqs = vcat(b.equations, b.initialization_equations)
+        reference_rhs = [_tic_json(eb.rhs) for eb in reference_eqs]
+        for (ea, eb, jb) in zip(vcat(a.equations, a.initialization_equations), reference_eqs, reference_rhs)
+            ja = _tic_json(ea.rhs)
             @test ja == jb
             @test !occursin("esm-template-param", ja)
             @test _tic_json(ea.lhs) == _tic_json(eb.lhs)
             @test _tic_marks(ea.rhs) == _tic_marks(eb.rhs)
         end
-        @test Set(_tic_json(k) for k in keys(sa)) == Set(_tic_json(k) for k in keys(sb))
+        reference_sites = Set(_tic_json(k) for k in keys(sb))
+        @test Set(_tic_json(k) for k in keys(sa)) == reference_sites
         # A cache shared with an earlier expansion (the build's front door,
         # which records no sites) still records every site root.
         shared = ESM._ExpandCache()
@@ -61,8 +61,8 @@ function _tic_agree(file)
         c = ESM._expansion_copy(model)
         sc = IdDict{ESM.OpExpr, ESM.OpExpr}()
         ESM._expand_model_refs!(c, reg; sites = sc, memo = shared)
-        @test Set(_tic_json(k) for k in keys(sc)) == Set(_tic_json(k) for k in keys(sb))
-        @test all(_tic_json(x.rhs) == _tic_json(y.rhs) for (x, y) in zip(c.equations, b.equations))
+        @test Set(_tic_json(k) for k in keys(sc)) == reference_sites
+        @test all(_tic_json(x.rhs) == y for (x, y) in zip(c.equations, (@view reference_rhs[1:length(b.equations)])))
         n += 1
     end
     return n

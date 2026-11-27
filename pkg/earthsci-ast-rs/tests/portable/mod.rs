@@ -27,7 +27,9 @@
 
 pub mod rhs;
 
-use earthsci_ast::{Alg, Compiler, ProblemOptions, Rhs, SolveOptions, esm_problem, solve};
+use earthsci_ast::{
+    Alg, Compiler, ProblemOptions, Rhs, SolveOptions, esm_problem, load_string, solve,
+};
 use serde_json::Value;
 
 macro_rules! scaling_fixture {
@@ -362,7 +364,7 @@ fn refuses_then_drops_reserved_lifting(id: &str, doc: &mut Value) {
 /// one scaling fixture. Native is required for every document, so a refusal
 /// fails.
 pub fn check_scaling_fixture(family: &str, n: u64, text: &str) {
-    let doc: Value = serde_json::from_str(text).expect("the fixture parses");
+    let doc = load_string(text).expect("the fixture loads");
     let interp = esm_problem(&doc, (0.0, 1.0), options(Compiler::Interpreter, None))
         .unwrap_or_else(|e| panic!("{family} N={n}: the interpreter does not build it: {e}"));
     let native = esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None))

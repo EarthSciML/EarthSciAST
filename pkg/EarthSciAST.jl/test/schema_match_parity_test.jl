@@ -45,6 +45,7 @@ end
         ndocs = 0
         npairs = 0
         mismatches = String[]
+        checked_scalars = Set{Tuple{DataType, Any}}()
         for f in files
             raw = try
                 _EA._to_native_json(JSON3.read(read(f, String)))
@@ -60,10 +61,19 @@ end
             # included. A spread of at most 40 values per file keeps it quick.
             vals = _json_values!(Any[], raw)
             step = max(1, length(vals) ÷ 40)
-            for y in vals[1:step:end], (name, def, node) in def_nodes
-                npairs += 1
-                _walk_verdict(y, node) == _library_verdict(y, def) ||
-                    push!(mismatches, "$f: \$defs/$name on $(repr(y)[1:min(end, 80)])")
+            for y in @view vals[1:step:end]
+                npairs += length(def_nodes)
+                # A repeated scalar sees the same definitions from the same
+                # root path. Keep the type in the key (e.g. true, 1 and 1.0).
+                if y isa Union{Nothing, String, Number}
+                    key = (typeof(y), y)
+                    key in checked_scalars && continue
+                    push!(checked_scalars, key)
+                end
+                for (name, def, node) in def_nodes
+                    _walk_verdict(y, node) == _library_verdict(y, def) ||
+                        push!(mismatches, "$f: \$defs/$name on $(repr(y)[1:min(end, 80)])")
+                end
             end
         end
         @test ndocs > 300

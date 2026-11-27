@@ -33,7 +33,6 @@ scaling_family!(transport_3d);
 scaling_family!(chemistry_grid);
 scaling_family!(prefix_scan);
 scaling_family!(source_receptor);
-scaling_family!(regrid);
 scaling_family!(unstructured_gather);
 scaling_family!(scalar_chemistry);
 scaling_family!(gather_index);
@@ -45,6 +44,23 @@ scaling_family!(suffix_scan);
 scaling_family!(ragged_contraction);
 scaling_family!(makearray_nested_sum);
 scaling_family!(band_transpose);
+
+#[test]
+fn regrid() {
+    // Each size builds and checks both compilers over its whole domain. Its
+    // interpreter run is independent of the other sizes' runs.
+    let fixtures = portable::SCALING_FIXTURES
+        .iter()
+        .filter(|(family, _, _)| *family == "regrid");
+    std::thread::scope(|threads| {
+        let mut seen = 0;
+        for &(family, n, text) in fixtures {
+            threads.spawn(move || portable::check_scaling_fixture(family, n, text));
+            seen += 1;
+        }
+        assert!(seen > 0, "no committed fixture for regrid");
+    });
+}
 
 #[test]
 fn geometry_documents() {

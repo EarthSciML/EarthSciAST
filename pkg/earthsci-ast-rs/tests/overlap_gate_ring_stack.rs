@@ -13,10 +13,9 @@
 //! vertex reductions over source x target x vertex x vertex and refused ("a
 //! rank-0 output's promoted box is too large").
 //!
-//! In the large case the source grid is 200 x 200 cells and the target
-//! 15 x 15, so that promoted box is 40 000 x 225 x 4 x 4 = 144 000 000
-//! elements, over the budget. Driven, the narrow phase runs over the
-//! candidate pairs only.
+//! The large case uses two similarly sized grids whose source × target × 4 × 4
+//! product exceeds the promoted-box budget. Driven, the narrow phase runs
+//! over the candidate pairs only.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -162,11 +161,7 @@ fn bits(p: &EsmProblem, name: &str) -> Vec<u64> {
 /// a pruned pair, which holds the identity.
 fn check_areas(p: &EsmProblem, sx: usize, sy: usize, tx: usize, ty: usize) {
     let area = (L / tx as f64) * (L / ty as f64);
-    let a_j: Vec<f64> = observed_field(p, "A_j")
-        .expect("A_j")
-        .iter()
-        .copied()
-        .collect();
+    let a_j = observed_field(p, "A_j").expect("A_j");
     assert_eq!(a_j.len(), tx * ty);
     for (j, a) in a_j.iter().enumerate() {
         assert!(
@@ -174,23 +169,12 @@ fn check_areas(p: &EsmProblem, sx: usize, sy: usize, tx: usize, ty: usize) {
             "A_j[{j}] = {a}, want {area}"
         );
     }
-    // Row-major over (src_cells, tgt_cells).
-    let a_ij: Vec<f64> = observed_field(p, "A_ij")
-        .expect("A_ij")
-        .iter()
-        .copied()
-        .collect();
+    let a_ij = observed_field(p, "A_ij").expect("A_ij");
+    assert_eq!(a_ij.shape(), &[sx * sy, tx * ty]);
     let src_area = (L / sx as f64) * (L / sy as f64);
-    assert!(
-        (a_ij[0] - src_area).abs() < 1e-12,
-        "A_ij[1, 1] = {}",
-        a_ij[0]
-    );
-    assert_eq!(
-        a_ij[(sx * sy - 1) * tx * ty],
-        0.0,
-        "a pruned pair is the identity"
-    );
+    let first = a_ij[[0, 0]];
+    assert!((first - src_area).abs() < 1e-12, "A_ij[1, 1] = {first}");
+    assert_eq!(a_ij[[sx * sy - 1, 0]], 0.0, "a pruned pair is the identity");
 }
 
 /// The gate is driven under both compilers, which agree bit for bit.
@@ -223,7 +207,10 @@ fn a_parameter_ring_stack_gate_is_driven_and_both_compilers_agree() {
 /// too large").
 #[test]
 fn native_compiles_a_ring_stack_gate_too_large_to_run_dense() {
-    let (sx, sy, tx, ty) = (200usize, 200usize, 15usize, 15usize);
+    // The coprime grid sizes avoid shared interior boundaries. The shape is
+    // still above MAX_PROMOTED_ELEMS without creating a long source stack.
+    let (sx, sy, tx, ty) = (55usize, 55usize, 54usize, 54usize);
+    assert!(sx * sy * tx * ty * 4 * 4 > 1 << 27);
     let (native, _) = build(&doc(sx, sy, tx, ty), Compiler::Native);
     check_areas(&native, sx, sy, tx, ty);
 }

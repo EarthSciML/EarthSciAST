@@ -473,28 +473,28 @@ function _obs_scan_doc(n; filt = "<=", reduce = "+", extra = false, other = fals
         "\"equations\":[$(join(eqs, ","))]}}}"
 end
 
-function _obs_scan_eval(json; compiler = :native)
-    path = joinpath(mktempdir(), "obs_scan.esm")
-    write(path, json)
+function _obs_scan_eval(file; compiler = :native, derivative = true, check_allocations = false)
     prob, tally = ESM.Internal.counting() do
-        ESM.esm_problem(path, (0.0, 1.0); compiler = compiler)
+        ESM.esm_problem(file, (0.0, 1.0); compiler = compiler)
     end
     u = Float64[_sc_val(k) for k in 1:length(prob.u0)]
     du = zero(u)
     prob.f!(du, u, prob.p, 0.0)
-    seed = Float64[isodd(k) ? 1.0 : -0.5 for k in 1:length(u)]
-    jd = ForwardDiff.derivative(
-        s -> (d = zeros(typeof(s), length(u)); prob.f!(d, u .+ s .* seed, prob.p, 0.0); d), 0.0
-    )
-    allocs = (prob.f!(du, u, prob.p, 0.0); @allocated prob.f!(du, u, prob.p, 0.0))
+    jd = if derivative
+        seed = Float64[isodd(k) ? 1.0 : -0.5 for k in eachindex(u)]
+        ForwardDiff.derivative(
+            s -> (d = zeros(typeof(s), length(u)); prob.f!(d, u .+ s .* seed, prob.p, 0.0); d), 0.0
+        )
+    end
+    allocs = check_allocations ? rhs_alloc_bytes(prob.f!, du, u, prob.p, 0.0) : nothing
     return (du = du, jd = jd, tally = tally, allocs = allocs)
 end
 
 @testset "a prefix-scanned observed's state consumer runs inside the fold" begin
     for filt in ("<=", "<"), red in ("+", "max"), n in (1, 7, 40)
-        json = _obs_scan_doc(n; filt = filt, reduce = red)
-        a = _obs_scan_eval(json)
-        r = _obs_scan_eval(json; compiler = :interpreter)
+        file = ESM.load_string(_obs_scan_doc(n; filt = filt, reduce = red))
+        a = _obs_scan_eval(file; check_allocations = VERSION >= v"1.12")
+        r = _obs_scan_eval(file; compiler = :interpreter)
         @test get(a.tally, :scan_fused_consumer, 0) == 1
         @test get(a.tally, :scan_fused_store_dropped, 0) == 1
         @test _bits(a.du) == _bits(r.du)
@@ -502,15 +502,15 @@ end
         VERSION >= v"1.12" && @test a.allocs == 0
     end
     # A second reader of the observed keeps its store.
-    json = _obs_scan_doc(9; extra = true)
-    a = _obs_scan_eval(json)
+    file = ESM.load_string(_obs_scan_doc(9; extra = true))
+    a = _obs_scan_eval(file; derivative = false)
     @test get(a.tally, :scan_fused_consumer, 0) == 1
     @test get(a.tally, :scan_fused_store_dropped, 0) == 0
-    @test _bits(a.du) == _bits(_obs_scan_eval(json; compiler = :interpreter).du)
+    @test _bits(a.du) == _bits(_obs_scan_eval(file; compiler = :interpreter, derivative = false).du)
     # A state equation that also reads another observed is not a consumer.
-    json = _obs_scan_doc(9; other = true)
-    a = _obs_scan_eval(json)
+    file = ESM.load_string(_obs_scan_doc(9; other = true))
+    a = _obs_scan_eval(file; derivative = false)
     @test get(a.tally, :scan_fused_consumer, 0) == 0
     @test get(a.tally, :scan_fused, 0) == 1
-    @test _bits(a.du) == _bits(_obs_scan_eval(json; compiler = :interpreter).du)
+    @test _bits(a.du) == _bits(_obs_scan_eval(file; compiler = :interpreter, derivative = false).du)
 end

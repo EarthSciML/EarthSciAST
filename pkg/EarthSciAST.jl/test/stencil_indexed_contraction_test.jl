@@ -184,9 +184,9 @@ function _sic_write_fixture(dir)
     return path
 end
 
-function _sic_build(F; disable = false)
+function _sic_build(flat; disable = false)
     f!, u0, p, _t, vm, rep = ESM.Internal.build(
-        ESM.flatten(ESM.load_path(F));
+        flat;
         compiler = disable ? :interpreter : :native
     )
     return (f!, u0, p, vm, rep.counts)
@@ -198,16 +198,16 @@ _sic_same(a, b) = size(a) == size(b) && all(a .=== b)
 
 @testset "reduced-rank + contracted region values (stencil_indexed)" begin
     mktempdir() do dir
-        F = _sic_write_fixture(dir)
+        flat = ESM.flatten(ESM.load_path(_sic_write_fixture(dir)))
 
         # Default build: everything fires affine, the unroll engages.
-        ff, u0, pf, vmf, ft = _sic_build(F)
+        ff, u0, pf, vmf, ft = _sic_build(flat)
         @test get(ft, :stencil_indexed_contraction_unroll, 0) >= 1
         @test get(ft, :percell_acc, 0) == 0
         @test get(ft, :affine, 0) >= 1
 
         # Per-cell scalar reference.
-        fr, v0, pr, vmr, rt = _sic_build(F; disable = true)
+        fr, v0, pr, vmr, rt = _sic_build(flat; disable = true)
         @test get(rt, :percell_disabled, 0) >= 1
         @test vmf == vmr
         @test u0 == v0

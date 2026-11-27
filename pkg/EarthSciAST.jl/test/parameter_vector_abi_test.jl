@@ -139,9 +139,11 @@ end
 _pv_seed(n) = [0.5 + 0.1k for k in 1:n]
 
 @testset "parameter-vector ABI (`p::AbstractVector`)" begin
+    rd8 = _PV_ESM.Internal.build(_pv_rd(8))
+    rd16 = _PV_ESM.Internal.build(_pv_rd(16))
 
     @testset "param_map is the build's own parameter order" begin
-        _, _, p, _, _ = _PV_ESM.Internal.build(_pv_rd(8))
+        p = rd8.p
         pm = param_map(p)
         @test pm isa Dict{String, Int}
         # It IS `keys(p)`'s order, and `keys(p)` is `sort!(param_names)`.
@@ -163,13 +165,13 @@ _pv_seed(n) = [0.5 + 0.1k for k in 1:n]
     end
 
     @testset "both emitters accept a vector `p`, BIT-IDENTICALLY" begin
-        for (name, doc, N) in [
-                ("reaction-diffusion N=16", _pv_rd(16), 16),
-                ("0-D with a CSE prelude", _pv_zerod(), 2),
-            ]
+        for (name, build) in (
+                ("reaction-diffusion N=16", rd16),
+                ("0-D with a CSE prelude", _PV_ESM.Internal.build(_pv_zerod())),
+            )
             @testset "$name" begin
-                fi, u0, p, _, _ = _PV_ESM.Internal.build(doc)
-                u = length(u0) == 2 ? [0.7, 0.4] : _pv_seed(N)
+                fi, u0, p, _, _ = build
+                u = length(u0) == 2 ? [0.7, 0.4] : _pv_seed(length(u0))
                 t = 0.37
 
                 cv = ComponentVector(p)                     # named AND dense
@@ -190,8 +192,7 @@ _pv_seed(n) = [0.5 + 0.1k for k in 1:n]
 
     @testset "ForwardDiff ∂/∂p over a vector `p`" begin
         N = 16
-        doc = _pv_rd(N)
-        fi, _, p, _, _ = _PV_ESM.Internal.build(doc)
+        fi, _, p, _, _ = rd16
         u = _pv_seed(N)
         t = 0.37
         w = [1.0 + 0.05k for k in 1:N]
@@ -221,7 +222,7 @@ _pv_seed(n) = [0.5 + 0.1k for k in 1:n]
         # The one failure mode a vector `p` has and a NamedTuple `p` does not.
         # `_read_param_data` is deliberately not `@inbounds` so this raises.
         N = 8
-        fi, _, p, _, _ = _PV_ESM.Internal.build(_pv_rd(N))
+        fi, _, p, _, _ = rd8
         u = _pv_seed(N)
         short = collect(Float64, values(p))[1:(end - 1)]
         @test_throws BoundsError rhs_du(fi, u, short, 0.0)

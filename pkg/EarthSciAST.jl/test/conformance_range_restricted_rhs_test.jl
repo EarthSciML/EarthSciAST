@@ -27,8 +27,8 @@ function _rrc_fnv1a32(s::AbstractString)
     return h
 end
 
-function _rrc_h(v::AbstractString, k::Integer)
-    x = _rrc_fnv1a32(v) + 0x9e3779b1 * UInt32(k % UInt32)
+function _rrc_h(hash::UInt32, k::Integer)
+    x = hash + 0x9e3779b1 * UInt32(k % UInt32)
     x ⊻= x >> 16
     x *= 0x85ebca6b
     x ⊻= x >> 13
@@ -39,14 +39,14 @@ end
 
 # The global value of element `g` (global indices) of `v`, whose full shape has
 # the extents `ext`.
-function _rrc_value(v::String, g, ext::Vector{Int})
+function _rrc_value(hash::UInt32, g, ext::Vector{Int})
     k = 1
     stride = 1
     for d in eachindex(ext)
         k += (g[d] - 1) * stride
         stride *= ext[d]
     end
-    return 0.5 + _rrc_h(v, k)
+    return 0.5 + _rrc_h(hash, k)
 end
 
 # The global extents of every block of a whole-domain program.
@@ -62,14 +62,16 @@ _rrc_extents(op) = Dict{String, Vector{Int}}(
 function _rrc_fill(blocks, n::Int, ext, wrap)
     buf = fill(NaN, n)
     for b in blocks
+        hash = _rrc_fnv1a32(b.name)
         if isempty(b.storage)
-            buf[b.base] = _rrc_value(b.name, Int[], Int[])
+            buf[b.base] = 0.5 + _rrc_h(hash, 1)
             continue
         end
+        extents = ext[b.name]
         for c in CartesianIndices(Tuple(b.storage))
             g = wrap(b, Tuple(c))
             g === nothing && continue
-            buf[RRC._tile_slot(b, Tuple(c))] = _rrc_value(b.name, g, ext[b.name])
+            buf[RRC._tile_slot(b, Tuple(c))] = _rrc_value(hash, g, extents)
         end
     end
     return buf
@@ -131,7 +133,7 @@ end
 # The global coordinates of storage cell `c` of block `b` of a tile, or
 # `nothing` for a dead halo cell.
 function _rrc_tile_wrap(m, b, c)
-    g = collect(c)
+    g = c
     for d in eachindex(b.sets)
         cut = get(m.cut, b.sets[d], nothing)
         cut === nothing && continue
@@ -140,7 +142,7 @@ function _rrc_tile_wrap(m, b, c)
         g[d] in dom && continue
         P = m.period[axis]
         P === nothing && return nothing
-        g[d] += P * cld(first(dom) - g[d], P)
+        g = Base.setindex(g, g[d] + P * cld(first(dom) - g[d], P), d)
         g[d] in dom || return nothing
     end
     return g
@@ -170,7 +172,7 @@ function _rrc_check_tile!(op, dec, tile, G, ext, p; du_shared = nothing)
         @test base - 1 == n
     end
     W = Dict(b.name => b for b in RRC.tile_layout(op).u)
-    owned_slots = Set{Int}()
+    owned_slots = BitSet()
     covered = Int[]
     for b in L.u
         wb = W[b.name]
@@ -201,7 +203,7 @@ function _rrc_tile_partition(c, prob)
             shared = get(tiling, :shared_storage, false) === true
             counts = zeros(Int, length(G))
             du_shared = nothing
-            owned_all = Set{Int}()
+            owned_all = BitSet()
             for t in tiling.tiles
                 tile = RRC.restrict(op, dec; owned = _rrc_box(t.owned), storage = _rrc_box(t.storage))
                 if shared && du_shared === nothing
@@ -257,10 +259,12 @@ function _rrc_lanes(c, prob)
         buf = fill(NaN, nper * L)
         for b in blocks
             wb = whole[b.name]
+            hash = _rrc_fnv1a32(b.name)
+            extents = ext[b.name]
             for l in 1:L
                 for (e, rest) in enumerate(CartesianIndices(Tuple(1:x for x in b.extents)))
                     g = _rrc_lane_cell(wb.sets, sets, cells[:, l], b.sets, Tuple(rest))
-                    buf[(b.offset + e - 1) * L + l] = _rrc_value(b.name, g, ext[b.name])
+                    buf[(b.offset + e - 1) * L + l] = _rrc_value(hash, g, extents)
                 end
             end
         end

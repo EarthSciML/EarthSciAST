@@ -149,7 +149,24 @@ else
     @testset "concurrent builds (julia -t 2 subprocess)" begin
         env = copy(ENV)
         env["JULIA_PROJECT"] = Base.active_project()
-        cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 2 $(@__FILE__)`, env)
+        args = if @isdefined _BATCH_TWO_THREAD_TESTS
+            child = """
+            using Test
+            module ConcurrentBuildChecks end
+            module CadenceRefreshChecks end
+            @testset "two-thread build checks" begin
+                Base.include(ConcurrentBuildChecks, ARGS[1])
+                unset = [k => nothing for k in keys(ENV) if startswith(k, "ESS_")]
+                withenv(unset..., "ESS_CR_CHILD" => "1", "ESS_THREADS_MIN_WORK" => "8") do
+                    Base.include(CadenceRefreshChecks, ARGS[2])
+                end
+            end
+            """
+            ["-e", child, @__FILE__, joinpath(@__DIR__, "cadence_refresh_test.jl")]
+        else
+            [@__FILE__]
+        end
+        cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 2 $args`, env)
         @test success(run(pipeline(ignorestatus(cmd); stdout = stdout, stderr = stderr)))
     end
 end
