@@ -353,7 +353,7 @@ _xq_directmerge(t) = get(t, :classmerge_round1_merge, 0) +
             built += 1
             repair_total += _xq_repair(ron.tally)
         end
-        @info "Class-merge corpus sweep" built skipped load_seconds = load_ns / 1e9 build_seconds = build_ns / 1e9 slowest_fixture slowest_build_seconds = slowest_build_ns / 1e9
+        @info "Class-merge corpus sweep" built skipped load_seconds = load_ns / 1.0e9 build_seconds = build_ns / 1.0e9 slowest_fixture slowest_build_seconds = slowest_build_ns / 1.0e9
         # The sweep is real (a corpus regression that stops fixtures building
         # would otherwise pass this vacuously) …
         @test built >= 40

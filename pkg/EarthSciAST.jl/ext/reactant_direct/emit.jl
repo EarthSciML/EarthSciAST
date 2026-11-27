@@ -196,9 +196,13 @@ function _de_walk_node(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
         c = _DEVal[_de_walk(ctx, fr, ch) for ch in nd.children]
         return _de_op(ctx, nd, c)
     elseif k === _E._NK_CALL
-        # A template call: its body with the call's arguments in place,
-        # walked in this frame (`_de_inline_call`).
-        return _de_walk(ctx, fr, _de_inline_call(ctx, nd))
+        # A template call: a `func.call` of the target's function, or under
+        # `calls = :inline` its body with the arguments in place (calls.jl).
+        return _de_call(ctx, fr, nd)
+    elseif k === _E._NK_ARG
+        return _de_arg(ctx, nd)
+    elseif k === _E._NK_ARG_GATHER
+        return _de_arg_gather(ctx, fr, nd)
     end
     return _de_leaf(ctx, fr, nd)
 end

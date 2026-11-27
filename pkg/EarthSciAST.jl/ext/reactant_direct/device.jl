@@ -101,6 +101,8 @@ function _de_skip_rewrite!()
     Reactant.@skip_rewrite_func _de_emit!
     Reactant.@skip_rewrite_func _fragment_rhs
     Reactant.@skip_rewrite_func _fragment_kernel
+    Reactant.@skip_rewrite_func _fragment_body
+    Reactant.@skip_rewrite_func _de_call_body
     return nothing
 end
 
