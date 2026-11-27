@@ -935,6 +935,8 @@ private def joinRows (side : JoinSide) (ranges : List (FaqRange α)) (env : Env 
         | .category value => .category value)
   | .column name declaredData =>
     let some value := env.lookup name | throw (.unbound name)
+    if declaredData && (env.lookup (joinColumnPrecisionKey name)).isSome then
+      throw (.unsupported s!"integer key in {name} is not exactly representable in binary64")
     let some ([_], cells) := value.arrayData
       | throw (.typeError s!"join key column {name} is not rank one")
     let cells := cells.toArray
@@ -1305,7 +1307,7 @@ def evalIndex : List Ast → Env α → Except EvalError (Val α)
   | [], _ => throw (.typeError "operand count")
   | base :: subscripts, env => do
     if isElementwiseGatherBase base then
-      if let .ok (some dims) := expressionDims base env then
+      if let .ok (some dims) := expressionDims base env (forGather := true) then
         if !dims.isEmpty && dims.length == subscripts.length then
           let indices ← gatherSubscripts (← evalList subscripts env)
           return ← evalCell base env (← gatherCoordinate dims indices)
@@ -1313,24 +1315,36 @@ def evalIndex : List Ast → Env α → Except EvalError (Val α)
     let indices ← evalList subscripts env
     applyWholeStrict .index (value :: indices)
 
-/-- Infer extents from the AST and shape bindings without reading operand cells. -/
-def expressionDims : Ast → Env α → Except EvalError (Option (List Nat))
+/-- Infer extents without reading operand cells. A gather requires a bare
+scalar conditional's branches to agree because it keeps the selected shape. -/
+def expressionDims (ast : Ast) (env : Env α) (forGather : Bool := false) :
+    Except EvalError (Option (List Nat)) :=
+  match ast, env with
   | .num _ _, _ => return some []
   | .var name, env => return variableDims env name
   | .const c, _ => return some (valueDims (← constVal (α := α) c))
   | .node "index" (base :: subscripts), env => do
-    return (← expressionDims base env).map (·.drop subscripts.length)
+    return (← expressionDims base env forGather).map (·.drop subscripts.length)
+  | .node "ifelse" [condition, yes, no], env => do
+    let shapes := [← expressionDims condition env forGather, ← expressionDims yes env forGather,
+      ← expressionDims no env forGather]
+    if !forGather then return ← expressionBroadcastDims shapes
+    match shapes with
+    | [some [], some a, some b] => return if a == b then some a else none
+    | _ => return none
   | .node op args, env =>
-    if broadcastArity op args.length then do expressionBroadcastDims (← expressionDimsList args env)
+    if broadcastArity op args.length then do
+      expressionBroadcastDims (← expressionDimsList args env forGather)
     else return some []
-  | .array (.broadcast _) args, env => do expressionBroadcastDims (← expressionDimsList args env)
+  | .array (.broadcast _) args, env => do
+    expressionBroadcastDims (← expressionDimsList args env forGather)
   | .array (.reshape dims) _, env => some <$> reshapeDims dims env
   | .array (.transpose perm) [a], env => do
-    let some dims ← expressionDims a env | return none
+    let some dims ← expressionDims a env forGather | return none
     let order ← shapeResult (ArrayData.transposeOrder perm dims.length)
     return order.mapM (fun i => dims[i]?)
   | .array (.concat axis) args, env => do
-    let some shapes := (← expressionDimsList args env).mapM id | return none
+    let some shapes := (← expressionDimsList args env forGather).mapM id | return none
     some <$> shapeResult (ArrayData.concatDims axis shapes)
   | .array (.makearray regions) _, _ =>
     some <$> shapeResult ((ArrayData.regionBounds regions).map (List.map ArrayData.extent))
@@ -1345,9 +1359,10 @@ def expressionDims : Ast → Env α → Except EvalError (Option (List Nat))
     queryDims out (← faqRanges rs) body (some p) env
   | _, _ => return none
 
-def expressionDimsList : List Ast → Env α → Except EvalError (List (Option (List Nat)))
-  | [], _ => pure []
-  | a :: rest, env => do return (← expressionDims a env) :: (← expressionDimsList rest env)
+def expressionDimsList : List Ast → Env α → Bool → Except EvalError (List (Option (List Nat)))
+  | [], _, _ => pure []
+  | a :: rest, env, forGather => do
+    return (← expressionDims a env forGather) :: (← expressionDimsList rest env forGather)
 
 /-- Interpret each selected branch at a broadcast coordinate. Scalar gathers
 and whole-array operators keep their operand scopes. -/

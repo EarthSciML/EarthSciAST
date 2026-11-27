@@ -422,7 +422,7 @@ theorem eval_index_materialized_broadcast (env : Env α) (base : Ast) (args : Li
 enters its per-cell evaluator. The whole expression need not evaluate. -/
 theorem eval_index_elementwise (env : Env α) (base : Ast) (args : List Ast) (dims : List Nat)
     (elementwise : isElementwiseGatherBase base = true)
-    (shape : expressionDims base env = .ok (some dims))
+    (shape : expressionDims base env (forGather := true) = .ok (some dims))
     (nonempty : dims ≠ []) (fullRank : dims.length = args.length) :
     eval (.node "index" (base :: args)) env = (do
       let subscripts ← gatherSubscripts (← evalList args env)
@@ -437,7 +437,7 @@ if whole-expression evaluation would encounter a fault in another cell. -/
 theorem eval_index_elementwise_cell (env : Env α) (base : Ast) (args : List Ast)
     (dims ix : List Nat) (values : List (Val α))
     (elementwise : isElementwiseGatherBase base = true)
-    (shape : expressionDims base env = .ok (some dims))
+    (shape : expressionDims base env (forGather := true) = .ok (some dims))
     (nonempty : dims ≠ []) (fullRank : dims.length = args.length)
     (evaluated : evalList args env = .ok values)
     (subscripts : gatherSubscripts values = .ok (oneBased ix))
@@ -450,7 +450,7 @@ theorem eval_index_elementwise_cell (env : Env α) (base : Ast) (args : List Ast
 theorem eval_index_elementwise_outOfRange (env : Env α) (base : Ast) (args : List Ast)
     (dims : List Nat) (values : List (Val α)) (indices : List Int)
     (elementwise : isElementwiseGatherBase base = true)
-    (shape : expressionDims base env = .ok (some dims))
+    (shape : expressionDims base env (forGather := true) = .ok (some dims))
     (nonempty : dims ≠ []) (fullRank : dims.length = args.length)
     (evaluated : evalList args env = .ok values)
     (subscripts : gatherSubscripts values = .ok indices) (indexRank : dims.length = indices.length)

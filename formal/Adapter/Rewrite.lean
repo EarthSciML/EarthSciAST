@@ -458,7 +458,8 @@ private def emitProjection (scope : Scope) (component : Json) (authored : List S
   let authoredEntries := authored.filterMap fun name => do
     let entry ← placement.entries[name]?
     if (field entry "match").isSome then none else some (name, entry)
-  let materialized := reachableEntries placement.entries (referenceNames roots) {}
+  let materialized := reachableEntries placement.entries
+    (referenceNames roots ++ authoredEntries.map Prod.fst) {}
   let names := (materialized.toList.filter fun name => !authored.contains name).mergeSort (fun a b => decide (a ≤ b))
   let registry := authoredEntries ++ (names.filterMap fun name => (placement.entries[name]?).map (name, ·))
   return if registry.isEmpty then roots else .obj (putField (fields roots) "operators" (.obj registry))

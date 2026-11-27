@@ -21,6 +21,7 @@ structure Exports where
   definitions : Entries := []
   axes : Entries := []
   metaparameters : Entries := []
+  deferredBindings : List Json := []
   deriving Inhabited, Repr
 
 structure Edge where
@@ -58,7 +59,8 @@ def strings : Json → List String
   | _ => []
 
 def exports (node : Json) : Exports :=
-  ⟨entries node "operators", entries node "index_sets", entries node "metaparameters"⟩
+  { definitions := entries node "operators", axes := entries node "index_sets",
+    metaparameters := entries node "metaparameters" }
 
 def Exports.asDocument (value : Exports) : Json :=
   .obj [("operators", .obj value.definitions), ("index_sets", .obj value.axes),
@@ -77,7 +79,9 @@ def merge (earlier later : Exports) : Except Failure Exports := do
   let definitions ← mergeEntries "operator_import_name_conflict" earlier.definitions later.definitions
   let axes ← mergeEntries "operator_import_index_set_conflict" earlier.axes later.axes
   let metaparameters ← mergeEntries "operator_import_name_conflict" earlier.metaparameters later.metaparameters
-  return ⟨definitions, axes, metaparameters⟩
+  let deferredBindings := later.deferredBindings.foldl (init := earlier.deferredBindings) fun kept value =>
+    if kept.any (sameValue value) then kept else kept ++ [value]
+  return ⟨definitions, axes, metaparameters, deferredBindings⟩
 
 theorem mergeEntries_append_new (code name : String) (earlier : Entries) (value : Json)
     (fresh : earlier.lookup name = none) :

@@ -21,6 +21,19 @@ private def number (value : Json) : Except String Float := do
   let n ← value.getNum?
   return Lits.ofDec n.mantissa n.exponent
 
+private def hasInexactJoinInteger (value : Json) : Bool :=
+  let inexact (cell : Json) : Bool :=
+    cell.getNum?.toOption.any fun n =>
+      let denominator := 10 ^ n.exponent
+      let magnitude := n.mantissa.natAbs / denominator
+      let bits := magnitude.log2 + 1
+      -- A binary64 integer can have at most 1024 bits, of which 53 are significant.
+      n.mantissa.natAbs % denominator == 0 &&
+        (bits > 1024 || magnitude % (2 ^ (bits - 53)) != 0)
+  match value with
+  | .arr cells => cells.any inexact
+  | cell => inexact cell
+
 private def checkPrecision (location : String) (decl : Json) : Except String Unit := do
   if (decl.getObjValAs? String "element_type").toOption == some "Float32" then
     throw s!"float32_unsupported: {location} declares Float32"
@@ -195,6 +208,7 @@ structure Model where
   parameters : List (String × Json)
   differentialStates : List String
   equations : List (String × Except String Ast)
+  inexactConstantColumns : List String
   invention : ValueInvention.Plan
   deriving Inhabited
 
@@ -259,6 +273,9 @@ def readModel (doc component : Json) (modelName : String) : Except String Model 
     parameters
     differentialStates
     equations := loweredEquations
+    inexactConstantColumns := equations.filterMap fun (name, expr) =>
+      if operation expr == "const" && hasInexactJoinInteger (expr.getObjValD "value") then
+        some name else none
     invention }
 
 private def Model.shape (model : Model) (name : String) : List String :=
@@ -275,8 +292,9 @@ private def environment (model : Model) (atTime : Float) (overrides : Json) :
     unless (model.parameters.lookup name).isSome do throw s!"unknown parameter override {key}"
     if (resolved.lookup name).isSome then throw s!"duplicate parameter override for {name}"
     resolved := (name, value) :: resolved
-  let parameters ← model.parameters.filterMapM fun (name, defaultValue) => do
-    let json := (resolved.lookup name).getD defaultValue
+  let parameterInputs := model.parameters.map fun (name, defaultValue) =>
+    (name, (resolved.lookup name).getD defaultValue)
+  let parameters ← parameterInputs.filterMapM fun (name, json) => do
     if json.isNull then return none
     let value ← evalResult (constVal (← Templates.constOf json))
     return some (name, value)
@@ -295,7 +313,11 @@ private def environment (model : Model) (atTime : Float) (overrides : Json) :
   let sizes := newSizes ++ model.sizes
   let parameters ← parameters.mapM fun (name, value) => do
     return (name, ← conformShape name (model.shapes.lookup name) sizes value)
-  let mut env : Env Float := (model.independent, .num atTime) :: derivedEnv ++ parameters ++ indexEnv
+  let inexactColumns := model.inexactConstantColumns ++ parameterInputs.filterMap fun (name, json) =>
+    if hasInexactJoinInteger json then some name else none
+  let precisionFlags := inexactColumns.map fun name => (joinColumnPrecisionKey name, Val.num 0.0)
+  let mut env : Env Float :=
+    (model.independent, .num atTime) :: derivedEnv ++ parameters ++ indexEnv ++ precisionFlags
   -- Shape information can be needed even when an observed's value is never read.
   for (name, axes) in model.shapes do
     if let .ok dims := dimensions axes sizes then

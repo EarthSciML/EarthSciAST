@@ -282,20 +282,26 @@ private def validateKeys (declared values : Bindings) : Except Error Unit :=
 /-- Close only the names bound on this edge, and rename still-open names in the
     same substitution so parent-origin free names do not get renamed at this edge. -/
 def instantiate (document : Json) (bindings : Bindings)
-    (metaRenames : List (String × String) := []) : Except Error Json := do
+    (metaRenames : List (String × String) := []) (deferredBindings : List Json := []) :
+    Except Error (Json × List Json) := do
   validateNames document
   let declared := declarations document
   validateKeys declared bindings
-  let values ← bindings.mapM fun (name, value) => do
-    let _ ← eval value
-    return (name, match value with | .num (.int _) => value | _ => deferred value)
+  let values := bindings.map fun (name, value) =>
+    (name, match value with | .num (.int _) => value | _ => deferred value)
   let renames := metaRenames.map fun (oldName, newName) => (oldName, Json.str newName)
+  let replacements := values ++ renames
+  -- Track the binding expressions independently of their uses. A filtered or
+  -- unused definition cannot make its import edge exempt from validation.
+  let pending ← ((deferredBindings.map (fun value => substitute value replacements)) ++
+    bindings.map Prod.snd).filterMapM fun value => do
+      if (← eval value).isSome then return none else return some value
   let remaining := declared.filterMap fun (name, decl) =>
     if (bindings.lookup name).isSome then none else some ((metaRenames.lookup name).getD name, decl)
-  let substituted := substitute document (values ++ renames)
+  let substituted := substitute document replacements
   let substituted := if (field document "metaparameters").isSome then
     .obj (setField (fields substituted) "metaparameters" (.obj remaining)) else substituted
-  foldDocument false substituted
+  return (← foldDocument false substituted, pending)
 
 /-- At the final JSON boundary, keep the imported expression but erase its
     internal scope tag. -/
@@ -307,7 +313,8 @@ partial def clearDeferred : Json → Json
 
 /-- Close a root scope from explicit values and defaults. A mount can keep unknown
     index-set sizes open for the enclosing document by passing `strict := false`. -/
-def close (document : Json) (overrides : Bindings := []) (strict : Bool := true) :
+def close (document : Json) (overrides : Bindings := []) (strict : Bool := true)
+    (deferredBindings : List Json := []) :
     Except Error (Json × Bindings) := do
   validateNames document
   let declared := declarations document
@@ -316,6 +323,8 @@ def close (document : Json) (overrides : Bindings := []) (strict : Bool := true)
     let some value := (overrides.lookup name).orElse (fun _ => field decl "default")
       | throw ⟨"metaparameter_unbound", name⟩
     return (name, int (← integerLiteral value))
+  for binding in deferredBindings do
+    let _ ← foldSite (substitute binding values) strict
   let folded ← foldDocument strict (substitute document values)
   return (if strict then clearDeferred folded else folded, values)
 

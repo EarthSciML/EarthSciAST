@@ -27,6 +27,9 @@ structure JoinPair where
   left : JoinSide
   right : JoinSide
 
+/-- An environment entry recording that a declared key column was rounded. -/
+def joinColumnPrecisionKey (name : String) : String := "{join key precision}:" ++ name
+
 /-- A loop symbol and an alias for its same index-set key combine
 positionally. Distinct key columns on one range still restrict its rows. -/
 def JoinPair.positional (pair : JoinPair) : Bool :=

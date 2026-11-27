@@ -197,6 +197,87 @@ def check_shared_bodies(adapter):
         raise AssertionError(f"reference-preserving rewrite failed: {actual.stderr.decode()}")
 
 
+def check_imported_dependency_of_unused_definition(adapter):
+    helper = {"params": [], "body": 3}
+    unused = {
+        "params": [],
+        "body": {"op": "apply_operator", "args": [], "name": "helper", "bindings": {}},
+    }
+    document = {
+        "esm": "2.4.0",
+        "metadata": {"name": "UnusedDefinitionDependency"},
+        "models": {
+            "Probe": {
+                "operators": {"unused": unused},
+                "operator_imports": [{"ref": "library.esm"}],
+                "variables": {"out": {"type": "unknown"}},
+                "equations": [{"lhs": "out", "rhs": 7}],
+            }
+        },
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "fixture.esm"
+        library = {"esm": "2.4.0", "metadata": {"name": "Library"}, "operators": {"helper": helper}}
+        (path.parent / "library.esm").write_text(json.dumps(library), encoding="utf-8")
+        path.write_text(json.dumps(document), encoding="utf-8")
+        actual = rewrite(adapter, path, "emitted")
+        if actual.returncode:
+            raise AssertionError(actual.stderr.decode().strip())
+        _, model = component(document)
+        model.pop("operator_imports")
+        model["operators"]["helper"] = helper
+        path.write_text(json.dumps(document), encoding="utf-8")
+        check_emitted(adapter, path, json.loads(actual.stdout), actual.stdout)
+
+
+def check_unused_symbolic_import_binding(adapter):
+    document = {
+        "esm": "2.4.0",
+        "metadata": {"name": "UnusedSymbolicImportBinding"},
+        "metaparameters": {"D": {"type": "integer", "default": 2}},
+        "models": {
+            "Probe": {
+                "operator_imports": [{"ref": "wrapper.esm", "bindings": {"K": "D"}}],
+                "variables": {"out": {"type": "unknown"}},
+                "equations": [{"lhs": "out", "rhs": 7}],
+            }
+        },
+    }
+    library = {
+        "esm": "2.4.0",
+        "metadata": {"name": "Library"},
+        "metaparameters": {"N": {"type": "integer"}},
+        "operators": {
+            "helper": {"params": [], "body": 3},
+            "filtered": {"params": [], "body": "N"},
+        },
+    }
+    wrapper = {
+        "esm": "2.4.0",
+        "metadata": {"name": "Wrapper"},
+        "metaparameters": {"K": {"type": "integer"}},
+        "operators": {},
+        "operator_imports": [
+            {
+                "ref": "library.esm",
+                "only": ["helper"],
+                "bindings": {"N": {"op": "/", "args": [2, "K"]}},
+            }
+        ],
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "fixture.esm"
+        (path.parent / "library.esm").write_text(json.dumps(library), encoding="utf-8")
+        (path.parent / "wrapper.esm").write_text(json.dumps(wrapper), encoding="utf-8")
+        path.write_text(json.dumps(document), encoding="utf-8")
+        actual = rewrite(adapter, path, "expanded")
+        if actual.returncode:
+            raise AssertionError(actual.stderr.decode().strip())
+        document["metaparameters"]["D"]["default"] = 0
+        path.write_text(json.dumps(document), encoding="utf-8")
+        compare_error(adapter, path, "metaparameter_type_error")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--adapter", type=Path, default=DEFAULT_ADAPTER)
@@ -236,13 +317,19 @@ def main():
             compare_error(args.adapter, fixture, diagnostic)
         except (AssertionError, ValueError) as error:
             failed.append(f"{fixture.relative_to(ROOT)}: {error}")
-    try:
-        check_shared_bodies(args.adapter)
-    except (AssertionError, ValueError, subprocess.TimeoutExpired) as error:
-        failed.append(f"shared body DAG: {error}")
+    checks = {
+        "shared body DAG": check_shared_bodies,
+        "unused definition's imported dependency": check_imported_dependency_of_unused_definition,
+        "unused symbolic import binding": check_unused_symbolic_import_binding,
+    }
+    for name, check in checks.items():
+        try:
+            check(args.adapter)
+        except (AssertionError, ValueError, subprocess.TimeoutExpired) as error:
+            failed.append(f"{name}: {error}")
     for failure in failed:
         print(failure)
-    total = len(cases) + len(errors) + 1
+    total = len(cases) + len(errors) + len(checks)
     print(f"Lean rewrite conformance: {total - len(failed)}/{total} passed")
     return bool(failed)
 

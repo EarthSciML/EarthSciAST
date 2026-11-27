@@ -150,10 +150,11 @@ private def applyEdge (importerNames : List String) (prepared : Prepared) : Load
   let definitions ← liftResult (selectDefinitions prepared.target.definitions prepared.edge.only)
   let selected := {prepared.target with definitions}
   let plan ← liftResult (planRename prepared.edge selected (bindings.map Prod.fst))
-  let instantiated := exports
-    (← liftMeta (Metaparameters.instantiate prepared.target.asDocument bindings plan.metaRenames))
+  let (document, deferredBindings) ← liftMeta (Metaparameters.instantiate
+    prepared.target.asDocument bindings plan.metaRenames prepared.target.deferredBindings)
+  let instantiated := exports document
   let definitions := instantiated.definitions.filter fun (name, _) => (definitions.lookup name).isSome
-  return plan.transform {instantiated with definitions}
+  return plan.transform {instantiated with definitions, deferredBindings}
 
 private def mergeEdges (importerNames : List String) (prepared : List Prepared) :
     Loader Exports :=
@@ -245,7 +246,8 @@ private def resolveRoot (source : FilePath) (document : Json) : Loader Json := d
     resolved := updateEntries resolved key updated
   let withExports := updateEntries (updateEntries resolved "index_sets" globalExports.axes)
     "metaparameters" globalExports.metaparameters
-  let (closed, _) ← liftMeta (Metaparameters.close withExports)
+  let (closed, _) ← liftMeta (Metaparameters.close withExports
+    (deferredBindings := globalExports.deferredBindings))
   return closed
 
 /-- Resolve imports of an ordered, canonicalized document against its file.
