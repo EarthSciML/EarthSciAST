@@ -17,6 +17,7 @@ use crate::simulate_array::take_const_array_oob;
 use crate::types::EsmFile;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 pub(super) fn typed(doc: serde_json::Value) -> EsmFile {
     // Through `load`, not `serde_json::from_value`: load activates the AST
@@ -107,7 +108,7 @@ pub(super) fn assert_bits_eq(a: &[f64], b: &[f64], what: &str) {
 /// A fresh scratch carrying `prog`.
 pub(super) fn scratch_with(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsScratch {
     let mut s = compiled.new_scratch();
-    s.install_tape(std::sync::Arc::new(prog));
+    s.install_tape(Arc::new(prog));
     s
 }
 
@@ -175,20 +176,15 @@ impl Arm {
         .0
     }
 
-    /// A scratch kept warm across every evaluation: the production taped
-    /// scratch for the fused program, a bare one carrying the build for the
-    /// others.
-    fn warm_scratch(self, compiled: &ArrayCompiled) -> RhsScratch {
-        match self {
-            Arm::Fused => compiled
-                .debug_new_scratch_taped()
-                .expect("the tape lowers every rule"),
-            _ => {
-                let mut s = RhsScratch::new(&compiled.var_shapes);
-                s.install_tape(std::sync::Arc::new(self.build(compiled)));
-                s
-            }
-        }
+    /// A scratch kept warm across every evaluation, using the same tape as
+    /// the reference executor. The fused scratch includes the const registry.
+    fn warm_scratch(self, compiled: &ArrayCompiled, prog: Arc<TapeProgram>) -> RhsScratch {
+        let mut scratch = match self {
+            Arm::Fused => compiled.new_scratch(),
+            _ => RhsScratch::new(&compiled.var_shapes),
+        };
+        scratch.install_tape(prog);
+        scratch
     }
 }
 
@@ -253,10 +249,20 @@ pub(super) fn ab_harness(compiled: &ArrayCompiled, opts: &AbOptions) -> AbOutcom
     } else {
         &[Arm::Fused, Arm::Unfused]
     };
+    let fused = Arc::new(fused);
+    let unfused = Arc::new(unfused);
     let warm = opts.scratches == Scratches::Warm;
-    let mut warm_arms: Vec<(Arm, TapeProgram, RhsScratch)> = if warm {
+    let mut warm_arms: Vec<_> = if warm {
         arms.iter()
-            .map(|&a| (a, a.build(compiled), a.warm_scratch(compiled)))
+            .map(|&arm| {
+                let prog = match arm {
+                    Arm::Fused => Arc::clone(&fused),
+                    Arm::Unfused => Arc::clone(&unfused),
+                    Arm::RowMajorFused => Arc::new(arm.build(compiled)),
+                };
+                let scratch = arm.warm_scratch(compiled, Arc::clone(&prog));
+                (arm, prog, scratch)
+            })
             .collect()
     } else {
         Vec::new()
@@ -311,8 +317,9 @@ pub(super) fn ab_harness(compiled: &ArrayCompiled, opts: &AbOptions) -> AbOutcom
     if warm {
         assert!(stats.taped_rules > 0, "the fast executor must have run");
     }
+    drop(warm_arms);
     AbOutcome {
-        fused,
+        fused: Arc::into_inner(fused).expect("the harness owns the fused tape"),
         unfused_len: all_instrs(&unfused).count(),
     }
 }
@@ -352,13 +359,23 @@ fn compare_fresh(
 /// warm scratches, the row-major program and split execution included, at
 /// four states seeded in `[lo, hi)`. Returns the fused program.
 pub(super) fn ab_check(doc: serde_json::Value, lo: f64, hi: f64) -> TapeProgram {
+    ab_check_at_times(doc, lo, hi, &[0.0, 0.37, 2.5])
+}
+
+/// The same state, executor and layout comparisons at the fixture's probe times.
+pub(super) fn ab_check_at_times(
+    doc: serde_json::Value,
+    lo: f64,
+    hi: f64,
+    times: &[f64],
+) -> TapeProgram {
     let compiled = compile(doc);
     let opts = AbOptions {
         params: &no_params(),
         seeds: 4,
         lo,
         hi,
-        times: &[0.0, 0.37, 2.5],
+        times,
         scratches: Scratches::Warm,
         row_major_and_split: true,
     };

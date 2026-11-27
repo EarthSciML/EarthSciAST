@@ -281,9 +281,14 @@ def run(commands: dict[str, list[str]], args: argparse.Namespace) -> None:
     with ExitStack() as stack:
         participants = {name: stack.enter_context(adapter(cmd)) for name, cmd in commands.items()}
         if args.fixture is not None:
-            fixture = json.loads(args.fixture.read_text(encoding="utf-8"))
-            compare(fixture, participants, args.timeout)
-            print(f"{args.fixture} passed for {', '.join(commands)}")
+            for path in args.fixture:
+                fixture = json.loads(path.read_text(encoding="utf-8"))
+                try:
+                    compare(fixture, participants, args.timeout)
+                except Mismatch:
+                    print(f"Disagreement on {path}", file=sys.stderr)
+                    raise
+                print(f"{path} passed for {', '.join(commands)}")
             return
 
         def check(fixture: dict) -> None:
@@ -358,7 +363,12 @@ def main() -> int:
     parser.add_argument("--cases", type=int, default=200)
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--shaped", action="store_true", help="generate static array expressions")
-    parser.add_argument("--fixture", type=Path, help="replay one differential fixture")
+    parser.add_argument(
+        "--fixture",
+        type=Path,
+        action="append",
+        help="replay a differential fixture (repeat to replay several with one set of adapters)",
+    )
     parser.add_argument(
         "--observer", action="store_true", help="report disagreements without failing"
     )
@@ -386,8 +396,6 @@ def main() -> int:
             args.reproducer.parent.mkdir(parents=True, exist_ok=True)
             args.reproducer.write_text(dumps(exc.fixture, indent=2) + "\n", encoding="utf-8")
             print(f"Seed {args.seed} shrank a disagreement to {args.reproducer}", file=sys.stderr)
-        else:
-            print(f"Disagreement on {args.fixture}", file=sys.stderr)
         print(str(exc), file=sys.stderr)
         return 0 if args.observer else 1
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:

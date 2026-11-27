@@ -279,3 +279,24 @@ end
     @test err isa EarthSciAST.InlineTestError && occursin("mentions `s`", sprint(showerror, err))
     @test EarthSciAST.bind_dimension_names(tref, String[]; independent_variable = "s") === tref
 end
+
+# The shaped disagreements the differential sweep recorded (scripts/difftest,
+# tests/differential/shaped): each document's inline expectation is the value
+# Lean, Python and Rust agree on. A `transpose` of a const array (here 1×1)
+# and a bare alias that permutes its operand's declared axes are build-time
+# data under both compilers (esm-spec §4.3.4, §4.3.5).
+@testset "differential shaped replays" begin
+    dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "differential", "shaped")
+    files = sort(filter(endswith(".esm"), readdir(dir)))
+    @test !isempty(files)
+    for name in files, compiler in (:interpreter, :native)
+        @testset "$(name) $(compiler)" begin
+            results = run_inline_tests(
+                joinpath(dir, name); model_name = "Probe", compiler = compiler,
+                alg = OrdinaryDiffEqTsit5.Tsit5()
+            )
+            @test !isempty(results)
+            @test all(r -> r.passed, results)
+        end
+    end
+end

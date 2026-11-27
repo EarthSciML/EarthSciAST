@@ -44,7 +44,12 @@ from .flatten import (
     flatten,
     infer_variable_shapes,
 )
-from .index_alignment import align_expression, axis_sizes, promoted_axes
+from .index_alignment import (
+    align_expression,
+    axis_sizes,
+    first_unalignable_operand,
+    promoted_axes,
+)
 from .numpy_interpreter import (
     ConstArrayOutOfRangeError,
     EvalContext,
@@ -2749,6 +2754,8 @@ def _align_named_operands(
     if not var_axes:
         return driver_equations, ordered_observed
 
+    for name, rhs in ordered_observed:
+        _refuse_unalignable_operand(name, rhs, var_axes)
     aligned_observed = [
         (name, align_expression(rhs, var_axes.get(name), var_axes, sizes))
         for name, rhs in ordered_observed
@@ -2765,9 +2772,32 @@ def _align_named_operands(
             and isinstance(lhs.args[0], str)
         ):
             target = var_axes.get(lhs.args[0])
+            _refuse_unalignable_operand(lhs.args[0], eq.rhs, var_axes)
         new_rhs = align_expression(eq.rhs, target, var_axes, sizes) if target else eq.rhs
         aligned_equations.append(eq if new_rhs is eq.rhs else replace(eq, rhs=new_rhs))
     return aligned_equations, aligned_observed
+
+
+def _refuse_unalignable_operand(
+    target: str, rhs: Expr, var_axes: dict[str, tuple[str, ...]]
+) -> None:
+    """``array_shape_mismatch`` (esm-spec §4.3.4 rule 1): an operand of
+    ``target``'s whole-array body carries an index set ``target`` is not shaped
+    over. Named operands align by NAME, so a one-element ``["one"]`` operand has
+    no axis to fill in a ``["lat"]`` result, whatever its extent."""
+    target_axes = var_axes.get(target)
+    if not target_axes:
+        return
+    found = first_unalignable_operand(rhs, target_axes, var_axes)
+    if found is None:
+        return
+    operand, axes, axis = found
+    label = operand if isinstance(operand, str) else show_expr(operand)
+    raise SimulationError(
+        f"array_shape_mismatch: operand {label!r} of the array-level expression for "
+        f"{target!r} is over [{', '.join(axes)}]; index set {axis!r} is not among "
+        f"{target!r}'s [{', '.join(target_axes)}] (esm-spec §4.3.4)"
+    )
 
 
 def _bare_index_definition_rhs(name: str, lhs: ExprNode, rhs: Expr, flat: FlattenedSystem) -> Expr:

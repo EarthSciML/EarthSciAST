@@ -137,7 +137,7 @@ theorem segItems_canon (its : List RItem) : segItems (canonSegs its) = its := by
 
 theorem inert_nl (bol : Bool) (t : List Char) : Inert bol ['\n'] t := by
   refine ⟨?_, ?_, trivial⟩
-  · simp [blockOpen, oDesc, oBlock, oModel, oRs, oEq, oCe_l, oRxn_l, oInit_l, oCons_l, oPlot_l, oSub_l,
+  · simp [blockOpen, descOpen, oDesc, oBlock, oModel, oRs, oEq, oCe_l, oRxn_l, oInit_l, oCons_l, oPlot_l, oSub_l,
       oTmpl_l, oRule_l, pre]
   · simp [declOpen, oVar, oParam, oSpecies, pre]
 

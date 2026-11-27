@@ -220,8 +220,8 @@ end
 # lowering — is exactly the promoted-faq case, just spelled with the
 # public op name. A SCALAR reduction (empty `output_idx`) is not an array
 # producer and keeps the scalar-observed path.
-# A bare transpose of declared shape also uses this route: the existing fill
-# equation reads it through `index(transpose(...), …)`, a symbolic axis remap.
+# A bare transpose also qualifies for per-cell gathers when the build cannot
+# fold it into a const array.
 function _collect_array_inline_vars(
         model::Model, equations::Vector{Equation},
         geom_setup_vars::Set{String}, geom_inline_vars::Set{String}
@@ -626,14 +626,15 @@ end
 # a mesh subsystem's const factors re-exposed under the bare names a grid's
 # ragged index set and rule bodies resolve) is build-time data under a second
 # name. Follow the alias chain to its const-backed array and register the
-# alias as a const array too, excluded from the ODE partition. Each alias
-# uses its own declared axis order (esm-spec §4.3.4).
+# alias as a const array too, excluded from the ODE partition. An alias names
+# its operand's axes by index set (esm-spec §4.3.4), so values whose declared
+# axes are a permutation of the alias's are permuted into the alias's order
+# (`_alias_in_own_axes`). A `transpose` or integer-shape `reshape` of such an
+# operand (esm-spec §4.3.5) is build-time data too and is folded the same way.
 # Only chains ending at a `const`-op observed / caller `const_arrays` entry
-# resolve; any other alias keeps the existing unsupported-shape error. Empty
-# (byte-identical) for documents without bare-alias array observeds. Mutates
-# `const_obs_arrays` / `const_obs_vars` in place. The ownership-exclusion sets
-# are keyword-only: they are all same-typed `Set{String}`s, so positional
-# passing could silently swap two of them.
+# resolve. A transpose the build cannot fold uses per-cell gathers.
+# Mutates `const_obs_arrays` and `const_obs_vars` and removes folded
+# transposes from `array_inline_vars`.
 function _register_bare_alias_arrays!(
         const_obs_arrays::Dict{String, Array{Float64}},
         const_obs_vars::Set{String},
@@ -647,44 +648,75 @@ function _register_bare_alias_arrays!(
         eq.lhs isa VarExpr && (alias_defs[(eq.lhs::VarExpr).name] = eq.rhs)
     end
     obs_defs = observed_definitions(model)
+    declared(n) = (v = get(model.variables, n, nothing); v === nothing ? nothing : v.shape)
+    # `(values, declared axes of the values)` of a const-backed expression, or
+    # `nothing`. `depth` caps an alias cycle.
+    function resolve(e::ASTExpr, depth::Int)
+        depth > length(alias_defs) + 1 && return nothing
+        if e isa VarExpr
+            tgt = (e::VarExpr).name
+            if haskey(const_obs_arrays, tgt)
+                return const_obs_arrays[tgt], declared(tgt)
+            elseif haskey(const_arrays, tgt)
+                return Array{Float64}(const_arrays[tgt]), declared(tgt)
+            elseif get(obs_defs, tgt, nothing) !== nothing && _is_const_op(obs_defs[tgt])
+                return _const_op_to_array((obs_defs[tgt]::OpExpr).value), declared(tgt)
+            end
+            rhs = get(alias_defs, tgt, nothing)
+            rhs === nothing && return nothing
+            r = resolve(rhs, depth + 1)
+            r === nothing && return nothing
+            return _alias_in_own_axes(r[1], declared(tgt), r[2]), declared(tgt)
+        elseif e isa OpExpr && (e::OpExpr).op in ("transpose", "reshape") &&
+                length((e::OpExpr).args) == 1
+            o = e::OpExpr
+            r = resolve(o.args[1], depth + 1)
+            r === nothing && return nothing
+            x = r[1]
+            if o.op == "transpose"
+                return permutedims(x, _transpose_perm(o, ndims(x)) .+ 1), nothing
+            end
+            (o.shape === nothing || !all(d -> d isa Integer, o.shape)) && return nothing
+            ext = Int[Int(d) for d in o.shape]
+            prod(ext) == length(x) || return nothing
+            return reshape(x, ext...), nothing
+        end
+        return nothing
+    end
     for (name, v) in model.variables
         (haskey(obs_defs, name) && _is_array_shape(v.shape)) || continue
         (
             name in const_obs_vars || name in geom_setup_vars ||
-                name in geom_inline_vars || name in array_inline_vars
+                name in geom_inline_vars
         ) && continue
-        get(alias_defs, name, nothing) isa VarExpr || continue
-        cur = name
-        arr = nothing
-        for _ in 1:(length(alias_defs) + 1)   # cap defends against a cycle
-            rhs = get(alias_defs, cur, nothing)
-            rhs isa VarExpr || break
-            cur = (rhs::VarExpr).name
-            if haskey(const_obs_arrays, cur)
-                arr = const_obs_arrays[cur]
-            elseif haskey(const_arrays, cur)
-                arr = Array{Float64}(const_arrays[cur])
-            elseif get(obs_defs, cur, nothing) !== nothing &&
-                    _is_const_op(obs_defs[cur])
-                arr = _const_op_to_array((obs_defs[cur]::OpExpr).value)
-            end
-            arr === nothing || break
-        end
-        arr === nothing && continue
-        # `cur` names the buffer found above, whether it is the original source
-        # or an alias already registered in its own axis order.
-        source = get(model.variables, cur, nothing)
-        from = source === nothing ? nothing : source.shape
-        to = v.shape
-        if from !== nothing && from != to && length(from) == length(to) == ndims(arr) &&
-                allunique(from) && allunique(to)
-            perm = indexin(to, from)
-            all(!isnothing, perm) && (arr = permutedims(arr, Int[d for d in perm]))
-        end
-        const_obs_arrays[name] = arr
+        rhs = get(alias_defs, name, nothing)
+        (
+            rhs isa VarExpr ||
+                (rhs isa OpExpr && (rhs::OpExpr).op in ("transpose", "reshape"))
+        ) || continue
+        r = resolve(rhs, 0)
+        r === nothing && continue
+        const_obs_arrays[name] = _alias_in_own_axes(r[1], v.shape, r[2])
         push!(const_obs_vars, name)
+        # A folded transpose is already available to every reader as a const array.
+        delete!(array_inline_vars, name)
     end
     return nothing
+end
+
+# Values laid out in the declared axes `src` (index-set names), in the axis
+# order `own` declares: `matrix: [cols, rows]` read as `permuted: [rows, cols]`
+# is `permuted[r, c] = matrix[c, r]` (esm-spec §4.3.4, axis order is
+# immaterial). Anything that is not one permutation of the same named axes
+# keeps its layout.
+function _alias_in_own_axes(arr::AbstractArray, own, src)
+    (own === nothing || src === nothing) && return Array{Float64}(arr)
+    own_axes, src_axes = String[string(a) for a in own], String[string(a) for a in src]
+    (
+        own_axes != src_axes && length(own_axes) == ndims(arr) && allunique(own_axes) &&
+            sort(own_axes) == sort(src_axes)
+    ) || return Array{Float64}(arr)
+    return permutedims(arr, [findfirst(==(a), src_axes) for a in own_axes])
 end
 
 # ---- Stage: variable partition ----
