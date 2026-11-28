@@ -78,6 +78,11 @@ _EMPTY_EVENT_ARRAY = (
 # are held to full equality with everything else.
 
 TRANSFORMING_FIXTURES: dict[str, str] = {
+    "nonlinear_isorropia_shape.esm": (
+        "the deprecated `initialization_equations` of a model with no time "
+        "derivative are read as `guesses` entries, an existing entry kept, and "
+        "the field does not survive into the emitted document (esm-spec §11.4.4)"
+    ),
     "data_source_relative_url.esm": (
         "a scheme-less `source.url_template` is a filesystem path, and a "
         "relative one resolves at load against the directory of the file that "

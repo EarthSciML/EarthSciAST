@@ -59,6 +59,7 @@ from .classification import (
     _variables,
     algebraic_unknowns,
     declared_system_kind,
+    is_initial_condition,
     model_nodes,
     observed_definitions,
     ode_states,
@@ -2067,6 +2068,20 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
         # The exemption that remains is the operator-composed shape, whose LHS
         # names no local variable and whose RHS is coupled in from elsewhere.
         closed = _lhs_is_closed_definition(lhs, declared)
+        if is_initial_condition(eq):
+            # An initialization equation (esm 2.5.0, esm-spec §11.4.3; a
+            # deprecated `initialization_equations` entry is rewritten into one
+            # at load) is closed on both sides: every bare name must resolve.
+            for side in ("lhs", "rhs"):
+                if side in eq:
+                    yield (
+                        f"models/{mname}/equations[{i}]/{side}",
+                        eq[side],
+                        True,
+                        "initialization equation",
+                        {},
+                    )
+            continue
         for side in ("lhs", "rhs"):
             if side in eq:
                 yield (

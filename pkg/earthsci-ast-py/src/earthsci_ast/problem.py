@@ -45,6 +45,7 @@ and CONSTRUCTING a EsmProblem never needs SciPy. Only :func:`solve`, :func:`init
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import os
 from collections.abc import Iterable
@@ -2553,7 +2554,9 @@ def remake(
     scalar_build = prob.scalar_build
     # The rebuild is the SAME compiler's: a remake that quietly changed strategy
     # would make `prob.compiler` describe the original build only.
-    with use_policy(policy_for(prob)), phase_scope("construction"):
+    # A stripped Problem's rebuild strips what its construction stripped: the
+    # implicit initialization system stays the caller's (API_SPEC §5.8).
+    with use_policy(policy_for(prob)), phase_scope("construction"), _strip_taken(prob):
         if rebind and prob.engine == "array":
             build = _build_numpy_rhs(
                 prob.flat,
@@ -2632,6 +2635,16 @@ def remake(
 #: takes. Imported lazily by :func:`init` so constructing a EsmProblem never needs
 #: SciPy (§2.5.9).
 _STEPPABLE_ALGS = ("RK45", "RK23", "DOP853", "Radau", "BDF", "LSODA")
+
+
+@contextlib.contextmanager
+def _strip_taken(prob: EsmProblem):
+    """The strip classes ``prob`` was built with, in scope for a rebuild."""
+    token = _strip.STRIP_TAKEN.set(tuple(prob.stripped.strip) if prob.stripped is not None else ())
+    try:
+        yield
+    finally:
+        _strip.STRIP_TAKEN.reset(token)
 
 
 def _stepped_under_policy(rhs: Callable, policy: CompilerPolicy) -> Callable:

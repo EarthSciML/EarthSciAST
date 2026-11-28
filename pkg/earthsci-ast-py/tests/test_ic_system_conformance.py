@@ -166,3 +166,23 @@ def test_load(entry: dict) -> None:
                 assert code in codes, f"{lid}: {codes}"
         else:
             assert not [c for c in codes if c.startswith("ic_")], f"{lid}: {codes}"
+
+
+def test_remake_reruns_the_triangular_part() -> None:
+    """``remake`` with a new supplied value re-evaluates the equations that read
+    it (esm-spec §11.4.3), and a stripped Problem's rebuild keeps its implicit
+    initialization system stripped."""
+    from earthsci_ast.problem import remake
+
+    by_id = {c["id"]: c for c in _MANIFEST["cases"]}
+    base = by_id["triangular_defaults"]
+    moved = remake(_build(base), u0={"M.x": 10.0})
+    want = by_id["triangular_u0_of_an_explicit_state"]["expected"]
+    start = _initial_state(moved)
+    for name, value in want.items():
+        assert _close(start[name], float(value)), f"{name} = {start[name]}, expected {value}"
+
+    prob = _build(by_id["implicit_stripped"])
+    again = remake(prob, p={"M.total": 20.0})
+    assert is_stripped(again)
+    assert _initial_state(again)["M.w"] == 7.0

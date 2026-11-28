@@ -1846,6 +1846,37 @@ def _fold_field_ics(
                 f"ic({target}): scoped-reference target resolves to no array cells; "
                 f"the target must name a lifted/array state variable"
             )
+        if isinstance(rhs, ExprNode) and is_aggregate_op(rhs.op) and rhs.output_idx:
+            # A `faq` with output indices sets the cells of its ranges only
+            # (esm-spec §11.4.3, "Explicit initial conditions"); a pointwise
+            # filter's excluded cell takes the semiring's 0. The other cells
+            # keep what the defaults gave them.
+            ranges = _faq_output_ranges(rhs, index_sets or {})
+            if len(ranges) == len(shape) and any(
+                (lo, hi) != (1, n) for (lo, hi), n in zip(ranges, shape)
+            ):
+                box = np.asarray(
+                    _eval_buildtime_field(
+                        rhs,
+                        index_sets=index_sets,
+                        param_values=param_values,
+                        input_arrays=loader_arrays,
+                        t=t0,
+                        observed_values=observed_values,
+                    ),
+                    dtype=float,
+                )
+                extents = tuple(max(hi - lo + 1, 0) for lo, hi in ranges)
+                if box.shape != extents:
+                    raise SimulationError(
+                        f"ic({target}): the faq evaluated to shape {box.shape}, not its box "
+                        f"{extents}"
+                    )
+                start = state_layout[target].start
+                for multi in np.ndindex(*extents):
+                    cell = [lo + int(k) for k, (lo, _) in zip(multi, ranges)]
+                    y0[start + _linear_pos(shape, cell)] = float(box[multi])
+                continue
         field_value = _resolve_field_ic(
             target,
             rhs,
