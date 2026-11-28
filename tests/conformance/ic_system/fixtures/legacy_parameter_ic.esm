@@ -1,0 +1,78 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "ic_legacy_parameter",
+    "description": "esm-spec 11.4.4 'An initial condition of a parameter': a document written before 2.5.0 sets a parameter's value with an initialization equation (p ~ 5) or an ic equation (ic(q) ~ 2, replacing q's default 3). The loader moves each into the parameter's default and warns deprecated_field, so u = p + q = 7.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.4",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "p": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0
+        },
+        "q": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0
+        },
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "q"
+            ]
+          },
+          "rhs": 2.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              "p",
+              "q"
+            ]
+          }
+        }
+      ],
+      "initialization_equations": [
+        {
+          "lhs": "p",
+          "rhs": 5.0
+        }
+      ]
+    }
+  }
+}
