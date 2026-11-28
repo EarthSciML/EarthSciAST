@@ -731,6 +731,29 @@
    "named_exclusions": []
   },
   {
+   "id": "setup_shapeless_param_observed",
+   "path": "fixtures/setup_shapeless_param_observed.esm",
+   "model": "M",
+   "golden": "golden/setup_shapeless_param_observed.json",
+   "tags": [
+    "faq",
+    "setup",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
    "id": "polygon_area_in_faq_static",
    "path": "fixtures/polygon_area_in_faq_static.esm",
    "model": "PolygonAreaInFaq",

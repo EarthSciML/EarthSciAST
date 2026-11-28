@@ -243,14 +243,17 @@ function _geometry_setup_vars(
     # A no-op (byte-identical) for a pure-geometry regrid: nothing there reads a
     # computed scalar observed, so the block set is empty and setup is unchanged.
     # Computed before the seeds, which it also screens: a seed reading a blocked
-    # observed would be evaluated with that observed unbound.
+    # observed would be evaluated with that observed unbound. A definition the
+    # setup compiler cannot source (`_setup_unsourced_index`) is blocked too, and
+    # its readers with it.
     blocked = Set{String}()
     _saturate!() do   # SCALAR-OBSERVED BLOCK pass: transitive setup-ineligibility
         changed = false
         for (n, rhs) in defs
             (is_arr_obs(n) && !(n in blocked)) || continue
             refs = intersect(refs_of(n), mvars)
-            if _anyof(_is_scalar_computed_obs, refs) || _anyof(f -> f in blocked, refs)
+            if _anyof(_is_scalar_computed_obs, refs) || _anyof(f -> f in blocked, refs) ||
+                    _setup_unsourced_index(rhs)
                 push!(blocked, n); changed = true
             end
         end
@@ -313,6 +316,35 @@ function _geometry_setup_vars(
         changed
     end
     return setup, copy(defs), tainted
+end
+
+# Whether `e` reads an `index` whose array operand the setup compiler cannot
+# source. `_geo_source` (geometry_compile.jl) takes a name, or an `index` slice
+# of one; a `const` operand is accepted here as before. An observed declared
+# without a shape (esm-spec §4.3.4) is promoted to the lifted form
+# `c = faq_p index(faq_i a[i], p)`, whose operand is an array `faq`: its inner
+# `faq` counts as a nested reduction, so it passed the const-reduction seed, and
+# the setup sweep then refused it ("operand must be a build-time array ... in
+# setup-time geometry"). Such a definition stays a run-time observed. Template
+# bodies are not entered (their arrays are bound through `__arrarg`), only the
+# call's bindings.
+function _setup_unsourced_index(e)
+    e isa OpExpr || return false
+    if e.op == "index" && !isempty(e.args)
+        b = e.args[1]
+        while b isa OpExpr && (b::OpExpr).op == "index" && !isempty((b::OpExpr).args)
+            b = (b::OpExpr).args[1]
+        end
+        (b isa VarExpr || _is_const_op(b)) || return true
+    end
+    _anyof(_setup_unsourced_index, e.args) && return true
+    _setup_unsourced_index(e.expr_body) && return true
+    _setup_unsourced_index(e.filter) && return true
+    e.values !== nothing && _anyof(_setup_unsourced_index, e.values) && return true
+    if _tpl_is_call(e) && e.bindings !== nothing
+        _anyof(_setup_unsourced_index, collect(values(e.bindings))) && return true
+    end
+    return false
 end
 
 # Dependency order over the setup vars (A_ij before its row sums).
