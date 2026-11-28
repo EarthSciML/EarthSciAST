@@ -59,12 +59,20 @@ the loader reads it (§11.4.4). The same object when there is nothing to move.
 """
 function _split_initialization_system(model::Model)
     migrated, guesses = _migrate_typed_initialization(model)
-    any(eq -> _is_initialization_equation(eq) && !_is_explicit_ic(eq), model.equations) ||
-        !isempty(model.initialization_equations) || return model
+    any(
+        eq -> _is_initialization_equation(eq) &&
+            (!_is_explicit_ic(eq) || _ic_needs_alignment(eq, model) !== nothing),
+        model.equations
+    ) || !isempty(model.initialization_equations) || return model
     kept = Equation[]
     sys = Equation[]
     for eq in Iterators.flatten((model.equations, migrated))
-        (_is_initialization_equation(eq) && !_is_explicit_ic(eq)) ? push!(sys, eq) : push!(kept, eq)
+        if _is_initialization_equation(eq) && !_is_explicit_ic(eq)
+            push!(sys, eq)
+        else
+            lifted = _is_explicit_ic(eq) ? _ic_needs_alignment(eq, model) : nothing
+            push!(kept, lifted === nothing ? eq : lifted)
+        end
     end
     # The trajectory reads are judged on the model as written, whose
     # classification still sees the equation a refused one would have been.
@@ -73,6 +81,29 @@ function _split_initialization_system(model::Model)
     )
     g = isempty(guesses) ? model.guesses : merge(model.guesses, guesses)
     return reconstruct(model; equations = kept, initialization_equations = sys, guesses = g)
+end
+
+# An explicit initial condition of an array unknown whose right-hand side is a
+# whole-array expression over an operand of another shape (`ic(aw) ~ aw0`, `aw`
+# over `[lev, bin]`, `aw0` over `[lev]`): the equation with its right-hand side
+# written as the `faq` over the target's shape, each operand read at the cell
+# aligned by index-set NAME, so a lower-rank operand repeats along the axes it
+# does not carry (esm-spec §11.4.3 "Arrays", §4.3.4 rule 1). `nothing` when the
+# equation needs no alignment.
+function _ic_needs_alignment(eq::Equation, model::Model)
+    t = _ic_lhs_variable(eq.lhs)
+    t === nothing && return nothing
+    v = get(model.variables, t, nothing)
+    (v === nothing || !_is_array_shape(v.shape)) && return nothing
+    rhs = eq.rhs
+    rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) && return nothing
+    shape = String[String(s) for s in v.shape]
+    var_shapes = Dict{String, Vector{String}}(
+        n => String[String(s) for s in w.shape] for (n, w) in model.variables if w.shape !== nothing
+    )
+    arrayvars = Set{String}(n for (n, w) in model.variables if _is_array_shape(w.shape))
+    any(n -> n in arrayvars && var_shapes[n] != shape, _referenced_var_names(rhs)) || return nothing
+    return Equation(eq.lhs, _lift_to_faq(rhs, shape, arrayvars, var_shapes); _comment = eq._comment)
 end
 
 # esm-spec §11.4.2: an equation that mentions `ic` holds at t0 only, so one
