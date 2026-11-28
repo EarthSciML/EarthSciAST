@@ -1423,18 +1423,61 @@ function _stripped_problem(input, req::_ProblemRequest, classes::Vector{String})
         load_document(input; base_path = req.base_path, metaparameters = found.metaparameters) :
         _load_run_path(String(input), found.metaparameters)
     sfile, sobj = _strip_document(file, classes)
-    prob = _esm_problem(sfile, req; strip_taken = classes, found = found)
+    # A `u0` entry of an algebraic unknown the strip moved to `z` is that
+    # unknown's warm start, never a state element (esm-spec §11.4.3
+    # "Precedence"): a full `u0` is not refused for naming it.
+    state_u0, z_u0 = _split_z_u0(req.u0, String[b.name for b in sobj.z_layout])
+    sreq = state_u0 === req.u0 ? req : _with_u0(req, state_u0)
+    prob = task_local_storage(:esm_strip_initialization, "initialization" in classes) do
+        _esm_problem(sfile, sreq; strip_taken = classes, found = found)
+    end
+    sflat = prob.build.seed.prep.flat
+    si = _stripped_init_from_build(prob.build.products.ic_stripped, sflat)
+    append!(sobj.initialization.residuals, si.residuals)
+    append!(sobj.initialization.unknowns, si.unknowns)
+    append!(sobj.initialization.x0, si.x0)
     if !isempty(sobj.z_layout)
-        sflat = prob.build.seed.prep.flat
         params = Dict{String, Float64}(
             k => Float64(v.default) for (k, v) in sflat.parameters if v.default isa Real
         )
         for (k, v) in req.p
             haskey(params, String(k)) && (params[String(k)] = Float64(v))
         end
-        append!(sobj.z0, _z_starting_values(sflat, sobj.z_layout, params, req.span[1]))
+        append!(
+            sobj.z0, _z_starting_values(
+                sflat, sobj.z_layout, params, req.span[1]; u0 = z_u0, guesses = sflat.guesses
+            )
+        )
     end
     return _with(prob; stripped = sobj)
+end
+
+# `req` with its caller `u0` replaced.
+_with_u0(req::_ProblemRequest, u0) = _ProblemRequest(
+    (f === :u0 ? u0 : getfield(req, f) for f in fieldnames(_ProblemRequest))...
+)
+
+# A caller `u0` split into the part naming state elements and the part naming
+# the stripped algebraic unknowns `znames` (by flattened element name). A key
+# names a `z` unknown when its base (before any `[…]`) is the unknown's
+# flattened name or its local, last-segment name.
+function _split_z_u0(u0, znames::Vector{String})
+    (u0 isa AbstractDict && !isempty(znames)) || return u0, Dict{String, Float64}()
+    state = empty(u0)
+    z = Dict{String, Float64}()
+    for (k, v) in u0
+        key = String(k)
+        br = findfirst('[', key)
+        base = br === nothing ? key : key[1:prevind(key, br)]
+        suffix = br === nothing ? "" : key[br:end]
+        hit = findfirst(n -> n == base || endswith(n, "." * base), znames)
+        if hit === nothing
+            state[k] = v
+        else
+            z[znames[hit] * suffix] = Float64(v)
+        end
+    end
+    return (isempty(z) ? u0 : state), z
 end
 
 # The providers of `req` described (`_provider_traits`) and the loader extents

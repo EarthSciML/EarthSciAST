@@ -81,7 +81,13 @@ _sorted_models(file::EsmFile) =
 # supplied from outside, by a `variable_map` or by the system it is composed
 # onto.
 function _check_balance!(errors, ctx)
+    sizes = Dict{String, Int}(
+        String(k) => v.size for (k, v) in ctx.file.index_sets if v.size !== nothing
+    )
     for (name, model) in _sorted_models(ctx.file)
+        # The initialization system's document-level over-determination
+        # (esm-spec §11.4.3), whatever the coupling.
+        append!(errors, _validate_ic_overdetermination(model, _pointer("", "models", name), sizes))
         name ∈ ctx.coupled && continue
         append!(
             errors, validate_model_balance(

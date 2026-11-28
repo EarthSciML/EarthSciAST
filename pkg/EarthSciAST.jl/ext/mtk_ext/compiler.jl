@@ -158,19 +158,13 @@ function _mtk_refuse_unsupported_file(file::EarthSciAST.EsmFile, _strip_taken)
     return nothing
 end
 
-# A `faq`-valued initialization equation (esm-spec §6.2) seeds the cells of an
-# array state; this compiler takes initial values from defaults and `ic`
-# equations only.
-function _mtk_refuse_faq_initialization(flat::FlattenedSystem)
-    init = EarthSciAST._faq_initialization(flat)
-    isempty(init) || _mtk_refuse(
-        _mtk_equation_label(first(init)),
-        "it is a `faq`-valued initialization equation, which this compiler has no " *
-            "lowering for: it would start the array from its default instead. " *
-            _MTK_TRY_INSTEAD
-    )
-    return nothing
-end
+# esm-spec §11.4.2 (esm 2.5.0): an initialization equation holds at t0 only,
+# so one that reads a state's trajectory outside `ic` (`D(x) ~ -(x - ic(x))/tau`)
+# is refused with `ic_reads_state` under this compiler too. The rest of the
+# initialization system rides into ModelingToolkit as `initialization_eqs`
+# (`ModelingToolkit.System(flat)`), whose initialization solves it.
+_mtk_refuse_ic_trajectory_reads(flat::FlattenedSystem) =
+    EarthSciAST._refuse_flat_ic_trajectory_reads(flat)
 
 # The first operator in `e` that `_esm_to_symbolic` has no arm for, or `nothing`.
 function _mtk_unlowered_op(e::EsmExpr)
@@ -783,7 +777,7 @@ function _mtk_problem_impl(input, req::EarthSciAST._ProblemRequest)
     span = req.span
     prep = EarthSciAST._prepare_run(
         input; metaparameters = req.metaparameters, base_path = req.base_path,
-        refuse_file = _mtk_refuse_unsupported_file, refuse_flat = _mtk_refuse_faq_initialization
+        refuse_file = _mtk_refuse_unsupported_file, refuse_flat = _mtk_refuse_ic_trajectory_reads
     )
     flat = prep.flat
     EarthSciAST._refuse_parameter_definitions(

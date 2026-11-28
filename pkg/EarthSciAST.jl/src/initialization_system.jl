@@ -114,7 +114,9 @@ function _migrate_typed_initialization(model::Model)
     isunk(n) = (v = get(model.variables, n, nothing); v !== nothing && v.type == UnknownVariable)
     has_d = any(eq -> _any_subexpr(x -> x isa OpExpr && (x::OpExpr).op == "D", eq.lhs), model.equations)
     for eq in model.initialization_equations
-        if _is_initialization_equation(eq) || has_d
+        if _is_initialization_equation(eq)
+            push!(eqs, eq)
+        elseif has_d
             push!(
                 eqs, Equation(
                     _ic_migrate_typed(eq.lhs, isunk), _ic_migrate_typed(eq.rhs, isunk);
@@ -148,8 +150,10 @@ function _faq_range_cells(rhs::OpExpr, sizes::AbstractDict)
     for n in names
         r = get(rd, n, nothing)
         r === nothing && return nothing
-        if r isa AbstractDict && haskey(r, "from")
-            sz = get(sizes, String(r["from"]), nothing)
+        from = r isa AbstractDict && haskey(r, "from") ? String(r["from"]) :
+            (hasproperty(r, :from) ? String(getproperty(r, :from)) : nothing)
+        if from !== nothing
+            sz = get(sizes, from, nothing)
             sz === nothing && return nothing
             push!(axes, collect(1:sz))
         else
@@ -165,4 +169,39 @@ function _faq_range_cells(rhs::OpExpr, sizes::AbstractDict)
         push!(cells, collect(Int, t))
     end
     return cells
+end
+
+"""
+    _refuse_flat_ic_trajectory_reads(flat)
+
+esm-spec §11.4.2: an initialization equation of `flat` that reads a state's
+trajectory — bare, or `D(state)`, outside `ic`, directly or through observeds —
+is refused with `ic_reads_state`. The tree-walk build checks the same in
+`_ic_system_structure`; a compiler that hands the system on (`:mtk`) calls this.
+"""
+function _refuse_flat_ic_trajectory_reads(flat)
+    eqs = Equation[eq for eq in flat.equations if _is_initialization_equation(eq)]
+    append!(eqs, flat.initialization_equations)
+    isempty(eqs) && return nothing
+    states = Set{String}(n for n in keys(flat.state_variables) if !haskey(flat.observed_variables, n))
+    obs = Dict{String, ASTExpr}()
+    for eq in flat.equations
+        eq.lhs isa VarExpr && haskey(flat.observed_variables, (eq.lhs::VarExpr).name) &&
+            (obs[(eq.lhs::VarExpr).name] = eq.rhs)
+    end
+    for eq in eqs, side in (eq.lhs, eq.rhs)
+        hit = _ic_trajectory_read(side, states, obs)
+        hit === nothing && continue
+        state, chain = hit
+        reads = isempty(chain) ? "reads '$(state)', a state" :
+            "reads '" * join(chain, "', which reads '") * "', which reads '$(state)', a state"
+        throw(
+            SimulateError(
+                "[ic_reads_state] the initialization equation $(first(string(eq), 200)) " *
+                    "$(reads), outside `ic` (esm-spec §11.4.2)",
+                ERROR_CODES.IC_READS_STATE
+            )
+        )
+    end
+    return nothing
 end

@@ -8,7 +8,9 @@
 # is the output's expression, the program writes only those, and `u`, `z` and
 # the kernel's `dt` parameters are its read-only `aux` inputs.
 
-const STRIP_CLASSES = ("algebraic", "continuous_events", "discrete_events", "parameter_updates")
+const STRIP_CLASSES = (
+    "algebraic", "continuous_events", "discrete_events", "initialization", "parameter_updates",
+)
 
 # One stripped event: the namespaced typed event (`_event_body` writes its JSON)
 # and the expressions a kernel reads off it.
@@ -38,6 +40,17 @@ struct _StrippedResidual
     sets::Vector{String}
 end
 
+# The removed implicit part of the initialization system (esm-spec §11.4.3,
+# API_SPEC §5.8 strip class `initialization`, PR #820's draft): residuals with
+# their `ic` terms kept, the unknowns as element names in state-layout order,
+# and each one's starting point. Filled after the build (`_stripped_problem`).
+mutable struct _StrippedInit
+    residuals::Vector{_StrippedResidual}
+    unknowns::Vector{String}
+    x0::Vector{Float64}
+end
+_StrippedInit() = _StrippedInit(_StrippedResidual[], String[], Float64[])
+
 struct _ZBlock
     name::String
     offset::Int          # 1-based
@@ -60,15 +73,17 @@ struct StrippedConstructs
     z_layout::Vector{_ZBlock}
     z0::Vector{Union{Float64, Nothing}}
     residuals::Vector{_StrippedResidual}
+    initialization::_StrippedInit
 end
 
 _empty_stripped(classes = String[]) = StrippedConstructs(
     classes, _StrippedEvent[], _StrippedUpdate[], _ZBlock[], Union{Float64, Nothing}[],
-    _StrippedResidual[]
+    _StrippedResidual[], _StrippedInit()
 )
 
 Base.isempty(s::StrippedConstructs) =
-    isempty(s.events) && isempty(s.parameter_updates) && isempty(s.residuals)
+    isempty(s.events) && isempty(s.parameter_updates) && isempty(s.residuals) &&
+    isempty(s.initialization.residuals)
 
 function _removed_classes(s::StrippedConstructs)
     out = String[]
@@ -76,6 +91,7 @@ function _removed_classes(s::StrippedConstructs)
     any(e -> e.kind == "discrete", s.events) && push!(out, "discrete_events")
     isempty(s.parameter_updates) || push!(out, "parameter_updates")
     isempty(s.residuals) || push!(out, "algebraic")
+    isempty(s.initialization.residuals) || push!(out, "initialization")
     return sort!(out)
 end
 
@@ -116,7 +132,8 @@ function _strip_classes(strip)::Vector{String}
         s in STRIP_CLASSES || throw(
             ArgumentError(
                 "`strip` names '$s', which is not a strippable class; the classes are " *
-                    "algebraic, continuous_events, discrete_events and parameter_updates " *
+                    "algebraic, continuous_events, discrete_events, initialization and " *
+                    "parameter_updates " *
                     "(Wiener noise is never strippable)"
             )
         )
@@ -168,7 +185,53 @@ function _stripped_json(s::StrippedConstructs)
             "z0" => Any[x === nothing || !isfinite(x) ? nothing : x for x in s.z0],
             "residuals" => residuals,
         ),
+        "initialization" => _stripped_init_json(s.initialization),
     )
+end
+
+# The `initialization` member (API_SPEC §5.8, PR #820's draft shape).
+_stripped_init_json(si::_StrippedInit) = Dict{String, Any}(
+    "residuals" => Any[
+        Dict{String, Any}(
+            "id" => r.id, "origin" => _origin_json(r.origin), "shape" => r.shape,
+            "expr" => serialize_expression(r.expr)
+        ) for r in si.residuals
+    ],
+    "unknowns" => si.unknowns,
+    "x0" => Any[x for x in si.x0],
+)
+
+# The member from what the build took (`_StrippedInitialization`): one residual
+# `lhs - rhs` per removed equation, `id` `<component>.initialization[j]`, the
+# component being the one its first starting value belongs to.
+function _stripped_init_from_build(took, flat::FlattenedSystem)
+    si = _StrippedInit()
+    took === nothing && return si
+    counters = Dict{String, Int}()
+    for eq in took.equations
+        names = _ic_names(eq.lhs)
+        isempty(names) && (names = _ic_names(eq.rhs))
+        first_name = isempty(names) ? "" : first(names)
+        k = findlast('.', first_name)
+        prefix = k === nothing ? "" : first_name[1:prevind(first_name, k)]
+        j = counters[prefix] = get(counters, prefix, 0) + 1
+        expr = OpExpr("-", ASTExpr[eq.lhs, eq.rhs])
+        sets = try
+            _expr_sets(expr, flat)
+        catch err
+            err isa ArgumentError || rethrow()
+            String[]
+        end
+        push!(
+            si.residuals, _StrippedResidual(
+                "$prefix.initialization[$j]", TermOrigin(prefix, nothing),
+                _set_sizes(sets, flat), expr, sets
+            )
+        )
+    end
+    append!(si.unknowns, took.unknowns)
+    append!(si.x0, took.x0)
+    return si
 end
 
 """
@@ -511,7 +574,13 @@ end
 
 # The `z` starting values: each unknown's `ic` evaluated at the start of the
 # run, else its declared default, column-major; `nothing` where neither is.
-function _z_starting_values(flat::FlattenedSystem, z, params, t0)
+# PR #820's draft order (API_SPEC §5.8): the element's explicit `ic` value, else
+# the caller's `u0` entry (`u0`, by element name), else its `guesses` entry,
+# else its declared default.
+function _z_starting_values(
+        flat::FlattenedSystem, z, params, t0;
+        u0::AbstractDict = Dict{String, Float64}(), guesses::AbstractDict = Dict{String, Any}()
+    )
     out = Union{Float64, Nothing}[]
     for b in z
         n = max(prod(b.shape; init = 1), 1)
@@ -540,6 +609,26 @@ function _z_starting_values(flat::FlattenedSystem, z, params, t0)
                 nothing
             end
         end
+        if vals === nothing && !isempty(u0)
+            cells = isempty(b.shape) ? [Int[]] :
+                [collect(Int, Tuple(c)) for c in vec(collect(CartesianIndices(Tuple(b.shape))))]
+            keys_ = [isempty(c) ? b.name : _cell_key(b.name, c) for c in cells]
+            if haskey(u0, b.name) || any(k -> haskey(u0, k), keys_)
+                whole = get(u0, b.name, nothing)
+                vals = Union{Float64, Nothing}[
+                    haskey(u0, k) ? u0[k] : whole for k in keys_
+                ]
+                if any(isnothing, vals)
+                    # The cells the caller left take the next source.
+                    rest = _z_fallback(flat, b, guesses, params)
+                    vals = Float64[
+                        x === nothing ? (rest === nothing ? NaN : rest[min(i, length(rest))]) : x
+                        for (i, x) in enumerate(vals)
+                    ]
+                end
+            end
+        end
+        vals === nothing && (vals = _z_fallback(flat, b, guesses, params))
         if vals === nothing
             v = get(flat.state_variables, b.name, nothing)
             d = v === nothing ? nothing : v.default
@@ -556,6 +645,21 @@ function _z_starting_values(flat::FlattenedSystem, z, params, t0)
         end
     end
     return out
+end
+
+# A `z` block's `guesses` entry evaluated with the parameters (a number for
+# every cell), or `nothing`.
+function _z_fallback(flat::FlattenedSystem, b, guesses::AbstractDict, params)
+    g = get(guesses, b.name, nothing)
+    g === nothing && return nothing
+    g isa Real && return [Float64(g)]
+    g isa ASTExpr || return nothing
+    return try
+        [Float64(evaluate_expr(g, params))]
+    catch err
+        err isa EarthSciASTError || rethrow()
+        nothing
+    end
 end
 
 # Refuse a coupling-level event `classes` does not strip: no compiler here

@@ -164,13 +164,14 @@ function _validate_model_balance_here(
     unknown_list = unknowns(model)
     n_unknowns = length(unknown_list)
 
-    # An `ic` equation prescribes an initial value, not a determining equation,
-    # so it does not count toward the balance.
-    n_eqs = count(eq -> !(eq.lhs isa OpExpr && eq.lhs.op == "ic"), model.equations)
+    # An initialization equation (one that mentions `ic`, esm-spec §4.9.4,
+    # §11.4.3) holds at t0 only: it has its own balance and does not count here.
+    n_eqs = count(eq -> !_is_initialization_equation(eq), model.equations)
 
     # Names credited by the model's own equation left-hand sides.
     equation_vars = Set{String}()
     for eq in model.equations
+        _is_initialization_equation(eq) && continue
         union!(equation_vars, _equation_lhs_names(eq.lhs))
     end
     missing_for = String[u for u in unknown_list if !(u in equation_vars)]
@@ -205,5 +206,62 @@ function _validate_model_balance_here(
     end
 
 
+    return errors
+end
+
+"""
+    _validate_ic_overdetermination(model, path, sizes) -> Vector{StructuralError}
+
+esm-spec §11.4.3 "What `validate` reports": the over-determination a document
+shows by itself, before any supplied value. The initialization equations of
+`model` that are not explicit initial conditions count at least one scalar
+equation each; the distinct starting values they mention that no explicit
+initial condition of the model sets count their declared element count. More
+equations than starting values is reported as `ic_system_unbalanced`. A
+starting value whose count the document does not settle (an observed's or a
+tendency's, which expand at build; a scoped one; an unresolved shape) counts
+as unbounded, so nothing is reported for it. Everything else in the balance is
+the build's.
+"""
+function _validate_ic_overdetermination(
+        model::Model, path::String, sizes::AbstractDict
+    )::Vector{StructuralError}
+    errors = StructuralError[]
+    sys = Equation[eq for eq in model.equations if _is_initialization_equation(eq) && !_is_explicit_ic(eq)]
+    isempty(sys) && return errors
+    explicit = Set{String}(
+        _ic_lhs_variable(eq.lhs) for eq in model.equations if _is_explicit_ic(eq)
+    )
+    obs = keys(observed_definitions(model))
+    names = String[]
+    for eq in sys, side in (eq.lhs, eq.rhs), (n, is_d) in _ic_reads(side)
+        (is_d || n in obs || occursin('.', n)) && return errors
+        n in explicit || n in names || push!(names, n)
+    end
+    n_values = 0
+    for n in names
+        v = get(model.variables, n, nothing)
+        v === nothing && return errors
+        if v.shape === nothing || isempty(v.shape)
+            n_values += 1
+        else
+            c = 1
+            for s in v.shape
+                sz = get(sizes, String(s), nothing)
+                sz === nothing && return errors
+                c *= sz
+            end
+            n_values += c
+        end
+    end
+    length(sys) > n_values || return errors
+    _report!(
+        errors, ERROR_CODES.IC_SYSTEM_UNBALANCED, path,
+        "The initialization system is over-determined: $(length(sys)) initialization " *
+            "equation(s) that are not explicit initial conditions mention " *
+            "$(n_values) starting value(s) that no explicit initial condition sets " *
+            "(esm-spec §11.4.3)",
+        Dict{String, Any}("equations" => length(sys), "starting_values" => names)
+    )
     return errors
 end

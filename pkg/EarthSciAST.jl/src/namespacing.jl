@@ -417,10 +417,26 @@ function _collect_model!(
             )
         )
     end
-    # Initialization equations (esm-spec §6.2) resolve in the same scope and
-    # take the same renaming as the equations.
-    for eq in model.initialization_equations
-        push!(st.init_equations, Equation(_ns(eq.lhs), _ns(eq.rhs); _comment = eq._comment))
+    # A typed model's deprecated initialization equations (a `Model` built in
+    # memory; a loaded document has none, esm-spec §11.4.4) read as the loader
+    # reads them: `ic` equations of the model, resolved in the same scope and
+    # taking the same renaming as its equations. Flatten files them with the
+    # other initialization equations (`_extract_field_ics!`).
+    # `guesses` (esm-spec §6.2), named as the variables are: the starting points
+    # of the initialization system's unknowns (esm-spec §11.4.3).
+    migrated, more_guesses = _migrate_typed_initialization(model)
+    for (k, g) in Iterators.flatten((model.guesses, more_guesses))
+        st.guesses["$(prefix).$(k)"] = g isa ASTExpr ? _ns(g) : g
+    end
+    for eq in migrated
+        lhs = _ns(eq.lhs)
+        rhs = _ns(eq.rhs)
+        push!(
+            st.equations, _FlatEq(
+                Equation(lhs, rhs; _comment = eq._comment),
+                _authored(rhs, _component_origin(prefix)), _component_root(prefix)
+            )
+        )
     end
 
     # An observed unknown's defining equation is an ORDINARY entry of

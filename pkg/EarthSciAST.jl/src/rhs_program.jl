@@ -1199,7 +1199,7 @@ function _whole_program_built(
         parent = nothing, products = nothing, param_classes = nothing, caller_u0 = nothing
     )
     live = union(W, R)
-    init = _select_init(_faq_initialization(seed.prep.flat), live)
+    init = _select_init(_initialization_system(seed.prep.flat), live)
     file = _run_file(seed.prep; flat = _scalar_slots_to_arrays(flat), init = init)
     f!, internal, front, u0, p, pa, cap, memo = _program_build(
         seed, file; products = products, param_classes = param_classes, caller_u0 = caller_u0

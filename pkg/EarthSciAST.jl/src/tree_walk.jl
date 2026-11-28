@@ -60,6 +60,7 @@ include("tree_walk/build_helpers.jl")    #      sentinels, claimed-slot set, sma
 include("tree_walk/bounded_const_array.jl") #    const-array boundary policy
 include("tree_walk/unlowered_gate.jl")   #      §9.6.3 c.6 pre-build rewrite-target walk
 include("tree_walk/scan.jl")             #      prefix-scan detection + `_ScanFold`
+include("tree_walk/build_ic_system.jl")   #      the initialization system (esm-spec §11.4.3)
 include("tree_walk/build_records.jl")    #      the records a build hands back
 include("tree_walk/hoist.jl")            #      nested reductions lifted to internal observeds
 include("tree_walk/compile.jl")          # §3   expression → `_Node`
