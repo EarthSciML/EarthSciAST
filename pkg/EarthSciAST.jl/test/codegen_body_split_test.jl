@@ -110,9 +110,12 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
     @test u0 == v0
 
     # Bit-identical du across the split and the reference, Float64 + the AD axis.
-    for k in 1:5, t in (0.0, 0.7, 3.25)
+    probes = map(1:5) do k
         u = k == 1 ? copy(u0) : _bs_probe(length(u0), k)
-        @test _bs_same(_bs_du(fs, u, ps, t), _bs_du(fr, u, pr, t))
+        [(u, t, _bs_du(fr, u, pr, t)) for t in (0.0, 0.7, 3.25)]
+    end
+    for group in probes, (u, t, want) in group
+        @test _bs_same(_bs_du(fs, u, ps, t), want)
     end
     Js = ForwardDiff.jacobian(uu -> _bs_du(fs, uu, ps, 0.4), u0)
     Jr = ForwardDiff.jacobian(uu -> _bs_du(fr, uu, pr, 0.4), u0)
@@ -127,9 +130,8 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
     @test _decl(vt) == 0
     @test get(vt, :cg_split_by_value, 0) >= 1
     @test u0 == w0
-    for k in 1:5, t in (0.0, 0.7, 3.25)
-        u = k == 1 ? copy(u0) : _bs_probe(length(u0), k)
-        @test _bs_same(_bs_du(fv, u, pv, t), _bs_du(fr, u, pr, t))
+    for group in probes, (u, t, want) in group
+        @test _bs_same(_bs_du(fv, u, pv, t), want)
     end
     @test _bs_same(ForwardDiff.jacobian(uu -> _bs_du(fv, uu, pv, 0.4), u0), Jr)
     # …and allocation-free: each sub-function is called through its own
@@ -147,9 +149,8 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
         @test _decl(dt) == 0
         @test get(dt, :cg_split_by_value, 0) == 0
         @test u0 == y0
-        for k in 1:5, t in (0.0, 0.7, 3.25)
-            u = k == 1 ? copy(u0) : _bs_probe(length(u0), k)
-            @test _bs_same(_bs_du(fd, u, pd, t), _bs_du(fr, u, pr, t))
+        for group in probes, (u, t, want) in group
+            @test _bs_same(_bs_du(fd, u, pd, t), want)
         end
         @test _bs_same(ForwardDiff.jacobian(uu -> _bs_du(fd, uu, pd, 0.4), u0), Jr)
     end
@@ -161,7 +162,8 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
     @test _decl(nt) == 0
     @test get(nt, :cg_split_by_value, 0) == 0
     @test u0 == x0
-    @test _bs_same(_bs_du(fn, copy(u0), pn, 0.7), _bs_du(fr, copy(u0), pr, 0.7))
+    u, t, want = probes[1][2]
+    @test _bs_same(_bs_du(fn, u, pn, t), want)
 
     # The SIZE-based choice, end to end, with no override: a threshold under
     # this body's size takes the by-value transport on every Julia, and one far
@@ -174,9 +176,8 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
         @test _decl(zt) == 0
         @test get(zt, :cg_split_by_value, 0) >= 1
         @test u0 == z0
-        for k in 1:3, t in (0.0, 0.7)
-            u = k == 1 ? copy(u0) : _bs_probe(length(u0), k)
-            @test _bs_same(_bs_du(fz, u, pz, t), _bs_du(fr, u, pr, t))
+        for k in 1:3, (u, t, want) in @view probes[k][1:2]
+            @test _bs_same(_bs_du(fz, u, pz, t), want)
         end
         ESM._CG_BY_VALUE_MIN_NODES[] = typemax(Int)
         _, _, _, ht = _bs_build(model, ics; fncap = 40)

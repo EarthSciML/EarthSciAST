@@ -114,11 +114,7 @@ function _tv_du(input, compiler)
     return Dict(k => du[v] for (k, v) in vm), counts
 end
 _tv_same(a, b) = keys(a) == keys(b) && all(a[k] === b[k] for k in keys(a))
-function _tv_expanded(doc)
-    path = joinpath(mktempdir(), "doc.esm")
-    write(path, JSON3.write(doc))
-    return _TV.expand_document(_TV.load_path(path))
-end
+_tv_expanded(doc) = _TV.expand_document(_TV.load_document(doc))
 
 @testset "joined and filtered aggregate bodies read through their view" begin
     for n in (1, 3)

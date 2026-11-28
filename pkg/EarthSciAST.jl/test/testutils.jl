@@ -26,6 +26,19 @@ if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
         get(ENV, "ESM_EARTHSCIMODELS", joinpath(TESTUTILS_REPO_ROOT, "..", "EarthSciModels"))
     )
 
+    # The runner's default pool stays single-threaded. Only independent fixture
+    # work goes to the optional interactive pool, and its results stay in corpus
+    # order so callers can record assertions on the test task.
+    function map_corpus(f, inputs)
+        workers = min(length(inputs), Threads.nthreads(:interactive))
+        workers < 2 && return map(f, inputs)
+        tasks = @sync map(1:workers) do worker
+            Threads.@spawn :interactive map(f, inputs[worker:workers:end])
+        end
+        chunks = fetch.(tasks)
+        return [chunks[mod1(i, workers)][cld(i, workers)] for i in eachindex(inputs)]
+    end
+
     # ---------------------------------------------------------------------------
     # Canonical expression-builder quartet (+ the `index` shorthand built on it).
     # These keep hand-built AST fixtures readable.

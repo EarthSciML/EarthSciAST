@@ -27,6 +27,53 @@ function _bep_du(f!, u, p)
     return du
 end
 
+function _bep_attempt(build, path)
+    try
+        return build(path)
+    catch err
+        corpus_is_resource_error(err) && rethrow()
+        return _bep_unwrap(err)
+    end
+end
+
+function _bep_compare(path)
+    prob = _bep_attempt(p -> esm_problem(p, (0.0, 1.0)), path)
+    b = _bep_attempt(_BEP.Internal.build, path)
+    if prob isa Exception || b isa Exception
+        return (
+            prob_error = prob isa Exception ? _bep_code(prob) : nothing,
+            build_error = b isa Exception ? _bep_code(b) : nothing,
+            checks = nothing,
+            error = nothing,
+        )
+    end
+    u1 = [x + 0.125 * sin(1.3 * i) for (i, x) in enumerate(prob.u0)]
+    checks = (
+        same_rules = _bep_rules(compiler_report(prob)) == _bep_rules(b.report.compiler_report),
+        same_map = Dict(prob.var_map) == Dict(b.var_map),
+        same_initial = _bep_bits(prob.u0) == _bep_bits(b.u0),
+        same_rhs = map((prob.u0, u1)) do u
+            _bep_bits(_bep_du(prob.f!, u, prob.p)) == _bep_bits(_bep_du(b.f!, u, b.p))
+        end,
+    )
+    return (prob_error = nothing, build_error = nothing, checks = checks, error = nothing)
+end
+
+# The comparison runs on a corpus worker, so an exception it throws is kept,
+# with its backtrace, and raised again in that fixture's own testset: the
+# failure names the fixture and the other fixtures are still compared.
+function _bep_compare_caught(path)
+    try
+        return _bep_compare(path)
+    catch err
+        corpus_is_resource_error(err) && rethrow()
+        return (
+            prob_error = nothing, build_error = nothing, checks = nothing,
+            error = CapturedException(err, catch_backtrace()),
+        )
+    end
+end
+
 @testset "Internal.build builds what esm_problem builds" begin
     paths = String[]
     for (dir, _, files) in walkdir(joinpath(TESTUTILS_REPO_ROOT, "tests", "valid"))
@@ -45,40 +92,24 @@ end
         )
         push!(paths, joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", rel...))
     end
-    built = Ref(0)
-    for path in paths
+    results = map_corpus(_bep_compare_caught, paths)
+    for (path, result) in zip(paths, results)
         rel = relpath(path, TESTUTILS_REPO_ROOT)
-        prob = try
-            esm_problem(path, (0.0, 1.0))
-        catch err
-            err isa InterruptException && rethrow()
-            _bep_unwrap(err)
-        end
-        b = try
-            _BEP.Internal.build(path)
-        catch err
-            err isa InterruptException && rethrow()
-            _bep_unwrap(err)
-        end
         @testset "$rel" begin
-            if prob isa Exception
-                # Both entries refuse it, for the same reason.
-                @test b isa Exception && _bep_code(b) == _bep_code(prob)
-            elseif b isa Exception
-                @test b === nothing   # esm_problem built it; Internal.build threw
+            result.error === nothing || throw(result.error)
+            checks = result.checks
+            if checks === nothing
+                @test result.build_error == result.prob_error
             else
-                built[] += 1
-                @test _bep_rules(compiler_report(prob)) == _bep_rules(b.report.compiler_report)
-                @test Dict(prob.var_map) == Dict(b.var_map)
-                @test _bep_bits(prob.u0) == _bep_bits(b.u0)
-                u1 = [x + 0.125 * sin(1.3 * i) for (i, x) in enumerate(prob.u0)]
-                for u in (prob.u0, u1)
-                    @test _bep_bits(_bep_du(prob.f!, u, prob.p)) ==
-                        _bep_bits(_bep_du(b.f!, u, b.p))
+                @test checks.same_rules
+                @test checks.same_map
+                @test checks.same_initial
+                for same in checks.same_rhs
+                    @test same
                 end
             end
         end
     end
     # The comparison is real: most of the corpus builds.
-    @test built[] >= 40
+    @test count(r -> r.checks !== nothing, results) >= 40
 end

@@ -528,11 +528,12 @@ using ForwardDiff
         end
     end
     @testset "esm_problem f!, Float64 and dual numbers, bit for bit across the compilers" begin
+        file = _DM_ESS.load_path(_dm_fixture())
         runs = Dict{Symbol, Any}()
         for compiler in (:native, :interpreter)
             src = [1.0, 2.0]
             prob = _DM_ESS.esm_problem(
-                _DM_ESS.load_path(_dm_fixture()), (0.0, 1.0); compiler = compiler,
+                file, (0.0, 1.0); compiler = compiler,
                 const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => src)
             )
             cells = [prob.var_map["M.c[$j]"] for j in 1:3]

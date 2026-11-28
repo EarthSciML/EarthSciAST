@@ -33,6 +33,8 @@ scaling_family!(transport_3d);
 scaling_family!(chemistry_grid);
 scaling_family!(prefix_scan);
 scaling_family!(source_receptor);
+// Both sizes on one thread, smaller first: the larger build also runs
+// against the per-thread join-gate caches the smaller one filled.
 scaling_family!(regrid);
 scaling_family!(unstructured_gather);
 scaling_family!(scalar_chemistry);

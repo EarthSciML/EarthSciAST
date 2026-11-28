@@ -50,9 +50,9 @@ fn calendar_templates_match_the_oracle() {
 
 #[test]
 fn overlap_area_templates_lower_and_match_the_oracle() {
-    for spherical in [false, true] {
-        oracle_ab(overlap_doc(spherical));
-    }
+    let (planar, _) = oracle_ab(overlap_doc(false));
+    assert_unique_build_time_instructions(&planar);
+    oracle_ab(overlap_doc(true));
 }
 
 #[test]
@@ -621,11 +621,8 @@ fn large_or_faulting_scalar_branches_keep_the_jump() {
 
 /// The repeated build-time work of the overlap template (its fan areas and
 /// ramps, lowered once per box they are read at) is computed once: no two
-/// pure CONST instructions of the program are the same computation, fused or
-/// not. The oracle's bits.
-#[test]
-fn repeated_build_time_instructions_are_computed_once() {
-    let (prog, _) = oracle_ab(overlap_doc(false));
+/// pure CONST instructions of the program are the same computation.
+fn assert_unique_build_time_instructions(prog: &super::ir::TapeProgram) {
     let canon: Vec<u32> = (0..prog.tables.slots.len() as u32).collect();
     let guarded = prog.guarded_positions();
     let mut seen = HashSet::new();
@@ -633,7 +630,7 @@ fn repeated_build_time_instructions_are_computed_once() {
         if guarded[pc] {
             continue;
         }
-        if let Some(k) = super::dedup::key(&prog, pc, &prog.instrs[pc], &canon) {
+        if let Some(k) = super::dedup::key(prog, pc, &prog.instrs[pc], &canon) {
             assert!(seen.insert(k.clone()), "repeated: {:?}", prog.instrs[pc]);
         }
     }

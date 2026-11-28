@@ -176,11 +176,11 @@ end
 # `expanded`: the template references expanded at load, so each site's
 # template body is a large term of the sum (as a reference it is a call).
 function _scg_sites_build(S::Int; odd::Bool = false, compiler = :native, expanded::Bool = false)
-    path = joinpath(mktempdir(), "sites.esm")
-    write(path, JSON3.write(_scg_sites_doc(S; odd = odd)))
-    prob = expanded ?
-        ESM.esm_problem(ESM.expand_flattened_refs(ESM.flatten(ESM.load_path(path))), (0.0, 1.0); compiler = compiler) :
-        ESM.esm_problem(path, (0.0, 1.0); compiler = compiler)
+    file = ESM.load_document(_scg_sites_doc(S; odd = odd))
+    return _scg_sites_build(expanded ? ESM.expand_flattened_refs(ESM.flatten(file)) : file; compiler = compiler)
+end
+function _scg_sites_build(input; compiler = :native)
+    prob = ESM.esm_problem(input, (0.0, 1.0); compiler = compiler)
     return (; f! = prob.f!, u0 = prob.u0, p = prob.p)
 end
 function _scg_sites_agree(bn, bi)
@@ -193,8 +193,9 @@ end
 
 @testset "scalar equations and prelude as generated code" begin
     @testset "bit-identical with the interpreter ($B boxes)" for B in (1, 3, 7)
-        bn = _scg_build(_scg_model(B))
-        bi = _scg_build(_scg_model(B); compiler = :interpreter)
+        model = _scg_model(B)
+        bn = _scg_build(model)
+        bi = _scg_build(model; compiler = :interpreter)
         # The fixture exercises every prelude tier.
         @test bn.diag.n_const_slots > 0
         @test bn.diag.n_time_slots > 0
@@ -326,15 +327,16 @@ end
         # whose tables are per-member holes, and the sum runs a level later.
         # Built from the expanded document: as references the sites are
         # template calls, small terms; the call build gives the same bits.
-        _scg_sites_build_x(S; kw...) = _scg_sites_build(S; expanded = true, kw...)
-        tiny = _scg_sites_build_x(1)
+        tiny = _scg_sites_build(1; expanded = true)
         @test tiny.f!.state.scalars.dynp isa ESM._ScalarProgram     # small: not cut
-        for S in (12, 24)
-            bn = _scg_sites_build_x(S)
-            bi = _scg_sites_build_x(S; compiler = :interpreter)
+        b12, b24 = map((12, 24)) do S
+            file = ESM.load_document(_scg_sites_doc(S))
+            expanded = ESM.expand_flattened_refs(ESM.flatten(file))
+            bn = _scg_sites_build(expanded)
+            bi = _scg_sites_build(expanded; compiler = :interpreter)
             @test bn.f!.state.scalars.dynp isa ESM._ScalarLevels
             @test _scg_sites_agree(bn, bi)
-            @test _scg_sites_agree(bn, _scg_sites_build(S))
+            @test _scg_sites_agree(bn, _scg_sites_build(file))
             u = bn.u0 .+ 0.25
             J(b) = ForwardDiff.jacobian((d, uu) -> b.f!(d, uu, b.p, 0.8), zeros(length(u)), u)
             @test _scg_bitsame(J(bn), J(bi))
@@ -349,6 +351,7 @@ end
                 ESM._run_scgens!(P.gens, d3, u, bn.p, 0.8, cache, c, 3)
             end
             @test _scg_bitsame(d1, d3)
+            return bn
         end
         # The terms' code is the same at 12 and 24 sites (only the tables
         # grow); the sum reads each term, so it grows with them.
@@ -359,19 +362,17 @@ end
         # A site reads each of its tables at many subscripts; the reads of one
         # table are one per-member array (two tables per `linear` site, three
         # per `bilinear` one), so the repeated reads in a body still share.
-        b12 = _scg_sites_build_x(12)
         code = join(
             string(ESM.RuntimeGeneratedFunctions.get_expression(g.f))
                 for g in b12.f!.state.scalars.dynp.progs[1].gens
         )
         @test length(unique(m.match for m in eachmatch(r"_cgot\d+", code))) <= 5
-        s12, s24 = sz(b12), sz(_scg_sites_build_x(24))
+        s12, s24 = sz(b12), sz(b24)
         @test length(s12) == length(s24) >= 2
         @test s12[1] == s24[1]
         @test sum(sum, s12[2:end]) < sum(s12[1])
         if VERSION >= v"1.12"
-            b = _scg_sites_build_x(12)
-            @test rhs_alloc_bytes(b.f!, zeros(length(b.u0)), b.u0, b.p, 0.8) == 0
+            @test rhs_alloc_bytes(b12.f!, zeros(length(b12.u0)), b12.u0, b12.p, 0.8) == 0
         end
     end
 

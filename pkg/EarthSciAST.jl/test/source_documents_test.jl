@@ -26,9 +26,7 @@ _srcdoc_mask_refs(x::AbstractDict) = Dict{String, Any}(
 _srcdoc_mask_refs(x::AbstractVector) = Any[_srcdoc_mask_refs(v) for v in x]
 _srcdoc_mask_refs(x) = x
 
-_srcdoc_doc(path) = _srcdoc_mask_refs(
-    JSON3.read(JSON3.write(EarthSciAST.serialize_esm_file(load_path(path))), Dict{String, Any})
-)
+_srcdoc_doc(path) = _srcdoc_mask_refs(EarthSciAST.serialize_esm_file(load_path(path)))
 
 @testset "source documents loaded from files (esm-spec §1.2.1)" begin
     root = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "source_documents")

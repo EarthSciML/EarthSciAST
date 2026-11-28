@@ -63,9 +63,10 @@ end
 
     @testset "snapshot + no re-derivation: input mutation after construction is not seen" begin
         esm = scalar_esm("k")
-        # Fresh oracles over the PRE-mutation document (deepcopy: `esm` stays pristine).
-        fresh2 = solve(esm_problem(deepcopy(esm), (0.0, 2.0)), Tsit5())
-        fresh3 = solve(esm_problem(deepcopy(esm), (0.0, 3.0)), Tsit5())
+        # Fresh oracles at both spans from the same pre-mutation document.
+        file = load_document(esm)
+        fresh2 = solve(esm_problem(file, (0.0, 2.0)), Tsit5())
+        fresh3 = solve(esm_problem(file, (0.0, 3.0)), Tsit5())
         @test isapprox(fresh2[Y][end], 2.0; rtol = 1.0e-5)   # D(y)=k, k=1
 
         prob = esm_problem(esm, (0.0, 2.0))

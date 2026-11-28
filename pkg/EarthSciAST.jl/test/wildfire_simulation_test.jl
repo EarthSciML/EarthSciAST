@@ -146,7 +146,7 @@ end
                 key = "OceanDynamics." * a.variable
                 @test haskey(prob.var_map, key)
                 ti = _wf_time_index(r.t, Float64(a.time))
-                actual = r[Symbol(key)][ti]
+                actual = r.u[ti][prob.var_map[key]]
                 rel, abs_ = _wf_resolve_tol(ocean.tolerance, t.tolerance, a.tolerance)
                 if rel > 0
                     @test isapprox(actual, a.expected; rtol = rel, atol = abs_)

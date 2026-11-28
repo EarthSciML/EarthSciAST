@@ -40,9 +40,9 @@ const _NPF_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "fixtures", "native_prob
 _npf_path(f) = f in ("native_inline_const_subscript.esm", "native_neg_weight_gather.esm") ?
     joinpath(@__DIR__, "fixtures", f) : joinpath(_NPF_DIR, f)
 
-function _npf_build(path, compiler)
+function _npf_build(file, compiler)
     return _NPF.Internal.counting() do
-        _NPF.esm_problem(path, (0.0, 1.0); compiler = compiler)
+        _NPF.esm_problem(file, (0.0, 1.0); compiler = compiler)
     end
 end
 
@@ -66,8 +66,9 @@ function _npf_du(prob, u)
 end
 
 function _npf_agree(path)
-    pn, tally = _npf_build(path, :native)
-    pi_, _ = _npf_build(path, :interpreter)
+    file = _NPF.load_path(path)
+    pn, tally = _npf_build(file, :native)
+    pi_, _ = _npf_build(file, :interpreter)
     un = _npf_state(pn)
     ui = _npf_relayout(un, pn, pi_)
     dn, di = _npf_du(pn, un), _npf_du(pi_, ui)
