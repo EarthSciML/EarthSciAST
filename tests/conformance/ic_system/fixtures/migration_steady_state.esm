@@ -2,7 +2,7 @@
   "esm": "2.4.0",
   "metadata": {
     "name": "ic_migration_steady_state",
-    "description": "esm-spec 11.4.4: the steady-state initialization equation D(x) ~ 0 migrates to ic(D(x)) ~ 0, x's tendency at the starting values (not D(ic(x)), the derivative of a constant). It is not explicit in ic(x), so it is a truly implicit system.",
+    "description": "esm-spec 11.4.4: the steady-state initialization equation D(x) ~ 0 migrates to ic(D(x)) ~ 0, x's tendency at the starting values (not D(ic(x)), the derivative of a constant). It is not explicit in ic(x), so it is a truly implicit system. x has no default (a default would be its known starting value, 11.4.3 'Declared defaults', and the system would have no unknown); it starts from its guess 1.0.",
     "authors": [
       "EarthSciAST conformance"
     ],
@@ -30,7 +30,6 @@
         "x": {
           "type": "unknown",
           "units": "1",
-          "default": 1.0,
           "description": "starts at steady state: x = xe"
         }
       },
@@ -69,7 +68,10 @@
           },
           "rhs": 0.0
         }
-      ]
+      ],
+      "guesses": {
+        "x": 1.0
+      }
     }
   }
 }

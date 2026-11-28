@@ -681,6 +681,455 @@
     ]
    },
    "note": "with no supplied value, y's warm start is its guesses entry"
+  },
+  {
+   "id": "known_target_refused",
+   "fixture": "fixtures/known_target.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "error_code": "unsupported_construct",
+   "note": "x is known from its explicit ic, so ic(x) ~ ic(y) + 1 is implicit in ic(y)"
+  },
+  {
+   "id": "known_target_stripped",
+   "fixture": "fixtures/known_target.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [
+    "initialization"
+   ],
+   "expected": {
+    "M.x": 5.0,
+    "M.y": 2.0
+   },
+   "stripped": {
+    "initialization": {
+     "residuals": [
+      {
+       "id": "M.initialization[1]",
+       "origin": {
+        "component": "M"
+       },
+       "shape": [],
+       "expr": {
+        "op": "-",
+        "args": [
+         {
+          "op": "ic",
+          "args": [
+           "M.x"
+          ]
+         },
+         {
+          "op": "+",
+          "args": [
+           {
+            "op": "ic",
+            "args": [
+             "M.y"
+            ]
+           },
+           1.0
+          ]
+         }
+        ]
+       }
+      }
+     ],
+     "unknowns": [
+      "M.y"
+     ],
+     "x0": [
+      2.0
+     ]
+    }
+   },
+   "not_solvable": true,
+   "note": "the explicit 5 is kept; y is handed to the caller from its guess"
+  },
+  {
+   "id": "supplied_target_default",
+   "fixture": "fixtures/supplied_target.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "expected": {
+    "M.x": 8.0,
+    "M.y": 7.0
+   },
+   "note": "y's default is known; x's default yields to the solved-form equation"
+  },
+  {
+   "id": "supplied_target_u0",
+   "fixture": "fixtures/supplied_target.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {
+    "M.x": 10.0
+   },
+   "strip": [],
+   "error_code": "ic_system_unbalanced",
+   "note": "the supplied x and the default y leave the equation no unknown"
+  },
+  {
+   "id": "observed_target_refused",
+   "fixture": "fixtures/observed_target.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "error_code": "unsupported_construct",
+   "note": "ic(y) ~ 4 of the observed y is 2*ic(u) ~ 4, not in solved form"
+  },
+  {
+   "id": "observed_target_stripped",
+   "fixture": "fixtures/observed_target.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [
+    "initialization"
+   ],
+   "expected": {
+    "M.u": 1.0
+   },
+   "stripped": {
+    "initialization": {
+     "unknowns": [
+      "M.u"
+     ],
+     "x0": [
+      1.0
+     ]
+    }
+   },
+   "not_solvable": true,
+   "note": "u is handed to the caller from its guess"
+  },
+  {
+   "id": "element_equation_refused",
+   "fixture": "fixtures/element_equation.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "error_code": "unsupported_construct",
+   "note": "index(ic(u), 3) ~ 7 is not in solved form"
+  },
+  {
+   "id": "element_equation_stripped",
+   "fixture": "fixtures/element_equation.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [
+    "initialization"
+   ],
+   "expected": {
+    "M.u[1]": 1.0,
+    "M.u[2]": 2.0,
+    "M.u[3]": 0.0
+   },
+   "stripped": {
+    "initialization": {
+     "unknowns": [
+      "M.u[3]"
+     ],
+     "x0": [
+      0.0
+     ]
+    }
+   },
+   "not_solvable": true,
+   "note": "only cell 3 is an unknown of the system"
+  },
+  {
+   "id": "strip_reads_solved_refused",
+   "fixture": "fixtures/strip_reads_solved.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "error_code": "unsupported_construct",
+   "note": "ic(a) + ic(b) ~ total is implicit in b"
+  },
+  {
+   "id": "strip_reads_solved_stripped",
+   "fixture": "fixtures/strip_reads_solved.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [
+    "initialization"
+   ],
+   "expected": {
+    "M.a": 3.0,
+    "M.b": 1.5,
+    "M.c": 2.0,
+    "M.d": 6.0
+   },
+   "stripped": {
+    "initialization": {
+     "residuals": [
+      {
+       "id": "M.initialization[1]",
+       "origin": {
+        "component": "M"
+       },
+       "shape": [],
+       "expr": {
+        "op": "-",
+        "args": [
+         {
+          "op": "+",
+          "args": [
+           {
+            "op": "ic",
+            "args": [
+             "M.a"
+            ]
+           },
+           {
+            "op": "ic",
+            "args": [
+             "M.b"
+            ]
+           }
+          ]
+         },
+         "M.total"
+        ]
+       }
+      }
+     ],
+     "unknowns": [
+      "M.b"
+     ],
+     "x0": [
+      1.5
+     ]
+    }
+   },
+   "not_solvable": true,
+   "note": "only b is handed over; d reads only solved values and is evaluated"
+  },
+  {
+   "id": "dae_reads_algebraic_refused",
+   "fixture": "fixtures/dae_reads_algebraic.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [
+    "algebraic"
+   ],
+   "error_code": "unsupported_construct",
+   "note": "ic(z) ~ ic(y) + 1 reads the stripped algebraic y"
+  },
+  {
+   "id": "dae_reads_algebraic_stripped",
+   "fixture": "fixtures/dae_reads_algebraic.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [
+    "algebraic",
+    "initialization"
+   ],
+   "expected": {
+    "W.x": 1.0,
+    "W.z": 0.0
+   },
+   "stripped": {
+    "algebraic_z0": [
+     0.5
+    ],
+    "initialization": {
+     "residuals": [
+      {
+       "id": "W.initialization[1]",
+       "origin": {
+        "component": "W"
+       },
+       "shape": [],
+       "expr": {
+        "op": "-",
+        "args": [
+         {
+          "op": "ic",
+          "args": [
+           "W.z"
+          ]
+         },
+         {
+          "op": "+",
+          "args": [
+           {
+            "op": "ic",
+            "args": [
+             "W.y"
+            ]
+           },
+           1.0
+          ]
+         }
+        ]
+       }
+      }
+     ],
+     "unknowns": [
+      "W.z"
+     ],
+     "x0": [
+      0.0
+     ]
+    }
+   },
+   "not_solvable": true,
+   "note": "z's equation goes to the caller with the algebraic part"
+  },
+  {
+   "id": "observed_bare_read",
+   "fixture": "fixtures/observed_bare_read.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "expected": {
+    "M.x": 1.0,
+    "M.z": 7.0
+   },
+   "note": "g = 2k is evaluated at t0 for the system equation"
+  },
+  {
+   "id": "disjoint_faq",
+   "fixture": "fixtures/disjoint_faq.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "expected": {
+    "M.u[1]": 1.0,
+    "M.u[2]": 2.0,
+    "M.u[3]": 2.0
+   },
+   "note": "disjoint cells are not a conflict"
+  },
+  {
+   "id": "overlapping_faq",
+   "fixture": "fixtures/overlapping_faq.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "error_code": "conflicting_derivative",
+   "note": "cell 2 is set twice"
+  },
+  {
+   "id": "duplicate_explicit",
+   "fixture": "fixtures/duplicate_explicit.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "error_code": "conflicting_derivative",
+   "note": "ic(u) ~ 1 and 2 ~ ic(u)"
+  },
+  {
+   "id": "default_tendency",
+   "fixture": "fixtures/default_tendency.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "expected": {
+    "M.x": 2.0,
+    "M.z": -6.0
+   },
+   "note": "x's default is its known starting value"
+  },
+  {
+   "id": "legacy_default",
+   "fixture": "fixtures/legacy_default.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "expected": {
+    "M.u": 3.0,
+    "M.w": 6.0
+   },
+   "note": "a migrated w ~ 2u reads u's default"
+  },
+  {
+   "id": "array_overdetermined",
+   "fixture": "fixtures/array_overdetermined.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "error_code": "ic_system_unbalanced",
+   "note": "3 scalar equations, 2 unknowns"
   }
  ],
  "loads": [
@@ -853,6 +1302,118 @@
    "validate_errors": [],
    "warnings": [],
    "note": "a valid 2.5.0 document: ic anywhere is not an error"
+  },
+  {
+   "id": "parameter_argument",
+   "fixture": "fixtures/parameter_argument.esm",
+   "load_error": "ic_invalid_argument",
+   "note": "ic(k) of a declared parameter"
+  },
+  {
+   "id": "parameter_argument_rhs",
+   "fixture": "fixtures/parameter_argument_rhs.esm",
+   "load_error": "ic_invalid_argument",
+   "note": "ic(k) of a declared parameter on a right-hand side"
+  },
+  {
+   "id": "legacy_default_migrates",
+   "fixture": "fixtures/legacy_default.esm",
+   "warnings": [
+    "deprecated_field"
+   ],
+   "model": "M",
+   "equations_tail": [
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "w"
+      ]
+     },
+     "rhs": {
+      "op": "*",
+      "args": [
+       2.0,
+       {
+        "op": "ic",
+        "args": [
+         "u"
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "no_field": "initialization_equations",
+   "note": "the migrated equation reads ic(u)"
+  },
+  {
+   "id": "rhs_solved_validate",
+   "fixture": "fixtures/rhs_solved.esm",
+   "validate_errors": [],
+   "note": "ic on a right-hand side is out of the main balance"
+  },
+  {
+   "id": "implicit_validate",
+   "fixture": "fixtures/implicit.esm",
+   "validate_errors": [],
+   "note": "ic(x) + ic(y) ~ total is out of the main balance and balances"
+  },
+  {
+   "id": "sum_with_known_validate",
+   "fixture": "fixtures/sum_with_known.esm",
+   "validate_errors": [],
+   "note": "one system equation, one free starting value"
+  },
+  {
+   "id": "known_target_validate",
+   "fixture": "fixtures/known_target.esm",
+   "validate_errors": [],
+   "note": "one system equation, one free starting value"
+  },
+  {
+   "id": "observed_target_validate",
+   "fixture": "fixtures/observed_target.esm",
+   "validate_errors": [],
+   "note": "validate reads ic(y) ~ 4 as an explicit ic"
+  },
+  {
+   "id": "element_equation_validate",
+   "fixture": "fixtures/element_equation.esm",
+   "validate_errors": [],
+   "note": "a partial explicit faq removes no cell"
+  },
+  {
+   "id": "disjoint_faq_validate",
+   "fixture": "fixtures/disjoint_faq.esm",
+   "validate_errors": [],
+   "note": "two explicit initial conditions, no system"
+  },
+  {
+   "id": "strip_reads_solved_validate",
+   "fixture": "fixtures/strip_reads_solved.esm",
+   "validate_errors": [],
+   "note": "three system equations, three free starting values"
+  },
+  {
+   "id": "array_overdetermined_validate",
+   "fixture": "fixtures/array_overdetermined.esm",
+   "validate_errors": [
+    "ic_system_unbalanced"
+   ],
+   "note": "a faq side counts its cells: 3 equations, 2 starting values"
+  },
+  {
+   "id": "validate_two_models_validate",
+   "fixture": "fixtures/validate_two_models.esm",
+   "validate_errors": [],
+   "note": "the count is per model"
+  },
+  {
+   "id": "duplicate_explicit_validate",
+   "fixture": "fixtures/duplicate_explicit.esm",
+   "validate_errors": [],
+   "note": "a conflict is the build's"
   }
  ]
 }

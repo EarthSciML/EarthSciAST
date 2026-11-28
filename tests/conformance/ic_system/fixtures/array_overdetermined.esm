@@ -1,0 +1,101 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_array_overdetermined",
+    "description": "esm-spec 11.4.3 'Balance' and 'What validate reports': faq_i(ic(a) + ic(b)) ~ faq_i(i) over n = 3 is three scalar equations in the two starting values ic(a) and ic(b). Both validate and the build report ic_system_unbalanced.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "index_sets": {
+    "n": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "a": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "b": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "a"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "b"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "ic",
+                  "args": [
+                    "a"
+                  ]
+                },
+                {
+                  "op": "ic",
+                  "args": [
+                    "b"
+                  ]
+                }
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": "i"
+          }
+        }
+      ]
+    }
+  }
+}

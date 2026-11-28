@@ -1,0 +1,52 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_parameter_argument",
+    "description": "esm-spec 4.2: the argument of ic names an unknown. ic(k) of a declared parameter is refused at load with ic_invalid_argument.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-4.2",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "k"
+            ]
+          },
+          "rhs": 3.0
+        }
+      ]
+    }
+  }
+}

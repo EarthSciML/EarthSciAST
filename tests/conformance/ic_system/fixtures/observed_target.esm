@@ -1,0 +1,63 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_observed_target",
+    "description": "esm-spec 11.4.3: ic(y) ~ 4 with y ~ 2u an observed is not an explicit initial condition; it is the system equation 2*ic(u) ~ 4, not in solved form, so a binding without a solver refuses it with unsupported_construct, or strips it. u has no default; it starts from its guess.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "*",
+            "args": [
+              2.0,
+              "u"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "y"
+            ]
+          },
+          "rhs": 4.0
+        }
+      ],
+      "guesses": {
+        "u": 1.0
+      }
+    }
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_observed_bare_read",
+    "description": "esm-spec 11.4.2 item 7: an initialization equation of the system reads an observed over parameters (g ~ 2k) at t0, bare, like an explicit initial condition does. z = x + g = 1 + 6.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.2",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0
+        },
+        "g": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0
+        },
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": "g",
+          "rhs": {
+            "op": "*",
+            "args": [
+              2.0,
+              "k"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "z"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "z"
+            ]
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "ic",
+                "args": [
+                  "x"
+                ]
+              },
+              "g"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

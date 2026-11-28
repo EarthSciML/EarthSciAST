@@ -1,0 +1,73 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_supplied_target",
+    "description": "esm-spec 11.4.3 'Declared defaults': y's default is its known starting value, and x's default yields to the solved-form equation ic(x) ~ ic(y) + 1, so x = 8. A supplied value of x makes x a known too, and the equation is then a surplus equation: ic_system_unbalanced.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 7.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "ic",
+                "args": [
+                  "y"
+                ]
+              },
+              1.0
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

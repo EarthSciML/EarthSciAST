@@ -1,0 +1,63 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_parameter_argument_rhs",
+    "description": "esm-spec 4.2: ic(k) of a declared parameter is refused at load with ic_invalid_argument wherever it sits; the parameter's value is read as k.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-4.2",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              2.0,
+              {
+                "op": "ic",
+                "args": [
+                  "k"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

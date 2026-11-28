@@ -1,0 +1,56 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_duplicate_explicit",
+    "description": "esm-spec 11.4.3: ic(u) ~ 1 and its mirrored spelling 2 ~ ic(u) are two explicit initial conditions of u: conflicting_derivative.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": 2.0,
+          "rhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

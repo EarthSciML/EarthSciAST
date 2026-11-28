@@ -1,0 +1,84 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_known_target",
+    "description": "esm-spec 11.4.3: ic(x) ~ ic(y) + 1 is in solved form for x, but x is already known from the explicit ic(x) ~ 5, so the equation is not explicit in an undetermined unknown. It is the truly implicit part, in ic(y); y has no default and starts from its guess.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 5.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "ic",
+                "args": [
+                  "y"
+                ]
+              },
+              1.0
+            ]
+          }
+        }
+      ],
+      "guesses": {
+        "y": 2.0
+      }
+    }
+  }
+}

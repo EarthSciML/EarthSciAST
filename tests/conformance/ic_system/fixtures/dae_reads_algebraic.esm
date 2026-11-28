@@ -1,0 +1,95 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_dae_reads_algebraic",
+    "description": "esm-spec 11.4.3: with the algebraic equation x + y ~ 3 stripped, y's starting value is the caller's to find, so ic(z) ~ ic(y) + 1, which reads it, belongs to the implicit part: refused with unsupported_construct, or stripped under `initialization` too. z's default yields to the solved-form equation; stripped, z starts from that default.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "W": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "+",
+            "args": [
+              "x",
+              "y"
+            ]
+          },
+          "rhs": 3.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "z"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "z"
+            ]
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "ic",
+                "args": [
+                  "y"
+                ]
+              },
+              1.0
+            ]
+          }
+        }
+      ],
+      "guesses": {
+        "y": 0.5
+      }
+    }
+  }
+}
