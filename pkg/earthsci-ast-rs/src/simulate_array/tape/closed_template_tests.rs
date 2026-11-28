@@ -231,6 +231,26 @@ fn gated_pointwise_faq_compacts_to_its_candidate_cells() {
         "the overlap body ran over a box of {} elements",
         widest(&sparse)
     );
+    // The build holds nothing per cell of the source x target box: no mask
+    // over it and no table with an entry per cell, in the program or in any
+    // function it calls.
+    let cells_of_box = sparse_src * sparse_targets.len();
+    for prog in std::iter::once(&sparse).chain(sparse.funcs.iter().map(|f| &**f)) {
+        for d in &prog.tables.const_data {
+            assert_ne!(
+                d.shape.as_slice(),
+                [sparse_src, sparse_targets.len()],
+                "a build-time payload over the output box"
+            );
+        }
+        for g in &prog.tables.gather_tables {
+            assert!(
+                g.pos.len() < cells_of_box,
+                "a gather table with {} entries for a box of {cells_of_box} cells",
+                g.pos.len()
+            );
+        }
+    }
 
     // A single bin admits all 20 pairs, including zero and nonzero overlaps.
     let dense_src = 5;
