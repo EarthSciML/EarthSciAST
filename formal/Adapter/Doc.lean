@@ -1,6 +1,7 @@
 import Lean.Data.Json
 import Adapter.Decimal
 import Esm.Document.Source.TypstDoc
+import Esm.Document.Source.InitMigration
 
 /-! `esm-lean canon|print-md|parse-md|print-typ|parse-typ <file>`: the document source formats.
 
@@ -9,9 +10,14 @@ import Esm.Document.Source.TypstDoc
   the canonical unit spelling (`Esm.Units.canon`, as `canonicalize_document` does), and
   the deprecated `neg` and `pow` rewritten to unary `-` and `^` (a `broadcast` `fn` of
   `neg` too), and a `const` node in the dimensionless unit without its `units` (a scalar
-  one becomes the bare number).
+  one becomes the bare number), and every model's deprecated `initialization_equations`
+  rewritten into `ic` equations or `guesses` (esm-spec §11.4.4,
+  `Esm.Document.Source.InitMigration`; a document the loader would refuse is kept
+  unmigrated).
 * `print-typ <doc.esm>`, `parse-typ <doc.typ>`: the same for Typst.
-* `print-md <doc.esm>`: the Markdown spelling (`Esm.Document.Source.Md.printMd`).
+* `print-md <doc.esm>`: the Markdown spelling (`Esm.Document.Source.Md.printMd`) of a
+  document in canonical form, the `initialization_equations` migration applied first (a
+  no-op on the output of `canon`), as every binding's printer does.
 * `parse-md <doc.md>`: the document a Markdown source holds, as canonical JSON; exit 1
   when it does not parse.
 
@@ -295,13 +301,13 @@ def main (mode : String) (args : List String) : IO UInt32 := do
   match mode with
   | "canon" =>
     let d ← readDoc path
-    IO.println (render (spellRules false d))
+    IO.println (render (Source.InitMigration.migrateOrKeep (spellRules false d)))
     return 0
   | "print-md" =>
     let d ← readDoc path
     unless Source.canonDoc d do
       IO.eprintln s!"{path}: not a document in canonical form (a JSON object)"; return 1
-    IO.print (Source.Md.printMd d)
+    IO.print (Source.Md.printMd (Source.InitMigration.migrateOrKeep d))
     return 0
   | "parse-md" =>
     let text ← IO.FS.readFile path
@@ -312,7 +318,7 @@ def main (mode : String) (args : List String) : IO UInt32 := do
     let d ← readDoc path
     unless Source.canonDoc d do
       IO.eprintln s!"{path}: not a document in canonical form (a JSON object)"; return 1
-    IO.print (Source.Typ.printTyp d)
+    IO.print (Source.Typ.printTyp (Source.InitMigration.migrateOrKeep d))
     return 0
   | "parse-typ" =>
     let text ← IO.FS.readFile path

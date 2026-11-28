@@ -312,19 +312,33 @@ class Gen:
             text = text.replace(old, new)
         return text
 
-    def variant(self, area, cid, description, doc, surface, edits=(), text=None, reads_as=None):
+    def variant(
+        self, area, cid, description, doc, surface, edits=(), text=None, reads_as=None,
+        read_unmigrated=False,
+    ):
         """A hand-written spelling: the printed text with `edits` applied (or `text`), which
-        must read as `reads_as` (default: the document itself)."""
+        must read as `reads_as` (default: the document itself).
+
+        `read_unmigrated`: the input spells the deprecated `initialization_equations`
+        (a container the printer no longer writes), which a reader returns as read; the
+        expected document is `doc` itself, already written in canonical form except for
+        that field, and is checked as a JSON value against what esm-lean reads. The
+        `canonical` text is the printer's text for it, migrated (esm-spec §11.4.4)."""
         self._id(cid)
         esm = self.lean.canon(doc)
         canonical = self.lean.print(surface, esm)
         source = text if text is not None else self._edit(cid, canonical, edits)
         if source == canonical:
             raise SystemExit(f"{cid}: the variant input is the canonical text")
-        expect = self.lean.canon(reads_as) if reads_as is not None else esm
         got = self.lean.parse(surface, source)
         if got is None:
             raise SystemExit(f"{cid}: esm-lean refuses the variant input:\n{source}")
+        if read_unmigrated:
+            if json.loads(enc(got)) != doc:
+                raise SystemExit(f"{cid}: the variant reads as\n{enc(got)}\nnot\n{enc(doc)}")
+            expect = got
+        else:
+            expect = self.lean.canon(reads_as) if reads_as is not None else esm
         if not same(got, expect):
             raise SystemExit(f"{cid}: the variant reads as\n{enc(got)}\nnot\n{enc(expect)}")
         canon_expect = self.lean.print(surface, expect)
@@ -1935,19 +1949,134 @@ def documents(g):
             },
         ),
     )
-    P(
+    # The deprecated initialization_equations (esm-spec §11.4.4): the canonical form, and
+    # so the printers, rewrite them, so the printer never writes an initialization
+    # container for a document the loader reads. Each case keeps the document as written.
+    g.printed(
+        a,
         "initialization",
-        "Initialization equations sit in an initialization container, one per equation.",
+        "Initialization equations of a model with a time derivative print as ic equations "
+        "among its equations: an unknown w as ic(w), D(w) as ic(D(w)), a parameter kept.",
         document(
             models={
                 "M": box_model(
                     initialization_equations=[
                         {"lhs": "c", "rhs": 1},
-                        {"lhs": "u", "rhs": op("*", 2, "c")},
+                        {"lhs": op("D", "c", wrt="t"), "rhs": op("-", op("*", "u", "c"))},
                     ]
                 )
             }
         ),
+        written=True,
+    )
+    g.printed(
+        a,
+        "initialization_scoped",
+        "The migration reaches scoped unknowns (an inline subsystem's, a reaction system's "
+        "species), index operands, the arguments an operator call binds, and the "
+        "initialization equations of an inline subsystem.",
+        document(
+            models={
+                "M": box_model(
+                    variables={
+                        "c": {"type": "unknown", "units": "kg/m^3", "default": 0},
+                        "u": {"type": "parameter", "units": "m/s", "default": 1},
+                        "v": {"type": "unknown", "shape": ["x"]},
+                    },
+                    equations=[
+                        {"lhs": op("D", "c", wrt="t"), "rhs": op("-", op("*", "u", "c"))},
+                        {"lhs": op("D", "v", wrt="t"), "rhs": 0},
+                    ],
+                    operators={"loss": {"params": ["r", "w"], "body": op("-", op("*", "r", "w"))}},
+                    subsystems={
+                        "S": {
+                            "variables": {"w": {"type": "unknown"}, "k": {"type": "parameter"}},
+                            "equations": [{"lhs": op("D", "w", wrt="t"), "rhs": "k"}],
+                            "initialization_equations": [{"lhs": "w", "rhs": "k"}],
+                        }
+                    },
+                    initialization_equations=[
+                        {"lhs": "c", "rhs": op("+", "S.w", "R.NO")},
+                        {"lhs": idx("v", 1), "rhs": tmpl("loss", r="u", w="c")},
+                    ],
+                )
+            },
+            reaction_systems={
+                "R": {"species": {"NO": {"default": 0}}, "reactions": []}
+            },
+            index_sets={"x": {"kind": "interval", "size": 2}},
+        ),
+        written=True,
+    )
+    g.printed(
+        a,
+        "initialization_guesses",
+        "Initialization equations of a model with no time derivative print as guesses "
+        "entries; a guess the model already has is kept.",
+        document(
+            models={
+                "M": {
+                    "variables": {
+                        "x": {"type": "unknown"},
+                        "y": {"type": "unknown"},
+                        "k": {"type": "parameter", "default": 4},
+                    },
+                    "equations": [
+                        {"lhs": op("*", "x", "y"), "rhs": "k"},
+                        {"lhs": "x", "rhs": "y"},
+                    ],
+                    "guesses": {"x": 3},
+                    "initialization_equations": [
+                        {"lhs": "x", "rhs": 2},
+                        {"lhs": "y", "rhs": op("*", 2, "k")},
+                    ],
+                }
+            }
+        ),
+        written=True,
+    )
+    g.printed(
+        a,
+        "initialization_parameter",
+        "Below esm 2.5.0, an initial condition of a parameter (ic(k) among the equations, "
+        "k or ic(k) among the initialization equations) prints as the parameter's default.",
+        document(
+            models={
+                "M": box_model(
+                    variables={
+                        "c": {"type": "unknown", "units": "kg/m^3", "default": 0},
+                        "u": {"type": "parameter", "units": "m/s", "default": 1},
+                        "k": {"type": "parameter", "default": 5},
+                    },
+                    equations=[
+                        {"lhs": op("D", "c", wrt="t"), "rhs": op("-", op("*", "u", "k", "c"))},
+                        {"lhs": op("ic", "k"), "rhs": 3},
+                    ],
+                    initialization_equations=[
+                        {"lhs": "u", "rhs": 2},
+                        {"lhs": "c", "rhs": 1},
+                    ],
+                )
+            }
+        ),
+        written=True,
+    )
+    g.printed(
+        a,
+        "initialization_refused",
+        "A document whose initialization equation the loader refuses (no time derivative, "
+        "left-hand side not a bare unknown) is not migrated: it prints its initialization "
+        "container.",
+        document(
+            models={
+                "M": {
+                    "variables": {"x": {"type": "unknown"}, "k": {"type": "parameter"}},
+                    "equations": [{"lhs": op("*", "x", "x"), "rhs": "k"}],
+                    "initialization_equations": [{"lhs": op("*", 2, "x"), "rhs": 1}],
+                }
+            }
+        ),
+        written=True,
     )
     P(
         "constraints",
@@ -2347,18 +2476,24 @@ def documents(g):
             "M": box_model(
                 initialization_equations=[
                     {"lhs": "c", "rhs": 1},
-                    {"lhs": "u", "rhs": op("*", 2, "c")},
+                    {"lhs": op("D", "c", wrt="t"), "rhs": 0},
                 ]
             )
         }
     )
+    # The printer no longer writes the container (the canonical form migrates the field),
+    # so the input is written by hand; the reader returns the field as read.
     V(
         "container_several_displays",
         "An initialization container holding several displays, blank "
-        "lines between, reads as consecutive initialization equations.",
+        "lines between, reads as consecutive initialization equations "
+        "(the deprecated field, as read; the printer writes them migrated).",
         init,
         md,
-        [("$$\n:::\n\n:::initialization\n$$", "$$\n\n$$")],
+        (),
+        text=g.lean.print(md, g.lean.canon(document(models={"M": box_model()})))
+        + "\n:::initialization\n$$\nc = 1\n$$\n\n$$\n\\frac{\\mathrm{d} c}{\\mathrm{d} t} = 0\n$$\n:::\n",
+        read_unmigrated=True,
     )
     V(
         "coefficient_one_markdown",
@@ -2769,10 +2904,11 @@ def refusals(g):
     R(
         "unclosed_container",
         "An initialization container with no closing :::.",
-        document(models={"M": box_model(initialization_equations=[{"lhs": "c", "rhs": 1}])}),
+        None,
         md,
         "parse_error",
-        [("c = 1\n$$\n:::", "c = 1\n$$")],
+        text=g.lean.print(md, g.lean.canon(document(models={"M": box_model()})))
+        + "\n:::initialization\n$$\nc = 1\n$$\n",
     )
     R(
         "reaction_table",
