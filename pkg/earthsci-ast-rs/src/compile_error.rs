@@ -779,8 +779,7 @@ pub fn first_implicit_equation(
         }
         let structural = matches!(
             &eq.lhs,
-            Expr::Operator(n) if n.op == "ic"
-                || n.op == "partial"
+            Expr::Operator(n) if n.op == "partial"
                 || (n.op == "D" && n.wrt.as_deref().is_some_and(|w| w != "t"))
         );
         !structural && matches!(lhs_form_ref(&eq.lhs), LhsFormRef::Expression)

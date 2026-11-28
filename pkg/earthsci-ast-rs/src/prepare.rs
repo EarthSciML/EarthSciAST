@@ -1812,6 +1812,7 @@ impl<'o> BuildState<'o> {
                     BuildInput::Flattened {
                         flat: &flat,
                         inherited: None,
+                        init: None,
                     },
                     index_sets,
                 )

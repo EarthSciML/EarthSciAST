@@ -1041,16 +1041,6 @@ fn collect_algebraic(
     Ok(())
 }
 
-/// `e` with every `ic(a)` read as `a`, for the shape of an initialization
-/// residual: a starting value has its unknown's shape.
-pub(crate) fn strip_ic_for_shape(e: &Expr) -> Expr {
-    match e {
-        Expr::Operator(n) if n.op == "ic" && n.args.len() == 1 => strip_ic_for_shape(&n.args[0]),
-        Expr::Operator(n) => Expr::operator(n.map_children(&mut |c| strip_ic_for_shape(c))),
-        other => other.clone(),
-    }
-}
-
 /// `{"op": "-", "args": [lhs, rhs]}`.
 pub(crate) fn residual_expr(lhs: &Expr, rhs: &Expr) -> Expr {
     op_expr("-", vec![lhs.clone(), rhs.clone()])
@@ -1144,11 +1134,12 @@ pub(crate) fn declared_sets(name: &str, flat: &FlattenedSystem) -> Option<Vec<St
         .map(|v| v.shape.clone().unwrap_or_default())
 }
 
-/// The `z` warm start (API_SPEC §5.8, as PR #820 drafted it): per element,
-/// the unknown's explicit `ic` value at the start of the run, else the
-/// caller's `u0` entry (a supplied value of an algebraic unknown is a starting
-/// guess, esm-spec §11.4.3), else its `guesses` entry, else its declared
-/// default, column-major.
+/// The `z` warm start (API_SPEC §5.8) of a Problem that holds no starting
+/// state to read it from (one with no differential equations, or a build
+/// without the `solve` feature): per element, the unknown's explicit `ic`
+/// value at the start of the run, else the caller's `u0` entry (a supplied
+/// value of an algebraic unknown is a starting guess, esm-spec §11.4.3), else
+/// its `guesses` entry, else its declared default, column-major.
 pub(crate) fn z_starting_values(
     flat: &FlattenedSystem,
     z: &[ZBlock],
@@ -1164,23 +1155,10 @@ pub(crate) fn z_starting_values(
     for b in z {
         let len = b.shape.iter().product::<usize>().max(1);
         let ic = flat
-            .equations
+            .field_ics
             .iter()
-            .find_map(|eq| match &eq.lhs {
-                Expr::Operator(n)
-                    if n.op == "ic"
-                        && matches!(n.args.first(), Some(Expr::Variable(v)) if *v == b.name) =>
-                {
-                    Some(eq.rhs.clone())
-                }
-                _ => None,
-            })
-            .or_else(|| {
-                flat.field_ics
-                    .iter()
-                    .find(|(t, _)| *t == b.name)
-                    .map(|(_, r)| r.clone())
-            });
+            .find(|(t, _)| *t == b.name)
+            .map(|(_, r)| r.clone());
         let local = b.name.rsplit_once('.').map_or(b.name.as_str(), |(_, l)| l);
         let supplied: Option<Vec<f64>> = (len == 1)
             .then(|| u0.get(&b.name).or_else(|| u0.get(local)).map(|&v| vec![v]))

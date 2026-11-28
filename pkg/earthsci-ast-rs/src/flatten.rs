@@ -382,6 +382,13 @@ pub enum FlattenError {
     #[error("{0}")]
     RecordsPerSample(crate::diagnostic::DiagnosticError),
 
+    /// The deprecated `initialization_equations` of a document built in code
+    /// cannot be migrated (esm-spec §11.4.4: `deprecated_field`, an error for
+    /// a model with no time derivative whose equation has no `guesses`
+    /// reading).
+    #[error("{0}")]
+    Migration(crate::diagnostic::DiagnosticError),
+
     /// The file contains no models or reaction systems to flatten.
     #[error("No models or reaction systems to flatten")]
     Empty,
@@ -395,7 +402,9 @@ impl FlattenError {
         Some(match self {
             FlattenError::UnloweredOperator { .. } => codes::UNLOWERED_OPERATOR,
             FlattenError::DomainUnitMismatch { .. } => codes::DOMAIN_UNIT_MISMATCH,
-            FlattenError::CouplingImport(d) | FlattenError::RecordsPerSample(d) => d.code,
+            FlattenError::CouplingImport(d)
+            | FlattenError::RecordsPerSample(d)
+            | FlattenError::Migration(d) => d.code,
             FlattenError::CoupleMultiplicativeNoTendency { .. } => {
                 "couple_multiplicative_no_tendency"
             }
@@ -406,8 +415,8 @@ impl FlattenError {
             FlattenError::OperatorComposeAmbiguousBareName { .. } => {
                 "operator_compose_ambiguous_bare_name"
             }
-            FlattenError::ConflictingDerivative { .. }
-            | FlattenError::DimensionPromotion { .. }
+            FlattenError::ConflictingDerivative { .. } => codes::CONFLICTING_DERIVATIVE,
+            FlattenError::DimensionPromotion { .. }
             | FlattenError::UnmappedDomain { .. }
             | FlattenError::UnsupportedMapping { .. }
             | FlattenError::DomainExtentMismatch { .. }
@@ -959,6 +968,17 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     if !has_models && !has_rs {
         return Err(FlattenError::Empty);
     }
+    // A document built in code that still carries the deprecated
+    // `initialization_equations` (no loader read it) is migrated exactly as
+    // the loader migrates it (esm-spec §11.4.4).
+    let migrated;
+    let file = match crate::ic_migration::migrate_typed(file).map_err(FlattenError::Migration)? {
+        Some(f) => {
+            migrated = f;
+            &migrated
+        }
+        None => file,
+    };
 
     // Preflight (esm-spec §10.4): a `variable_map` `identity` transform must not
     // bridge two variables carrying declared, non-empty, and differing units.
@@ -1060,7 +1080,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // `field_ics` (esm-libraries-spec §4.7.5 step 4). After 5b′, so an
     // `ic(y) ~ D(x, t)` reaches `field_ics` as `x`'s resolved tendency (step
     // 3a), and before 5c, so classification never sees an `ic` equation.
-    extract_field_ics(&mut parts)?;
+    extract_field_ics(&mut parts, &index_sets)?;
 
     // No phase writes a shape inferred for an unshaped mixed-rank `ifelse`
     // (esm-spec §4.3.4) here: flatten changes no declared `shape` other than a
@@ -2642,48 +2662,80 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
 /// (esm-spec §11.4.1) out of the ordinary equation list into `field_ics`, as
 /// `(target_state, rhs)` — the downstream simulator folds them into `u0` from
 /// the data-Provider seam rather than treating them as state ODEs.
-fn extract_field_ics(parts: &mut AssembledParts) -> Result<(), FlattenError> {
+fn extract_field_ics(
+    parts: &mut AssembledParts,
+    index_sets: &IndexMap<String, IndexSet>,
+) -> Result<(), FlattenError> {
     // An `ic` equation's contribution list leaves with it: `field_ics` carries
-    // none (esm-libraries-spec §4.7.5).
-    // Every other initialization equation (one that mentions `ic` and is not
-    // an explicit initial condition) leaves too, into
-    // `initialization_equations` (esm 2.5.0, esm-libraries-spec §4.7.5).
+    // none (esm-libraries-spec §4.7.5). An explicit initial condition
+    // (`ic(u) ~ e` or `e ~ ic(u)`, `e` mentioning no `ic`, `u` not an
+    // observed) goes to `field_ics`; every other initialization equation —
+    // `ic(y) ~ e` of an observed `y` included — to `initialization_equations`
+    // (esm 2.5.0, esm-spec §11.4.3).
     let mut kept = Vec::with_capacity(parts.equations.len());
     for fe in std::mem::take(&mut parts.equations) {
         if !crate::initialization::is_initialization_equation(&fe.eq) {
             kept.push(fe);
-        } else if let Some(explicit) = crate::initialization::explicit_ic(&fe.eq) {
-            parts.field_ics.push(explicit);
-        } else {
-            let origin = fe
-                .contributions
-                .first()
-                .and_then(|c| c.origins.first())
-                .cloned()
-                .unwrap_or(TermOrigin::Component {
-                    component: String::new(),
-                });
-            parts.initialization_equations.push(fe.eq);
-            parts.initialization_origins.push(origin);
+            continue;
         }
+        if let Some((u, e)) = crate::initialization::explicit_form(&fe.eq)
+            && !parts.observed_variables.contains_key(u)
+        {
+            parts.field_ics.push((u.to_string(), e.clone()));
+            continue;
+        }
+        let origin = fe
+            .contributions
+            .first()
+            .and_then(|c| c.origins.first())
+            .cloned()
+            .unwrap_or(TermOrigin::Component {
+                component: String::new(),
+            });
+        parts.initialization_equations.push(fe.eq);
+        parts.initialization_origins.push(origin);
     }
     parts.equations = kept;
-    // One initial condition per state (esm-libraries-spec §4.7.5 step 4
-    // `field_ics`). Two — an authored `ic(x)` and an operator's `ic(_var)`
-    // expanded onto `x`, or two such templates — leave nothing to say which
-    // one holds, so the document is refused rather than one silently winning.
-    let mut seen: HashSet<&str> = HashSet::new();
+    // Two explicit initial conditions that set the same cell of one state
+    // (esm-spec §11.4.3) — two authored ones, either spelling, or an authored
+    // one and an operator's `ic(_var)` expanded onto it — leave nothing to say
+    // which one holds, so the document is refused rather than one silently
+    // winning. Two that set disjoint cells (`faq`s over `[1, 1]` and
+    // `[2, 3]`) are not a conflict.
+    let size = |s: &str| {
+        index_sets
+            .get(s)
+            .and_then(crate::initialization::index_set_size)
+    };
+    let mut covered: IndexMap<&str, Vec<bool>> = IndexMap::new();
     let mut duplicated: Vec<String> = Vec::new();
-    for (target, _) in &parts.field_ics {
-        if !seen.insert(target.as_str()) && !duplicated.contains(target) {
+    for (target, rhs) in &parts.field_ics {
+        let ext: Vec<usize> = parts
+            .state_variables
+            .get(target)
+            .and_then(|v| v.shape.as_ref())
+            .and_then(|sets| sets.iter().map(|s| size(s)).collect::<Option<Vec<_>>>())
+            .unwrap_or_default();
+        let n = ext.iter().product::<usize>().max(1);
+        let mut mine = vec![false; n];
+        crate::initialization::mark_coverage(rhs, &ext, &size, &mut mine);
+        let seen = covered
+            .entry(target.as_str())
+            .or_insert_with(|| vec![false; n]);
+        let overlap = seen.iter().zip(&mine).any(|(a, b)| *a && *b);
+        if overlap && !duplicated.contains(target) {
             duplicated.push(target.clone());
+        }
+        for (s, m) in seen.iter_mut().zip(&mine) {
+            *s |= *m;
         }
     }
     if !duplicated.is_empty() {
         return Err(FlattenError::ConflictingDerivative {
             message: format!(
-                "states have more than one initial condition `ic(x)` (an authored one \
-                 and an operator's `ic(_var)` expanded onto it, or two such templates): {}",
+                "states have more than one explicit initial condition `ic(x)` setting the same \
+                 cell (two authored ones, in either spelling, or an authored one and an \
+                 operator's `ic(_var)` expanded onto it; esm-spec §11.4.3): {}",
                 duplicated.join(", ")
             ),
             species: duplicated,
@@ -3400,11 +3452,9 @@ fn build_model_block(
         }
     }
 
-    let typed_init = crate::ic_migration::typed_initialization_equations(model);
     let equations: Vec<FlatEq> = model
         .equations
         .iter()
-        .chain(&typed_init)
         .map(|eq| {
             FlatEq::authored(
                 Equation {
@@ -7555,11 +7605,13 @@ mod tests {
         };
         let mut parts = assemble_output(Vec::new());
         parts.equations = vec![ic_eq(1.0), ic_eq(2.0)];
-        match extract_field_ics(&mut parts).unwrap_err() {
+        let err = extract_field_ics(&mut parts, &IndexMap::new()).unwrap_err();
+        assert_eq!(err.code(), Some("conflicting_derivative"));
+        match err {
             FlattenError::ConflictingDerivative { species, message } => {
                 assert_eq!(species, vec!["Chem.c".to_string()]);
                 assert!(
-                    message.contains("more than one initial condition"),
+                    message.contains("more than one explicit initial condition"),
                     "message: {message}"
                 );
             }

@@ -1362,51 +1362,67 @@ fn strip_and_build(
     let stripped = crate::strip::strip_file(&file, set)?;
     // The loader closed the metaparameters already.
     opts.metaparameters.clear();
-    let p = opts.p.clone();
     let u0 = opts.u0.clone();
+    let p = opts.p.clone();
     let mut prob = build_problem(ProblemInput::File(&stripped.file), tspan, opts, set)?;
     let mut constructs = stripped.constructs;
+    // An array Problem's starting state holds every stripped unknown at its
+    // starting point (an explicit `ic`, else the caller's `u0`, else its
+    // `guesses` entry, else its default), built by the one evaluator of every
+    // initial condition: the starting points are read there. A Problem with
+    // no starting state (no differential equations, or a build without the
+    // `solve` feature) has its `z` warm start evaluated directly.
+    let wants_start = matches!(&*prob.backend, Backend::Array(_))
+        && (set.contains(crate::strip::StripSet::INITIALIZATION)
+            || !constructs.z_layout.is_empty());
+    #[cfg(feature = "solve")]
+    let start: Option<Vec<f64>> = wants_start.then(|| initial_state(&prob)).transpose()?;
+    #[cfg(not(feature = "solve"))]
+    let start: Option<Vec<f64>> = {
+        let _ = wants_start;
+        None
+    };
     if set.contains(crate::strip::StripSet::INITIALIZATION) {
-        constructs.initialization = stripped_initialization(&prob, &stripped.file)?;
+        constructs.initialization =
+            stripped_initialization(&prob, &stripped.file, &u0, start.as_deref())?;
     }
     if !constructs.z_layout.is_empty() {
-        let flat = crate::flatten::flatten(&stripped.file)
-            .map_err(|e| SimulateError::Compile(e.into()))?;
-        let mut params: HashMap<String, f64> = flat
-            .parameters
-            .iter()
-            .filter_map(|(k, v)| match &v.default {
-                Some(crate::types::InlineValue::Scalar(x)) => Some((k.clone(), *x)),
-                _ => None,
-            })
-            .collect();
-        for (k, v) in &p {
-            if params.contains_key(k) {
-                params.insert(k.clone(), *v);
-            }
-        }
-        params.insert("t".to_string(), tspan.0);
-        constructs.z0 = crate::strip::z_starting_values(&flat, &constructs.z_layout, &params, &u0);
-        // The Problem holds each `z` unknown at its warm start (explicit `ic`,
-        // then the caller's `u0`, then `guesses`, then the default), built by
-        // the same evaluator as every initial condition; read it there.
-        if let Ok(state) = initial_state(&prob) {
-            let names = prob.state_variable_names();
-            let mut z0: Vec<Option<f64>> = Vec::new();
-            for b in &constructs.z_layout {
+        constructs.z0 = match &start {
+            Some(u) => {
+                let names = prob.state_variable_names();
                 let base = |n: &str| n.split('[').next().unwrap_or(n).to_string();
-                z0.extend(
-                    names
-                        .iter()
-                        .zip(&state)
-                        .filter(|(n, _)| base(n) == b.name)
-                        .map(|(_, &v)| Some(v)),
-                );
+                constructs
+                    .z_layout
+                    .iter()
+                    .flat_map(|b| {
+                        names
+                            .iter()
+                            .zip(u)
+                            .filter(|(name, _)| base(name) == b.name)
+                            .map(|(_, &v)| Some(v))
+                    })
+                    .collect()
             }
-            if z0.len() == constructs.z0.len() {
-                constructs.z0 = z0;
+            None => {
+                let flat = crate::flatten::flatten(&stripped.file)
+                    .map_err(|e| SimulateError::Compile(e.into()))?;
+                let mut params: HashMap<String, f64> = flat
+                    .parameters
+                    .iter()
+                    .filter_map(|(k, v)| match &v.default {
+                        Some(crate::types::InlineValue::Scalar(x)) => Some((k.clone(), *x)),
+                        _ => None,
+                    })
+                    .collect();
+                for (k, v) in &p {
+                    if params.contains_key(k) {
+                        params.insert(k.clone(), *v);
+                    }
+                }
+                params.insert("t".to_string(), tspan.0);
+                crate::strip::z_starting_values(&flat, &constructs.z_layout, &params, &u0)
             }
-        }
+        };
     }
     prob.stripped = Rc::new(constructs);
     prob.strip_source = Some(Rc::new(stripped.file));
@@ -1414,24 +1430,28 @@ fn strip_and_build(
 }
 
 /// The removed implicit part of the initialization system of `prob` (`strip`
-/// class `initialization`, API_SPEC §5.8): its residuals, read off the
-/// flattened stripped document, and its unknowns' element names and starting
-/// points, read off the Problem's initial state (which holds them).
+/// class `initialization`, API_SPEC §5.8) under the caller's `u0`: its
+/// residuals, read off the flattened stripped document, and its unknowns'
+/// element names with their starting points, read off the Problem's
+/// starting state `start` (which holds them).
 fn stripped_initialization(
     prob: &EsmProblem,
     file: &EsmFile,
+    u0: &HashMap<String, f64>,
+    start: Option<&[f64]>,
 ) -> Result<crate::strip::StrippedInitialization, SimulateError> {
     let mut out = crate::strip::StrippedInitialization::default();
     let Backend::Array(c) = &*prob.backend else {
         return Ok(out);
     };
-    let sys = c.init_system.clone();
-    if !sys.has_implicit_part() {
+    let plan = c.check_initialization(u0).map_err(|e| c.show_error(e))?;
+    if !plan.has_implicit_part() {
         return Ok(out);
     }
+    let sys = &c.init_system;
     let flat = crate::flatten::flatten(file).map_err(|e| SimulateError::Compile(e.into()))?;
     let mut counters: HashMap<String, usize> = HashMap::new();
-    for &k in &sys.removed {
+    for &k in &plan.removed {
         let e = &sys.equations[k];
         let prefix = match &e.origin {
             crate::flatten::TermOrigin::Component { component } => component.clone(),
@@ -1440,7 +1460,7 @@ fn stripped_initialization(
         let j = counters.entry(prefix.clone()).or_insert(0);
         *j += 1;
         let expr = crate::strip::residual_expr(&e.equation.lhs, &e.equation.rhs);
-        let sets = crate::strip::expr_sets(&crate::strip::strip_ic_for_shape(&expr), &flat)
+        let sets = crate::strip::expr_sets(&crate::initialization::read_ic_as_value(&expr), &flat)
             .unwrap_or_default();
         out.residuals.push(crate::strip::StrippedResidual {
             id: format!("{prefix}.initialization[{j}]"),
@@ -1450,21 +1470,10 @@ fn stripped_initialization(
             sets,
         });
     }
-    let unknowns = sys.implicit_unknowns();
     let names = prob.state_variable_names();
-    let u = initial_state(prob)?;
-    let base = |n: &str| n.split('[').next().unwrap_or(n).to_string();
-    let mut picked: Vec<(bool, String, usize)> = names
-        .iter()
-        .enumerate()
-        .filter(|(_, n)| unknowns.contains(&base(n)))
-        .map(|(i, n)| (n.contains('['), base(n), i))
-        .collect();
-    // 0-d by sorted name, then arrays by sorted name, each in layout order.
-    picked.sort_by(|a, b| (a.0, &a.1, a.2).cmp(&(b.0, &b.1, b.2)));
-    for (_, _, i) in picked {
-        out.unknowns.push(names[i].clone());
-        out.x0.push(u.get(i).copied());
+    for slot in c.initialization_unknown_slots(&plan) {
+        out.unknowns.push(names[slot].clone());
+        out.x0.push(start.and_then(|u| u.get(slot).copied()));
     }
     Ok(out)
 }
@@ -2058,7 +2067,7 @@ fn build_problem(
     if let Backend::Array(c) = &backend {
         // The initialization system's balance under the caller's `u0`, and
         // its implicit part (esm-spec §11.4.3), before the starting values.
-        c.check_initialization_raw(&opts.u0)
+        c.check_initialization(&opts.u0)
             .map_err(|e| c.show_error(e))?;
         refuse_missing_initial_values(c, &opts.u0).map_err(|e| c.show_error(e))?;
     }
@@ -2778,12 +2787,6 @@ fn refuse_reference_integrity_errors(file: &EsmFile) -> Result<(), SimulateError
         // (esm-spec §6.6); the build does not evaluate them.
         BUILD_REFUSED_VALIDATION_CODES.contains(&e.code.to_string().as_str())
             && !e.path.contains("/tests/")
-            // A free name in an explicit initial condition's right-hand side
-            // may be a provider-served field (esm-spec §11.4, "externally
-            // supplied field"), which the field-`ic` resolution refuses by
-            // name when no provider serves it. `validate` still reports it.
-            && !(e.code.to_string() == "undefined_variable"
-                && explicit_ic_rhs_at(file, &e.path))
     }) {
         let named = declared_name_at(&e.path)
             .map(|n| format!(" (variable '{n}')"))
@@ -2796,36 +2799,6 @@ fn refuse_reference_integrity_errors(file: &EsmFile) -> Result<(), SimulateError
         ));
     }
     Ok(())
-}
-
-/// Whether `pointer` sits in the right-hand side of an explicit initial
-/// condition `ic(u) ~ e` of a model (or subsystem) of `file`.
-fn explicit_ic_rhs_at(file: &EsmFile, pointer: &str) -> bool {
-    let segs: Vec<&str> = pointer.trim_start_matches('/').split('/').collect();
-    if segs.first() != Some(&"models") || segs.len() < 5 {
-        return false;
-    }
-    let Some(mut model) = file.models.as_ref().and_then(|m| m.get(segs[1])) else {
-        return false;
-    };
-    let mut i = 2;
-    while segs.get(i) == Some(&"subsystems") {
-        let Some(sub) = segs
-            .get(i + 1)
-            .and_then(|k| model.inline_subsystems().find(|(n, _)| n.as_str() == *k))
-        else {
-            return false;
-        };
-        model = sub.1;
-        i += 2;
-    }
-    if segs.get(i) != Some(&"equations") || segs.get(i + 2) != Some(&"rhs") {
-        return false;
-    }
-    segs.get(i + 1)
-        .and_then(|k| k.parse::<usize>().ok())
-        .and_then(|k| model.equations.get(k))
-        .is_some_and(|eq| crate::initialization::explicit_target(eq).is_some())
 }
 
 /// The full name of the variable a validator pointer sits under —

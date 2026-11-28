@@ -1673,21 +1673,12 @@ fn implicitly_declared_symbols(esm_file: &EsmFile) -> HashSet<String> {
     if let Some(models) = &esm_file.models {
         for model in models.values() {
             for eq in &model.equations {
-                // An `ic` equation's RHS is a COORDINATE EXPRESSION (§11.4): its
-                // free symbols name spatial coordinates, e.g. an ignition front
-                // at `x < x0`.
-                // Only the conventional short axes (`x`, `y`, `z`): a named
-                // axis is an index-set key or a `dim` already, and any other
-                // free name is an undefined variable — which a migrated
-                // `initialization_equations` entry must still report
-                // (esm-spec §11.4.4; the TypeScript and Python checkers).
-                if is_ic_equation(&eq.lhs) {
-                    let mut bare = HashSet::new();
-                    collect_bare_symbols(&eq.rhs, &mut bare);
-                    symbols.extend(
-                        bare.into_iter()
-                            .filter(|s| matches!(s.as_str(), "x" | "y" | "z")),
-                    );
+                // An explicit initial condition's right-hand side (either
+                // spelling) is a COORDINATE EXPRESSION (§11.4, §4.9.1 (iii)):
+                // its free symbols name spatial coordinates, e.g. an ignition
+                // front at `x < x0`.
+                if let Some((_, rhs)) = crate::initialization::explicit_form(eq) {
+                    collect_bare_symbols(rhs, &mut symbols);
                 }
                 collect_coordinate_symbols(&eq.lhs, &mut symbols);
                 collect_coordinate_symbols(&eq.rhs, &mut symbols);
@@ -2138,11 +2129,6 @@ fn collect_free_lhs_subscripts(
             }
         }
     }
-}
-
-/// True when this LHS marks an initial condition (`{"op": "ic", ...}`).
-fn is_ic_equation(lhs: &crate::Expr) -> bool {
-    matches!(lhs, crate::Expr::Operator(op) if op.op == "ic")
 }
 
 /// Collect the `dim` axis of every node that carries one, regardless of its
@@ -4216,101 +4202,41 @@ fn count_defining_equations(equations: &[crate::Equation]) -> usize {
 }
 
 /// esm 2.5.0 (esm-spec §11.4.3 "What `validate` reports"): the
-/// over-determination of the initialization system the document shows by
-/// itself. The model's initialization equations that are not explicit
-/// initial conditions are at least one scalar equation each; the distinct
-/// starting values they mention that no explicit initial condition of the
-/// document sets are at most their declared element counts (an unresolved
-/// shape counts as unbounded). More equations than that is
-/// `ic_system_unbalanced`. Everything else in the balance needs the build's
-/// supplied values and classification.
+/// over-determination of the model's initialization system the document
+/// shows by itself ([`crate::initialization::document_over_determination`]).
+/// Everything else in the balance needs the build's supplied values and
+/// classification.
 fn check_initialization_over_determination(
     esm_file: &EsmFile,
     model_name: &str,
     model: &crate::Model,
     errors: &mut Vec<StructuralError>,
 ) {
-    use crate::initialization::{explicit_target, is_initialization_equation};
-    let system: Vec<usize> = model
-        .equations
-        .iter()
-        .enumerate()
-        .filter(|(_, eq)| is_initialization_equation(eq) && explicit_target(eq).is_none())
-        .map(|(k, _)| k)
-        .collect();
-    if system.is_empty() {
+    let size = |set: &str| {
+        esm_file
+            .index_sets
+            .as_ref()
+            .and_then(|r| r.get(set))
+            .and_then(crate::initialization::index_set_size)
+    };
+    let Some((system, n_equations, free_cells)) =
+        crate::initialization::document_over_determination(model, &size)
+    else {
         return;
-    }
-    let mut explicit: HashSet<String> = HashSet::new();
-    for m in esm_file.models.iter().flat_map(|ms| ms.values()) {
-        for eq in &m.equations {
-            if let Some(t) = explicit_target(eq) {
-                explicit.insert(t);
-            }
-        }
-    }
-    fn ic_args(e: &crate::Expr, out: &mut Vec<String>) {
-        if let crate::Expr::Operator(n) = e {
-            if n.op == "ic" {
-                match n.args.first() {
-                    Some(crate::Expr::Variable(v)) => out.push(v.clone()),
-                    Some(crate::Expr::Operator(d)) if d.op == "D" => {
-                        if let Some(crate::Expr::Variable(v)) = d.args.first() {
-                            out.push(v.clone());
-                        }
-                    }
-                    _ => {}
-                }
-                return;
-            }
-            n.for_each_child(&mut |c| ic_args(c, out));
-        }
-    }
-    let mut mentioned: Vec<String> = Vec::new();
-    for &k in &system {
-        let eq = &model.equations[k];
-        ic_args(&eq.lhs, &mut mentioned);
-        ic_args(&eq.rhs, &mut mentioned);
-    }
-    mentioned.sort();
-    mentioned.dedup();
-    let mut capacity: usize = 0;
-    for name in mentioned.iter().filter(|n| !explicit.contains(*n)) {
-        let elements = model.variables.get(name).map(|v| {
-            v.shape
-                .iter()
-                .flatten()
-                .map(|set| {
-                    esm_file
-                        .index_sets
-                        .as_ref()
-                        .and_then(|r| r.get(set))
-                        .and_then(|s| s.size)
-                        .map(|n| n.max(0) as usize)
-                })
-                .try_fold(1usize, |acc, n| n.map(|n| acc.saturating_mul(n)))
-        });
-        match elements {
-            Some(Some(n)) => capacity = capacity.saturating_add(n),
-            // Not a local variable, or a shape the document does not size.
-            _ => return,
-        }
-    }
-    if system.len() <= capacity {
-        return;
-    }
+    };
     errors.push(StructuralError {
         path: format!("/models/{model_name}/equations/{}", system[0]),
         code: StructuralErrorCode::IcSystemUnbalanced,
         message: format!(
-            "the initialization system is over-determined: {} initialization equation(s) that \
-             are not explicit initial conditions, and at most {capacity} starting value(s) they \
-             mention that no explicit initial condition sets (esm-spec §11.4.3)",
-            system.len()
+            "the initialization system is over-determined: {n_equations} scalar \
+             initialization equation(s) that are not explicit initial conditions, and \
+             {free_cells} cell(s) of the starting values they mention that no explicit \
+             initial condition of the model sets (esm-spec §11.4.3)"
         ),
         details: serde_json::json!({
             "equations": system,
-            "starting_values": capacity,
+            "scalar_equations": n_equations,
+            "starting_values": free_cells,
         }),
     });
 }

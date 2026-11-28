@@ -7,7 +7,11 @@
 //! `expected` (through `initial_state` and a solve's first saved point), or
 //! the construction error's code, or the members of the stripped object it
 //! names. Each load checks the loaded document (the migrated equations, the
-//! guesses, the removed field), a load refusal, or `validate`'s codes.
+//! guesses, the parameter defaults, the removed field), a load refusal, or
+//! `validate`'s codes. Every error is compared by its machine-readable code.
+//!
+//! The manifest's load `warnings` are not checked: this binding prints its
+//! load warnings to standard error and offers no way to read them back.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -79,8 +83,8 @@ fn ic_system_cases() {
         if let Some(code) = c["error_code"].as_str() {
             match build(c).and_then(|p| initial_state(&p).map(|_| ())) {
                 Ok(()) => failures.push(format!("{id}: expected {code}, but the Problem built")),
-                Err(e) if e.to_string().contains(code) => {}
-                Err(e) => failures.push(format!("{id}: expected {code}, got: {e}")),
+                Err(e) if e.code() == Some(code) => {}
+                Err(e) => failures.push(format!("{id}: expected {code}, got {:?}: {e}", e.code())),
             }
             continue;
         }
@@ -99,14 +103,24 @@ fn ic_system_cases() {
                 } else {
                     &got[k.as_str()]
                 };
-                if !same(g, v) {
-                    failures.push(format!("{id}: stripped `{k}` = {g}, expected {v}"));
+                // A member given as an object names the fields it pins.
+                let pinned: Vec<(String, &Value, &Value)> = match v.as_object() {
+                    Some(fields) => fields
+                        .iter()
+                        .map(|(f, w)| (format!("{k}.{f}"), &g[f.as_str()], w))
+                        .collect(),
+                    None => vec![(k.clone(), g, v)],
+                };
+                for (name, g, v) in pinned {
+                    if !same(g, v) {
+                        failures.push(format!("{id}: stripped `{name}` = {g}, expected {v}"));
+                    }
                 }
             }
         }
         if c["not_solvable"].as_bool() == Some(true) {
             match solve(&prob, &SolveOptions::default()) {
-                Err(e) if e.to_string().contains("stripped_problem_not_solvable") => {}
+                Err(e) if e.code() == Some("stripped_problem_not_solvable") => {}
                 Err(e) => failures.push(format!("{id}: solve refused with {e}")),
                 Ok(_) => failures.push(format!("{id}: a stripped Problem solved")),
             }
@@ -187,8 +201,11 @@ fn ic_system_loads() {
         if let Some(code) = c["load_error"].as_str() {
             match loaded {
                 Ok(_) => failures.push(format!("{id}: expected a load refusal ({code})")),
-                Err(e) if e.to_string().contains(code) => {}
-                Err(e) => failures.push(format!("{id}: refused without `{code}`: {e}")),
+                Err(e) if e.code() == Some(code) => {}
+                Err(e) => failures.push(format!(
+                    "{id}: refused with {:?}, not `{code}`: {e}",
+                    e.code()
+                )),
             }
             continue;
         }
@@ -240,6 +257,14 @@ fn ic_system_loads() {
             && eqs.len() as u64 != n
         {
             failures.push(format!("{id}: {} equations, expected {n}", eqs.len()));
+        }
+        if let Some(want) = c["parameter_defaults"].as_object() {
+            for (k, v) in want {
+                let got = &md["variables"][k.as_str()]["default"];
+                if !same(got, v) {
+                    failures.push(format!("{id}: parameter {k} default {got}, expected {v}"));
+                }
+            }
         }
         if let Some(want) = c.get("guesses")
             && !same(&md["guesses"], want)

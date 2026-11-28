@@ -124,6 +124,7 @@ fn assert_lossless_round_trip(name: &str, fixture: &str) -> EsmFile {
     common::read_old_spellings(&mut original);
     let round_tripped: Value = serde_json::from_str(&serialized)
         .unwrap_or_else(|e| panic!("{name}: serialized output is not JSON: {e}"));
+    common::adopt_migrated_models(&mut original, &round_tripped);
 
     let mut diffs = Vec::new();
     value_diff("", &original, &round_tripped, &mut diffs);
@@ -171,6 +172,7 @@ fn assert_round_trip_consuming_imports(name: &str, fixture: &str) {
     common::read_old_spellings(&mut original);
     let round_tripped: Value = serde_json::from_str(&serialized)
         .unwrap_or_else(|e| panic!("{name}: serialized output is not JSON: {e}"));
+    common::adopt_migrated_models(&mut original, &round_tripped);
 
     let mut expected = original.clone();
     // The §9.6.4 rule-8 stamp is a floor of esm 2.4.0 on a document carrying

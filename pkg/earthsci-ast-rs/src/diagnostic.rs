@@ -175,6 +175,11 @@ diagnostic_code_registry! {
     /// esm-2.4.0 name (`operators`, `operator_imports`) at the wire boundary
     /// (esm-spec §9.6.12 "Old names (no refusal)"). One warning per document.
     DEPRECATED_FIELD = "deprecated_field";
+    /// Two sources define one state and nothing says which holds (esm-spec
+    /// §11.4.3, esm-libraries-spec §4.7.5): two explicit initial conditions
+    /// that set the same cell, or a reaction-generated and an explicit
+    /// `D(x)` with no `operator_compose` merge.
+    CONFLICTING_DERIVATIVE = "conflicting_derivative";
     /// esm 2.5.0 (esm-spec §11.4.3 "Balance"): the initialization system is
     /// over- or under-determined, or no assignment of one equation to each
     /// unknown exists. At build; `validate` reports document-level
@@ -871,6 +876,7 @@ mod error_code_tests {
             "compiler_refused_rule",
             "compiler_unavailable",
             "compiler_unknown",
+            "conflicting_derivative",
             "const_units_version_too_old",
             "coupling_edge_unknown_role",
             "coupling_import_bind_not_a_component",
