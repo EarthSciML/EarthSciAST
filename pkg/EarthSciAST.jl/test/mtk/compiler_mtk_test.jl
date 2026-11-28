@@ -886,3 +886,35 @@ end
         _refusal(() -> ModelingToolkit.System(_MTKC.flatten(rfile); name = :R))
     )
 end
+
+# esm 2.5.0 (esm-spec §11.4.3–§11.4.4) under `:mtk`: the initialization system
+# rides into ModelingToolkit as `initialization_eqs` (each `ic(w)` written as
+# `w`), a declared default of an unknown it determines is a guess rather than a
+# held initial condition, and ModelingToolkit's initialization solves what the
+# tree-walk build refuses as truly implicit (the manifest's `solved` values).
+@testset "compiler = :mtk: the initialization system (tests/conformance/ic_system)" begin
+    dir = _mtkc_fixture("conformance", "ic_system")
+    M = JSON3.read(read(joinpath(dir, "manifest.json"), String))
+    # A shaped parameter with inline data is not lowered by this compiler yet,
+    # so the broadcast cases (which read one) are left to the tree-walk build.
+    skip = Set(["broadcast_by_index_set_name", "migration_ode", "migration_ode_u0"])
+    for c in M.cases
+        id = String(c.id)
+        id in skip && continue
+        want = haskey(c, :solved) ? c.solved :
+            (haskey(c, :expected) && isempty(c.strip) ? c.expected : nothing)
+        want === nothing && continue
+        @testset "$id" begin
+            kw = Dict{Symbol, Any}(:compiler => :mtk)
+            isempty(c.p) || (kw[:p] = Dict{String, Any}(String(k) => Float64(v) for (k, v) in pairs(c.p)))
+            isempty(c.u0) || (kw[:u0] = Dict{String, Any}(String(k) => Float64(v) for (k, v) in pairs(c.u0)))
+            prob = esm_problem(joinpath(dir, String(c.fixture)), (0.0, 1.0); kw...)
+            sol = solve(prob, Tsit5(); saveat = [0.0], abstol = 1.0e-12, reltol = 1.0e-12)
+            @test SciMLBase.successful_retcode(sol)
+            for (k, v) in pairs(want)
+                # The starting state by flattened element name.
+                @test isapprox(sol.u[1][prob.var_map[String(k)]], Float64(v); atol = 1.0e-8)
+            end
+        end
+    end
+end

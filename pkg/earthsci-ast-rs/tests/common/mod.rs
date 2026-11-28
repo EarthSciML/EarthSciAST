@@ -456,3 +456,40 @@ pub fn read_old_spellings(doc: &mut Value) {
     }
     walk(doc, false, None);
 }
+
+/// `expected`, a document as written, with each model (at any `subsystems`
+/// depth) that carries the deprecated `initialization_equations` brought to
+/// what `loaded` (the same document after a load) holds there: the field
+/// removed and the model's `equations`, `guesses` and `variables` taken from
+/// `loaded`. The rewrite itself (esm-spec §11.4.4) is the loader's, pinned
+/// by the `ic_system` conformance manifest's loads; a round trip compares
+/// everything else.
+#[allow(dead_code)]
+pub fn adopt_migrated_models(expected: &mut Value, loaded: &Value) {
+    fn model(e: &mut Value, l: &Value) {
+        let Some(o) = e.as_object_mut() else { return };
+        if let Some(Value::Object(subs)) = o.get_mut("subsystems") {
+            for (k, sub) in subs.iter_mut() {
+                model(sub, &l["subsystems"][k.as_str()]);
+            }
+        }
+        if o.remove("initialization_equations").is_none() {
+            return;
+        }
+        for field in ["equations", "guesses", "variables"] {
+            match l.get(field) {
+                Some(v) => {
+                    o.insert(field.to_string(), v.clone());
+                }
+                None => {
+                    o.remove(field);
+                }
+            }
+        }
+    }
+    if let Some(Value::Object(models)) = expected.get_mut("models") {
+        for (k, m) in models.iter_mut() {
+            model(m, &loaded["models"][k.as_str()]);
+        }
+    }
+}

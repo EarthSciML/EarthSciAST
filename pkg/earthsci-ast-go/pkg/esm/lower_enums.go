@@ -289,7 +289,6 @@ func cloneForExprLowering(file *ESMFile) *ESMFile {
 		for name, m := range file.Models {
 			m.Variables = cloneMap(m.Variables)
 			m.Equations = cloneSlice(m.Equations)
-			m.InitializationEquations = cloneSlice(m.InitializationEquations)
 			m.DiscreteEvents = cloneDiscreteEvents(m.DiscreteEvents)
 			m.ContinuousEvents = cloneContinuousEvents(m.ContinuousEvents)
 			out.Models[name] = m

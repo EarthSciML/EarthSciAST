@@ -115,15 +115,15 @@ fn scalar_ic_seeding_precedence() {
     }
 }
 
-/// esm-spec §6.2: `faq`-valued initialization equations seed the initial state
-/// in document order, a body reading a state reads the value seeded so far
-/// (the declared default, a caller override, an earlier equation's result),
-/// and a cell the caller names keeps the caller's value. Both compilers build
-/// the same `u0`, bit for bit; the interpreter walks each `faq` cell by cell
-/// and `native` evaluates it whole.
+/// esm 2.5.0 (esm-spec §11.4.3, §11.4.4): the old sequential reading of
+/// `faq`-valued initialization equations is gone. Migrated, `u ~ A*i + v` reads
+/// `ic(v)` and `v ~ 3*u` (cells 2..3) reads `ic(u)`: both are in solved form,
+/// so neither default is a known, and the two equations' 6 cells cannot
+/// determine `u` and `v`'s 8, so both compilers refuse the system as
+/// unbalanced rather than seed it in document order.
 #[test]
-fn faq_initialization_equations_seed_in_order_on_both_compilers() {
-    use earthsci_ast::{Compiler, ProblemOptions, Rhs, esm_problem, solve};
+fn faq_initialization_equations_reading_each_other_are_unbalanced_on_both_compilers() {
+    use earthsci_ast::{Compiler, ProblemOptions, Rhs, esm_problem};
     let faq = |ranges: serde_json::Value, expr: serde_json::Value| {
         serde_json::json!({"op": "faq", "args": [], "output_idx": ["i"],
                            "ranges": ranges, "expr": expr})
@@ -156,55 +156,31 @@ fn faq_initialization_equations_seed_in_order_on_both_compilers() {
         }}
     });
     let file = load_string(&doc.to_string()).expect("document loads");
-    let u0_of = |compiler: Compiler, u0: &[(&str, f64)]| -> Vec<(String, u64)> {
-        let prob = esm_problem(
-            &file,
-            (0.0, 1.0),
-            ProblemOptions {
-                rhs: Rhs::Always,
-                compiler: Some(compiler),
-                u0: u0.iter().map(|&(k, v)| (k.to_string(), v)).collect(),
-                ..Default::default()
-            },
-        )
-        .unwrap_or_else(|e| panic!("{compiler:?} builds: {e}"));
-        let sol = solve(
-            &prob,
-            &SolveOptions {
-                saveat: Some(vec![0.0]),
-                ..Default::default()
-            },
-        )
-        .unwrap_or_else(|e| panic!("{compiler:?} solves: {e}"));
-        sol.state_variable_names
-            .iter()
-            .zip(&sol.state)
-            .map(|(n, row)| (n.clone(), row[0].to_bits()))
-            .collect()
-    };
-    let value = |rows: &[(String, u64)], name: &str| -> f64 {
-        let (_, b) = rows
-            .iter()
-            .find(|(n, _)| n == name || n.ends_with(&format!(".{name}")))
-            .unwrap_or_else(|| panic!("no state {name}: {rows:?}"));
-        f64::from_bits(*b)
-    };
-    for u0 in [&[][..], &[("v[1]", 10.0), ("u[3]", -1.0)][..]] {
-        let native = u0_of(Compiler::Native, u0);
-        let interp = u0_of(Compiler::Interpreter, u0);
-        assert_eq!(
-            native, interp,
-            "native and the interpreter seed the same u0 ({u0:?})"
-        );
-        let v1 = if u0.is_empty() { 2.0 } else { 10.0 };
-        let u3 = if u0.is_empty() { 0.75 + 2.0 } else { -1.0 };
-        assert_eq!(value(&native, "u[1]"), 0.25 + v1);
-        assert_eq!(value(&native, "u[2]"), 0.5 + 2.0);
-        assert_eq!(value(&native, "u[3]"), u3);
-        assert_eq!(value(&native, "v[1]"), v1, "outside v's ranges");
-        assert_eq!(value(&native, "v[2]"), 3.0 * 2.5, "reads the seeded u");
-        assert_eq!(value(&native, "v[3]"), 3.0 * u3);
-        assert_eq!(value(&native, "v[4]"), 2.0, "outside v's ranges");
+    for compiler in [Compiler::Native, Compiler::Interpreter] {
+        for u0 in [&[][..], &[("v[1]", 10.0), ("u[3]", -1.0)][..]] {
+            let err = esm_problem(
+                &file,
+                (0.0, 1.0),
+                ProblemOptions {
+                    rhs: Rhs::Always,
+                    compiler: Some(compiler),
+                    u0: u0.iter().map(|&(k, v)| (k.to_string(), v)).collect(),
+                    ..Default::default()
+                },
+            )
+            .err()
+            .unwrap_or_else(|| panic!("{compiler:?} {u0:?}: the system is refused"));
+            // Without a `u0`, both equations are in solved form, so `u`'s
+            // and `v`'s defaults yield: 6 scalar equations, 8 unknown cells.
+            // With one, each target has a supplied cell, so neither is in
+            // solved form and both defaults are knowns: 6 equations, no
+            // unknown (esm-spec §11.4.3).
+            assert_eq!(
+                err.code(),
+                Some("ic_system_unbalanced"),
+                "{compiler:?} {u0:?}: {err}"
+            );
+        }
     }
 }
 

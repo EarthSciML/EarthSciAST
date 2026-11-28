@@ -1128,7 +1128,7 @@ fn reference_integrity_reaches_every_expression_bearing_block() {
               "initialization_equations": [
                 {
                   "lhs": "x",
-                  "rhs": "GHOST_INIT"
+                  "rhs": {"op": "*", "args": ["GHOST_INIT", "x"]}
                 }
               ]
             }
@@ -1140,10 +1140,14 @@ fn reference_integrity_reaches_every_expression_bearing_block() {
         .structural_errors
         .iter()
         .find(|e| e.message.contains("GHOST_INIT"))
-        .expect("undefined name in initialization_equations must be caught");
+        // Migrated, `x ~ GHOST_INIT * x` is `ic(x) ~ GHOST_INIT * ic(x)`, an
+        // equation of the initialization system. (In an explicit initial
+        // condition `ic(x) ~ GHOST_INIT` the free name would be a coordinate,
+        // esm-spec §4.9.1 (iii).)
+        .expect("undefined name in a migrated initialization equation must be caught");
     assert!(matches!(e.code, StructuralErrorCode::UndefinedVariable));
     assert!(
-        e.path.contains("/initialization_equations/0"),
+        e.path.contains("/equations/1"),
         "the pointer must name the offending block, got {}",
         e.path
     );
@@ -2135,4 +2139,42 @@ fn esm_problem_refuses_an_unbound_index_symbol_with_its_code() {
     };
     assert_eq!(err.code(), Some("unbound_index_symbol"), "{err}");
     assert!(err.to_string().contains("unbound_index_symbol"), "{err}");
+}
+
+/// esm-spec §4.9.1 (iii): a free symbol of an explicit initial condition's
+/// right-hand side that names no declared variable is a spatial coordinate,
+/// in either spelling (`ic(u) ~ e` and `e ~ ic(u)`), not an undefined
+/// variable.
+#[test]
+fn a_free_coordinate_in_an_explicit_initial_condition_is_not_undefined() {
+    for (lhs, rhs) in [
+        (
+            serde_json::json!({"op": "ic", "args": ["u"]}),
+            serde_json::json!({"op": "*", "args": [2, "lat"]}),
+        ),
+        (
+            serde_json::json!({"op": "*", "args": [2, "lat"]}),
+            serde_json::json!({"op": "ic", "args": ["u"]}),
+        ),
+    ] {
+        let doc = serde_json::json!({
+            "esm": "2.5.0",
+            "metadata": {"name": "coordinate_ic"},
+            "models": {"M": {
+                "variables": {"u": {"type": "unknown", "units": "1", "default": 0.0}},
+                "equations": [
+                    {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": 0.0},
+                    {"lhs": lhs, "rhs": rhs}
+                ]
+            }}
+        });
+        let r = validate_text(&doc.to_string(), None);
+        assert!(
+            !r.structural_errors
+                .iter()
+                .any(|e| matches!(e.code, StructuralErrorCode::UndefinedVariable)),
+            "{:?}",
+            r.structural_errors
+        );
+    }
 }

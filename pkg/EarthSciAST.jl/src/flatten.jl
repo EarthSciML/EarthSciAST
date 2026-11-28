@@ -187,8 +187,9 @@ Fields:
   reads it to report `"sde"`.
 - `discrete_parameters::OrderedDict{String, ModelVariable}`: any other `update`.
   A **subset** of `parameters`.
-- `field_ics::Vector{Pair{String, ASTExpr}}`: deferred `ic` equations (esm-spec
-  §11.4.1), REMOVED from `equations`.
+- `field_ics::Vector{Pair{String, ASTExpr}}`: the explicit initial conditions
+  `ic(u) ~ e`, `e` mentioning no `ic` (esm-spec §11.4.1, §11.4.3), REMOVED
+  from `equations`.
 - `loader_fields::Vector{LoaderField}`: provider-served loaded fields the system
   consumes (esm-spec §8.5).
 - `lifted_shapes::OrderedDict{String, Vector{Int}}`: post-lift grid extents for
@@ -199,11 +200,11 @@ Fields:
   (its `faq` body when the pointwise lift wrapped it), each with the
   [`TermOrigin`](@ref)s that authored it. Read it with
   [`equation_contributions`](@ref).
-- `initialization_equations::Vector{Equation}`: every component's
-  `initialization_equations` (esm-spec §6.2), named as `equations` are: each
-  namespaced in its component's scope, then rewritten by the same template
-  rename, `operator_compose` merged-away rename and `variable_map`
-  substitution the equations take.
+- `initialization_equations::Vector{Equation}`: every initialization equation
+  (esm-spec §11.4.3: one that mentions `ic`) that is not an explicit initial
+  condition, in document order, named as `equations` are, and REMOVED from
+  `equations` as `field_ics` entries are (esm 2.5.0). `field_ics` holds the
+  explicit initial conditions.
 
 The three subset maps are views: the struct stores their member names and
 `flat.algebraic_variables` (and the other two) is read off the parent map, so a
@@ -255,10 +256,13 @@ struct FlattenedSystem
     # Per-term provenance, parallel to `equations` (see `term_provenance.jl`).
     equation_contributions::Vector{Vector{Contribution}}
     initialization_equations::Vector{Equation}
+    # Every component's `guesses` (esm-spec §6.2), by flattened name: the
+    # starting points of a solve (esm-spec §11.4.3).
+    guesses::OrderedDict{String, Any}
 
     function FlattenedSystem(
             ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, treg,
-            alg, brw, disc, ics, lfs, lshapes, contribs, ieqs
+            alg, brw, disc, ics, lfs, lshapes, contribs, ieqs, gs = OrderedDict{String, Any}()
         )
         length(contribs) == length(eqs) || throw(
             ArgumentError(
@@ -279,7 +283,8 @@ struct FlattenedSystem
             Pair{String, ASTExpr}[Pair{String, ASTExpr}(String(k), v) for (k, v) in ics],
             LoaderField[lf for lf in lfs], _flat_od(Vector{Int}, lshapes),
             Vector{Contribution}[Contribution[c for c in cs] for cs in contribs],
-            Equation[eq for eq in ieqs]
+            Equation[eq for eq in ieqs],
+            OrderedDict{String, Any}(String(k) => v for (k, v) in gs)
         )
     end
 end
@@ -321,7 +326,7 @@ const _FLAT_PROPERTIES = (
     :equations, :continuous_events, :discrete_events, :domain, :metadata,
     :index_sets, :template_registry, :algebraic_variables, :brownian_parameters,
     :discrete_parameters, :field_ics, :loader_fields, :lifted_shapes,
-    :equation_contributions, :initialization_equations,
+    :equation_contributions, :initialization_equations, :guesses,
 )
 Base.propertynames(::FlattenedSystem, private::Bool = false) =
     private ? (_FLAT_PROPERTIES..., :algebraic_names, :brownian_names, :discrete_names) :
@@ -362,7 +367,8 @@ function FlattenedSystem(;
         loader_fields = LoaderField[],
         lifted_shapes = OrderedDict{String, Vector{Int}}(),
         equation_contributions = nothing,
-        initialization_equations = Equation[]
+        initialization_equations = Equation[],
+        guesses = OrderedDict{String, Any}()
     )
     contribs = equation_contributions === nothing ?
         _unattributed_contributions(equations, lifted_shapes) : equation_contributions
@@ -371,7 +377,7 @@ function FlattenedSystem(;
         equations, continuous_events, discrete_events, domain, metadata, index_sets,
         template_registry, algebraic_variables, brownian_parameters,
         discrete_parameters, field_ics, loader_fields, lifted_shapes, contribs,
-        initialization_equations
+        initialization_equations, guesses
     )
 end
 
@@ -417,6 +423,7 @@ function FlattenedSystem(flat::FlattenedSystem; kwargs...)
         lifted_shapes = pick(:lifted_shapes, flat.lifted_shapes),
         equation_contributions = contribs,
         initialization_equations = pick(:initialization_equations, flat.initialization_equations),
+        guesses = pick(:guesses, flat.guesses),
     )
 end
 
@@ -756,50 +763,67 @@ function _in_document_order(
 end
 
 """
-    _extract_field_ics!(pool) -> Vector{Pair{String, ASTExpr}}
+    _extract_field_ics!(pool, init; isobserved, sizes) -> Vector{Pair{String, ASTExpr}}
 
-Classify the deferred `ic` equations (esm-spec §11.4.1) OUT of `equations`,
-returning them as ordered `state => rhs` pairs.
+Classify the initialization equations OUT of `equations` ([`_ic_role`](@ref)):
+the explicit initial conditions are returned as ordered `state => rhs` pairs,
+every other initialization equation is appended to `init` (esm-spec §11.4.3).
+`isobserved` names the observeds (`ic(y)` of one is never explicit); `sizes`
+the index-set sizes a `faq` right-hand side's cells are read with, for the
+per-cell conflict check.
 
 §4.7.5 step 4 is normative that these entries are removed: an initial condition
 is a datum, not an equation of motion, so leaving it in `equations` makes that
 list unusable for building a right-hand side without first filtering it and makes
-equation counts incomparable across bindings. The LHS must be `ic(<bare
-variable>)` with exactly one argument — the same shape Rust's `extract_ic_target`
-and Python's `_collect_field_ics` match.
+equation counts incomparable across bindings.
 
 Runs LAST, after the pointwise lift and the independent-variable derivation, so
 every intermediate pass still sees the equation list it always did and only the
 FINAL, observable `equations` differs.
 """
-function _extract_field_ics!(pool::Vector{_FlatEq})
+function _extract_field_ics!(
+        pool::Vector{_FlatEq}, init::Vector{Equation} = Equation[];
+        isobserved = _no_observed, sizes::AbstractDict = Dict{String, Int}()
+    )
     ics = Pair{String, ASTExpr}[]
     remaining = _FlatEq[]
     for fe in pool
-        eq = fe.eq
-        target = _ic_lhs_variable(eq.lhs)
-        if target === nothing
-            push!(remaining, fe)
-        else
+        r = _ic_role(fe.eq; isobserved = isobserved)
+        if r.kind === :explicit
             # The entry leaves `equations` and its contributions together;
             # `field_ics` carries none.
-            push!(ics, target => eq.rhs)
+            push!(ics, r.target => r.oriented.rhs)
+        elseif r.kind === :system
+            # Every other initialization equation (esm-spec §11.4.3), `ic(y) ~ e`
+            # of an observed `y` included, leaves `equations` for
+            # `initialization_equations` (esm-libraries-spec §4.7.5).
+            push!(init, fe.eq)
+        else
+            push!(remaining, fe)
         end
     end
-    # One initial condition per state (esm-libraries-spec §4.7.5 step 4
-    # `field_ics`). Two leave nothing to say which one holds, so the document is
-    # refused rather than one silently winning.
-    seen = Set{String}()
+    # Two explicit initial conditions that set one cell of a state leave
+    # nothing to say which one holds (esm-spec §11.4.3), so the document is
+    # refused rather than one silently winning; two over disjoint cells (`faq`
+    # right-hand sides over `[1, 1]` and `[2, 3]`) are not a conflict.
+    covered = Dict{String, Any}()
     duplicated = String[]
-    for (target, _) in ics
-        target in seen && !(target in duplicated) && push!(duplicated, target)
-        push!(seen, target)
+    for (target, rhs) in ics
+        cells = _ic_cover_cells(rhs, sizes)
+        prev = get(covered, target, missing)
+        if prev === missing
+            covered[target] = cells === nothing ? nothing : Set(cells)
+        elseif prev === nothing || cells === nothing || any(in(prev), cells)
+            target in duplicated || push!(duplicated, target)
+        else
+            union!(prev, cells)
+        end
     end
     isempty(duplicated) || throw(
         ConflictingDerivativeError(
             duplicated,
-            "states have more than one initial condition `ic(x)` (an authored " *
-                "one and an operator's `ic(_var)` expanded onto it, or two such templates)"
+            "states have more than one initial condition `ic(x)` setting the same cell " *
+                "(two authored ones, or an operator's `ic(_var)` expanded onto an authored one)"
         )
     )
     length(remaining) == length(pool) || append!(empty!(pool), remaining)
@@ -989,6 +1013,7 @@ mutable struct FlattenState
     merged_renames::OrderedDict{String, String}
     coupling_rules_applied::Vector{String}
     opaque_refs::Vector{String}
+    guesses::OrderedDict{String, Any}
 end
 
 FlattenState(file::EsmFile, template_registry) = FlattenState(
@@ -1000,7 +1025,7 @@ FlattenState(file::EsmFile, template_registry) = FlattenState(
     # esm-spec §2: one document-scoped index-set registry, plain names.
     OrderedDict{String, IndexSet}(file.index_sets),
     template_registry, LoaderField[], OrderedDict{String, Vector{Int}}(),
-    OrderedDict{String, String}(), String[], String[],
+    OrderedDict{String, String}(), String[], String[], OrderedDict{String, Any}(),
 )
 
 """
@@ -1300,7 +1325,10 @@ function _finish_flatten(st::FlattenState, pointwise)
     discrete = discrete_parameters(view)
     # The deferred `ic` equations leave `equations` (§4.7.5 step 4, normative);
     # last, so every pass above saw the list it always did.
-    st.field_ics = _extract_field_ics!(st.equations)
+    st.field_ics = _extract_field_ics!(
+        st.equations, st.init_equations;
+        isobserved = n -> haskey(st.observeds, n), sizes = _index_set_sizes(st.index_sets)
+    )
     # A scaled angle argument of `sin`/`cos`/`tan` to radians (esm-spec §4.8.3).
     _normalize_angle_arguments!(st)
     # Each elementwise template application (esm-spec §9.6.11) as its per-cell
@@ -1328,6 +1356,7 @@ function _finish_flatten(st::FlattenState, pointwise)
         loader_fields = st.loader_fields, lifted_shapes = st.lifted_shapes,
         equation_contributions = Vector{Contribution}[f.contribs for f in st.equations],
         initialization_equations = st.init_equations,
+        guesses = st.guesses,
     )
 end
 
@@ -1468,15 +1497,14 @@ function flattened_to_esm(
         )
     end
 
+    # The other initialization equations (esm-spec §11.4.3) are `ic` equations
+    # a document spells in `equations` too.
+    for eq in flat.initialization_equations
+        push!(equations, serialize_equation(eq))
+    end
     model = Dict{String, Any}(
         "variables" => variables,
         "equations" => equations,
-    )
-    # The namespaced initialization equations (esm-spec §6.2), which a
-    # document carries on its model.
-    isempty(flat.initialization_equations) || (
-        model["initialization_equations"] =
-            Any[serialize_equation(eq) for eq in flat.initialization_equations]
     )
     # esm-spec §9.6.4 Option B: surviving `apply_expression_template` references
     # in the equations resolve against the merged registry — emit it as the

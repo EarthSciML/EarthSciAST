@@ -649,15 +649,29 @@ end
 function _seed_faq_init_u0!(
         u0::Vector{Float64}, init_equations::Vector{Equation},
         initial_conditions::AbstractDict, cs::_CompileScope, p::Union{Nothing, NamedTuple};
-        skip_slots::Set{Int} = Set{Int}()
+        skip_slots::Set{Int} = Set{Int}(), t0::Float64 = 0.0
     )
     seeded = Set{Int}()
     var_map = cs.var_map
     pp = isnothing(p) ? NamedTuple() : p
     for eq in init_equations
         eq.lhs isa VarExpr || continue
-        eq.rhs isa OpExpr && _is_faq_op((eq.rhs::OpExpr).op) || continue
         var_name = (eq.lhs::VarExpr).name
+        if !(
+                eq.rhs isa OpExpr && _is_faq_op((eq.rhs::OpExpr).op) &&
+                    !isempty(_output_idx_strings(eq.rhs::OpExpr))
+            )
+            # A scalar target (a seed of the initialization system,
+            # build_ic_system.jl): its right-hand side compiled once and
+            # evaluated once, at the start of the run.
+            haskey(initial_conditions, var_name) && continue
+            slot = get(var_map, var_name, 0)
+            (slot == 0 || slot in skip_slots) && continue
+            _record_rule!("init($(var_name))", :equation, :setup_compiled)
+            u0[slot] = _eval_node(_compile_in(cs, _resolve_in(cs, eq.rhs)), u0, pp, t0)
+            push!(seeded, slot)
+            continue
+        end
         rhs_op = eq.rhs::OpExpr
         idx_names = _output_idx_strings(rhs_op)
         ranges_dict = _ranges_dict(rhs_op)
@@ -724,7 +738,7 @@ function _seed_faq_init_u0!(
                     for d in 1:length(idx_names)
             )
             sub_body = _sub_preserving(body, idx_exprs)
-            _eval_node(_compile_in(cs, _resolve_in(cs, sub_body)), u0, pp, 0.0)
+            _eval_node(_compile_in(cs, _resolve_in(cs, sub_body)), u0, pp, t0)
         end
         lic = _percell_license(
             rule,
@@ -746,7 +760,7 @@ function _seed_faq_init_u0!(
             nothing
         if once !== nothing
             _record_rule!(rule, :equation, :setup_compiled)
-            _walk_init_once!(lic, u0, todo, once..., pp)
+            _walk_init_once!(lic, u0, todo, once..., pp, t0)
             continue
         end
         _record_rule!(rule, :equation, :setup_percell)
@@ -759,12 +773,12 @@ end
 
 # The compile-once form of an initialization equation: its body compiled once
 # against the output-index counters `refs`, walked at every cell of `todo`.
-function _walk_init_once!(::_PerCellLicense, u0, todo, refs, node::_Node, pp)
+function _walk_init_once!(::_PerCellLicense, u0, todo, refs, node::_Node, pp, t0::Float64 = 0.0)
     for (idx_tuple, slot) in todo
         for d in eachindex(refs)
             refs[d][] = idx_tuple[d]
         end
-        u0[slot] = _eval_node(node, u0, pp, 0.0)
+        u0[slot] = _eval_node(node, u0, pp, t0)
     end
     return nothing
 end

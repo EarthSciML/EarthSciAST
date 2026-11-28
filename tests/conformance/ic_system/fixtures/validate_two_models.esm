@@ -1,0 +1,85 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_validate_two_models",
+    "description": "esm-spec 11.4.3 'What validate reports': the count is per model. A sets ic(x) explicitly; B's 2*ic(x) ~ 3 mentions B's own x, which nothing sets, so B's system is one equation in one unknown and validate reports nothing.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "A": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 2.0
+        }
+      ]
+    },
+    "B": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "*",
+            "args": [
+              2.0,
+              {
+                "op": "ic",
+                "args": [
+                  "x"
+                ]
+              }
+            ]
+          },
+          "rhs": 3.0
+        }
+      ],
+      "guesses": {
+        "x": 1.0
+      }
+    }
+  }
+}

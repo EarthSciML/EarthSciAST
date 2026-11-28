@@ -634,6 +634,8 @@ def canonicalize_document(doc: Any) -> Any:
     The spellings an earlier document wrote are read as the esm-2.4.0 ones
     (esm-spec §9.6.12, §4.2): ``expression_templates`` /
     ``expression_template_imports`` as ``operators`` / ``operator_imports``,
+    a model's ``initialization_equations`` as ``ic`` equations or ``guesses``
+    (§11.4.4, the loader's rewrite),
     ``apply_expression_template`` as ``apply_operator``, and a ``D`` with a
     ``wrt`` other than ``t`` (unless it names a parameter of the enclosing
     definition), ``δ`` and ``∂`` as ``partial``. A definition's ``units`` is a
@@ -643,12 +645,26 @@ def canonicalize_document(doc: Any) -> Any:
     """
     import copy
 
+    from .errors import ParseError
+    from .ic_migration import declares_below_2_5, migrate_initialization_equations
     from .parse import _has_old_spellings, rewrite_old_spellings
     from .units import canonical_unit_spelling
 
-    if _has_old_spellings(doc):
+    if _has_old_spellings(doc) or declares_below_2_5(doc):
         doc = copy.deepcopy(doc)
         rewrite_old_spellings(doc)
+        # esm 2.5.0 (esm-spec §11.4.4, §9.6.6 `deprecated_field`): the
+        # canonical form, and so every printer, carries no
+        # `initialization_equations`; the loader's rewrite applies here too.
+        # A document the migration refuses (an initialization equation with
+        # no `guesses` reading, a parameter's non-number value) keeps the
+        # field as written.
+        migrated = copy.deepcopy(doc)
+        try:
+            migrate_initialization_equations(migrated)
+            doc = migrated
+        except ParseError:
+            pass
 
     def rewrite_deprecated(node: dict) -> dict:
         op, args = node.get("op"), node.get("args")

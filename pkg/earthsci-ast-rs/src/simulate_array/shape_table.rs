@@ -387,6 +387,7 @@ mod tests {
             crate::simulate_array::BuildInput::Flattened {
                 flat: &flat,
                 inherited: None,
+                init: None,
             },
             index_sets,
         )

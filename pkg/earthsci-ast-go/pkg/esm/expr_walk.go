@@ -446,9 +446,6 @@ func mapModelExprs(m *Model, f func(Expression) (Expression, error)) error {
 	if err := mapEquationExprs(m.Equations, f); err != nil {
 		return err
 	}
-	if err := mapEquationExprs(m.InitializationEquations, f); err != nil {
-		return err
-	}
 	if err := mapDiscreteEventExprs(m.DiscreteEvents, f); err != nil {
 		return err
 	}

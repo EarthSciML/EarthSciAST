@@ -452,6 +452,9 @@ export const ERROR_CODES = {
   //   bindings; registered here because every registry lists the vocabulary.
   IC_SYSTEM_UNBALANCED: 'ic_system_unbalanced',
   IC_SYSTEM_UNSOLVED: 'ic_system_unsolved',
+  // esm 2.5.0 (esm-spec §4.2): an `ic` whose argument is neither a variable
+  //   reference nor `D` of one, refused at load.
+  IC_INVALID_ARGUMENT: 'ic_invalid_argument',
   OPERATOR_BODY_EXPANSION_TOO_DEEP: 'operator_body_expansion_too_deep',
   // A SURVIVING registry body that names a variable a COUPLING rule rewrote out
   //   of the flattened equations -- a `variable_map` substitution target, or a

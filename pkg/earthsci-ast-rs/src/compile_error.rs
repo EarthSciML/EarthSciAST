@@ -650,6 +650,9 @@ pub const IMPLICIT_EQUATION: &str = "implicit equation";
 /// `update.kind` is `"wiener"`: it makes the document an SDE, which no Rust
 /// evaluator integrates.
 pub const WIENER_NOISE: &str = "Wiener noise";
+/// [`CompileError::UnsupportedConstruct`]'s `construct` for the truly
+/// implicit part of an initialization system (esm-spec §11.4.3).
+pub const INITIALIZATION_SYSTEM: &str = "initialization system";
 /// The array runtime (`crate::simulate_array`), as a refusal names it.
 pub const ARRAY_EVALUATOR: &str = "Rust array evaluator";
 /// [`CompileError::UnsupportedConstruct`]'s `construct` for a `variable_map`
@@ -769,10 +772,14 @@ pub fn first_implicit_equation(
     use crate::classification::{LhsFormRef, lhs_form_ref};
     use crate::types::Expr;
     equations.iter().find(|eq| {
+        // An initialization equation is not one (esm-spec §9.6.6): the
+        // initialization system handles it.
+        if crate::initialization::is_initialization_equation(eq) {
+            return false;
+        }
         let structural = matches!(
             &eq.lhs,
-            Expr::Operator(n) if n.op == "ic"
-                || n.op == "partial"
+            Expr::Operator(n) if n.op == "partial"
                 || (n.op == "D" && n.wrt.as_deref().is_some_and(|w| w != "t"))
         );
         !structural && matches!(lhs_form_ref(&eq.lhs), LhsFormRef::Expression)

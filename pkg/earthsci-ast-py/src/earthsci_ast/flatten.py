@@ -20,7 +20,16 @@ from typing import Any
 from . import compiler as _compiler
 from . import op_registry
 from ._show import canonical_key
-from .classification import inlined_unknowns, observed_unknowns, ode_states
+from .classification import (
+    cells_set,
+    explicit_initial_condition,
+    index_set_extent,
+    inlined_unknowns,
+    is_initial_condition,
+    observed_unknowns,
+    ode_states,
+)
+from .error_handling import CONFLICTING_DERIVATIVE
 from .errors import EarthSciAstError
 from .esm_types import (
     ARRAY_OPS,
@@ -80,7 +89,11 @@ class FlattenError(EarthSciAstError):
 
 
 class ConflictingDerivativeError(FlattenError):
-    """Two systems define non-additive equations for the same dependent variable."""
+    """Two systems define non-additive equations for the same dependent variable,
+    or two explicit initial conditions set the same cell of one unknown
+    (esm-spec §11.4.3)."""
+
+    code = CONFLICTING_DERIVATIVE
 
 
 class CoupleMultiplicativeNoTendencyError(FlattenError):
@@ -650,6 +663,9 @@ class FlattenedSystem:
     # Empty ⇒ the system has no data-loader subsystems, so solve() behaves
     # exactly as before (no injection path).
     loader_fields: list[LoaderField] = field(default_factory=list)
+    # Every component's `guesses` (esm-spec §6.2), namespaced: the starting
+    # point of an unknown of the initialization system (esm-spec §11.4.3).
+    guesses: dict[str, Expr] = field(default_factory=dict)
     # Concrete integer grid shapes assigned by the pointwise spatial lift
     # (esm-spec §10.5) to each lifted state variable, e.g.
     # ``{"Chemistry.O3": (4, 2)}``. The state's ``shape`` names the index sets
@@ -706,11 +722,12 @@ class FlattenedSystem:
     # `equations` is then directly usable as a right-hand side without filtering,
     # and its length is comparable across bindings.
     field_ics: list[tuple[str, Expr]] = field(default_factory=list)
-    # The `faq`-valued initialization equations (esm-spec §6.2, equations that
-    # hold at t = 0) as ordered, namespaced `(target_state, faq)` pairs: each
-    # assigns the cells of its ranges when the initial state is built. The other
-    # spellings of an initialization equation name no cells and are not carried.
-    initialization_faqs: list[tuple[str, Expr]] = field(default_factory=list)
+    # Every initialization equation (esm-spec §11.4.3: an equation that
+    # mentions `ic`) that is NOT an explicit initial condition, in document
+    # order, namespaced and rewritten as `equations` are (esm-libraries-spec
+    # §4.7.5 step 4, esm 2.5.0). These are the equations of the initialization
+    # system; like `field_ics` they are classified OUT of `equations`.
+    initialization_equations: list[FlattenedEquation] = field(default_factory=list)
 
     @property
     def system_kind(self) -> str:
@@ -1182,7 +1199,7 @@ class _ComponentSystem:
     observed: OrderedDict[str, FlattenedVariable] = field(default_factory=OrderedDict)
     equations: list[FlattenedEquation] = field(default_factory=list)
     loader_fields: list[LoaderField] = field(default_factory=list)
-    initialization_faqs: list[tuple[str, Expr]] = field(default_factory=list)
+    guesses: dict[str, Expr] = field(default_factory=dict)
 
     def merge(self, other: _ComponentSystem) -> None:
         """Fold ``other``'s tables into this component (last-writer-wins for the
@@ -1198,7 +1215,7 @@ class _ComponentSystem:
         self.observed.update(other.observed)
         self.equations.extend(other.equations)
         self.loader_fields.extend(other.loader_fields)
-        self.initialization_faqs.extend(other.initialization_faqs)
+        self.guesses.update(other.guesses)
 
 
 def _namespace_variable_update(
@@ -1565,34 +1582,35 @@ def _collect_model(
         locals_=locals_,
     )
 
-    # The `faq`-valued initialization equations (esm-spec §6.2), namespaced in
-    # the same scope as the equations.
-    for eq in model.initialization_equations:
-        rhs = eq.rhs
-        if (
-            isinstance(eq.lhs, str)
-            and isinstance(rhs, ExprNode)
-            and is_aggregate_op(rhs.op)
-            and rhs.output_idx
-        ):
-            component.initialization_faqs.append(
-                (
-                    _namespace_expr(
-                        eq.lhs,
-                        full_prefix,
-                        leave_alone=leave_alone,
-                        subsystem_keys=sub_keys,
-                        locals_=locals_,
-                    ),
-                    _namespace_expr(
-                        rhs,
-                        full_prefix,
-                        leave_alone=leave_alone,
-                        subsystem_keys=sub_keys,
-                        locals_=locals_,
-                    ),
-                )
+    # A deprecated `initialization_equations` block on a model built in code
+    # (a loaded document's was rewritten at the wire boundary, esm-spec
+    # §11.4.4): read as the loader reads it.
+    legacy, legacy_guesses = _legacy_initialization_equations(model)
+    # The model's `guesses` (esm-spec §6.2), namespaced: starting points of
+    # the initialization system's unknowns (§11.4.3).
+    guesses = {**legacy_guesses, **(getattr(model, "guesses", None) or {})}
+    for gname, gexpr in guesses.items():
+        component.guesses[
+            _namespace_expr(
+                gname,
+                full_prefix,
+                leave_alone=leave_alone,
+                subsystem_keys=sub_keys,
+                locals_=locals_,
             )
+        ] = _namespace_expr(
+            gexpr, full_prefix, leave_alone=leave_alone, subsystem_keys=sub_keys, locals_=locals_
+        )
+
+    if legacy:
+        _namespace_equations(
+            legacy,
+            component,
+            full_prefix,
+            leave_alone,
+            subsystem_keys=sub_keys,
+            locals_=locals_,
+        )
 
     # Data-fed parameters (esm-spec §8.5): the simulator executes each source at
     # its cadence and binds the array under the parameter's namespaced name.
@@ -3001,7 +3019,7 @@ def _assemble_system(
     for name, var in combined.observed.items():
         flat.observed_variables[name] = var
     flat.loader_fields.extend(combined.loader_fields)
-    flat.initialization_faqs.extend(combined.initialization_faqs)
+    flat.guesses.update(combined.guesses)
 
     seen_lhs: dict[str, FlattenedEquation] = {}
     for eq in combined.equations:
@@ -3243,56 +3261,109 @@ def _classify_flattened(flat: FlattenedSystem) -> None:
 
 
 def _collect_field_ics(flat: FlattenedSystem) -> None:
-    """Record the deferred ``ic`` equations (esm-spec §11.4.1) as ordered
-    ``(target_state, rhs)`` pairs on ``flat.field_ics``.
+    """Split the initialization equations (every equation that mentions ``ic``,
+    esm-spec §11.4.3) out of ``flat.equations``: the EXPLICIT initial
+    conditions go to ``flat.field_ics`` as ordered ``(target, value)`` pairs,
+    and every other one to ``flat.initialization_equations``.
 
-    An ``ic`` equation pins a state's value at t=0 — a loaded initial field, or a
-    broadcast constant — rather than defining its dynamics, so a consumer folds
-    it into ``u0`` instead of the RHS. Mirrors Rust's ``extract_ic_target``: the
-    LHS must be ``ic(<bare variable>)`` with exactly one argument.
+    An explicit initial condition is ``ic(u) ~ e`` or ``e ~ ic(u)`` with ``e``
+    mentioning no ``ic`` and ``u`` not an observed
+    (:func:`~.classification.explicit_initial_condition`); ``ic(y) ~ e`` of an
+    observed ``y`` constrains the starting values ``y`` reads and is an
+    equation of the system. Neither kind is an equation of motion, so both
+    leave ``equations`` (esm-libraries-spec §4.7.5 step 4) and the main balance.
 
-    The matched equations are CLASSIFIED OUT of ``flat.equations`` and reported
-    only here (esm-libraries-spec §4.7.5 step 4). An initial condition is a
-    datum, not an equation of motion: leaving it in ``equations`` makes that list
-    unusable for building a right-hand side without first filtering it, and makes
-    equation counts incomparable across bindings. Consumers that need the initial
-    values — the array and scalar simulators' ``u0`` folding — read ``field_ics``.
+    Two explicit initial conditions that set the same cell of one unknown are a
+    conflict, ``conflicting_derivative``; two ``faq`` values over disjoint
+    cells are not. Runs LAST, after the pointwise lift and the
+    independent-variable derivation, so every intermediate pass sees the
+    equation list it always did."""
+    observed = set(flat.observed_variables)
 
-    Runs LAST, after the pointwise lift and the independent-variable derivation,
-    so every intermediate pass still sees the same equation list it always did
-    and only the FINAL, observable ``equations`` differs.
-    """
+    def not_observed(u: str) -> bool:
+        return u not in observed
+
     ics: list[tuple[str, Expr]] = []
+    system: list[FlattenedEquation] = []
     remaining: list[FlattenedEquation] = []
     for eq in flat.equations:
-        lhs = eq.lhs
-        target = (
-            lhs.args[0]
-            if isinstance(lhs, ExprNode) and lhs.op == "ic" and len(lhs.args) == 1
-            else None
-        )
-        if isinstance(target, str):
-            ics.append((target, eq.rhs))
-        else:
+        if not is_initial_condition(eq):
             remaining.append(eq)
-    # One initial condition per state (esm-libraries-spec §4.7.5 step 4
-    # `field_ics`). Two -- an authored `ic(x)` and an operator's `ic(_var)`
-    # expanded onto `x`, or two such templates -- leave nothing to say which
-    # one holds, so the document is refused rather than one silently winning.
-    seen: set[str] = set()
-    duplicated: list[str] = []
-    for target, _ in ics:
-        if target in seen and target not in duplicated:
-            duplicated.append(target)
-        seen.add(target)
-    if duplicated:
-        raise ConflictingDerivativeError(
-            "states have more than one initial condition `ic(x)` "
-            "(an authored one and an operator's `ic(_var)` expanded onto it, "
-            f"or two such templates): {', '.join(duplicated)}"
-        )
+            continue
+        explicit = explicit_initial_condition(eq.lhs, eq.rhs, not_observed)
+        if explicit is not None:
+            ics.append(explicit)
+        else:
+            system.append(eq)
+    _refuse_conflicting_initial_conditions(flat, ics)
     flat.field_ics = ics
+    flat.initialization_equations = system
     flat.equations = remaining
+
+
+def _refuse_conflicting_initial_conditions(
+    flat: FlattenedSystem, ics: list[tuple[str, Expr]]
+) -> None:
+    """``conflicting_derivative`` for two explicit initial conditions that set
+    one cell (esm-spec §11.4.3): an authored ``ic(x)`` and an operator's
+    ``ic(_var)`` expanded onto ``x``, ``ic(u) ~ 1`` and ``2 ~ ic(u)``, or two
+    ``faq`` values over overlapping ranges. A target whose cells cannot be
+    counted statically is read as all of them."""
+    set_by: dict[str, set[int] | None] = {}
+    clashes: list[str] = []
+    for target, value in ics:
+        cells: set[int] | None = None
+        var = flat.state_variables.get(target)
+        extents = [
+            index_set_extent((flat.index_sets or {}).get(ax, {}))
+            for ax in (getattr(var, "shape", None) or [])
+        ]
+        if var is not None and None not in extents:
+            try:
+                cells = set(cells_set(value, tuple(extents), flat.index_sets))  # type: ignore[arg-type]
+            except ValueError:
+                cells = None
+        if target in set_by:
+            before = set_by[target]
+            if before is None or cells is None or before & cells:
+                if target not in clashes:
+                    clashes.append(target)
+            set_by[target] = None if before is None or cells is None else before | cells
+        else:
+            set_by[target] = cells
+    if clashes:
+        raise ConflictingDerivativeError(
+            f"{CONFLICTING_DERIVATIVE}: more than one explicit initial condition sets the same "
+            f"cell of {', '.join(clashes)} (esm-spec §11.4.3: an authored `ic(x)` and an "
+            "operator's `ic(_var)` expanded onto it, a mirrored `e ~ ic(x)`, or two `faq` "
+            "values over overlapping ranges)"
+        )
+
+
+def _legacy_initialization_equations(model: Model) -> tuple[list[Equation], dict[str, Expr]]:
+    """A code-built model's deprecated ``initialization_equations`` read
+    exactly as the loader reads them (esm-spec §11.4.4,
+    :func:`~.ic_migration.migrate_initialization_equations`): the ``ic``
+    equations it appends to the model's equations, and the ``guesses`` entries
+    it adds for a model with no time derivative. A loaded document's block was
+    rewritten at the wire boundary and never reaches here."""
+    if not getattr(model, "initialization_equations", None):
+        return [], {}
+    from .ic_migration import migrate_initialization_equations
+    from .parse import _parse_equation, _parse_expression
+    from .serialize import _serialize_model
+
+    raw = _serialize_model(model)
+    before = len(raw.get("equations") or [])
+    had = set(raw.get("guesses") or {})
+    migrate_initialization_equations({"models": {"model": raw}})
+    equations = [_parse_equation(e) for e in (raw.get("equations") or [])[before:]]
+    guesses = {
+        name: (float(g) if isinstance(g, (int, float)) else _parse_expression(g))
+        for name, g in (raw.get("guesses") or {}).items()
+        if name not in had
+    }
+    return equations, guesses
 
 
 def _merged_template_registry(esm_file: EsmFile) -> dict[str, Any]:
@@ -3607,6 +3678,10 @@ def _normalize_angle_arguments(flat: FlattenedSystem) -> None:
 
     flat.equations = [_map_contributions(eq, rewrite) for eq in flat.equations]
     flat.field_ics = [(name, rewrite(expr)) for name, expr in flat.field_ics]
+    flat.initialization_equations = [
+        replace(eq, lhs=rewrite(eq.lhs), rhs=rewrite(eq.rhs))
+        for eq in flat.initialization_equations
+    ]
     # Events are rewritten too, although no evaluator in THIS binding runs one
     # (`unsupported_construct`, esm-spec §9.6.6). The flattened form is a
     # cross-binding artefact — the Julia binding exports it to
@@ -3755,6 +3830,11 @@ def _substitute_time_derivatives(
     """Rewrite every structural ``D`` inside ``expr``, leaving the ones
     :func:`_deriv` cannot answer exactly as authored, for the gate to report."""
     if not isinstance(expr, ExprNode):
+        return expr
+    if expr.op == "ic":
+        # `ic(D(x))` is x's tendency at the STARTING values (esm-spec §11.4.2
+        # item 8), not its trajectory tendency: the initialization system reads
+        # it there, so it is kept as written.
         return expr
     if _is_structural_time_derivative(expr):
         arg = expr.args[0] if expr.args else None

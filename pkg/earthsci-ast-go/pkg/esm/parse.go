@@ -710,10 +710,6 @@ func normalizeModelLiterals(m *Model) {
 		m.Equations[i].LHS = normalizeExpression(m.Equations[i].LHS)
 		m.Equations[i].RHS = normalizeExpression(m.Equations[i].RHS)
 	}
-	for i := range m.InitializationEquations {
-		m.InitializationEquations[i].LHS = normalizeExpression(m.InitializationEquations[i].LHS)
-		m.InitializationEquations[i].RHS = normalizeExpression(m.InitializationEquations[i].RHS)
-	}
 	for name, g := range m.Guesses {
 		m.Guesses[name] = normalizeExpression(g)
 	}
@@ -857,9 +853,6 @@ func rejectCallOps(file *ESMFile) error {
 			}
 		}
 		if err := visitEquations(m.Equations); err != nil {
-			return err
-		}
-		if err := visitEquations(m.InitializationEquations); err != nil {
 			return err
 		}
 		for _, g := range m.Guesses {
@@ -1163,6 +1156,12 @@ func prepareDocumentOps(jsonStr string) (string, error) {
 	// esm 2.4.0: the old field and op spellings, read as the new names
 	// (esm-spec §9.6.12), before the `neg` / `pow` rewrite.
 	jsonStr, err := readOldSpellings(jsonStr)
+	if err != nil {
+		return "", err
+	}
+	// esm 2.5.0: the deprecated `initialization_equations` block, read as `ic`
+	// equations or `guesses` (esm-spec §11.4.4), and every `ic` argument checked.
+	jsonStr, err = readInitializationEquations(jsonStr)
 	if err != nil {
 		return "", err
 	}

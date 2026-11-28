@@ -909,13 +909,8 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// `data_source_undefined`.
 	s.validateUpdateSources(modelName, model, basePath)
 
-	// `initialization_equations` hold at t=0 but are ordinary equations, and
-	// `guesses` seed a nonlinear solve. Both name variables; neither was reached.
-	for i, eq := range model.InitializationEquations {
-		s.withEqIndex(i, func() {
-			s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/initialization_equations/%d", basePath, i), modelName)
-		})
-	}
+	// `guesses` seed a nonlinear solve; they name variables the equations did
+	// not reach.
 	s.validateGuesses(model.Guesses, allVars, basePath, modelName)
 
 	// An inline test's assertion `reference` (§6.6.5) is an expression over the
@@ -931,6 +926,9 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	if !isCoupled {
 		s.validateEquationUnknownBalance(modelName, model, basePath)
 	}
+	// esm 2.5.0 (esm-spec §11.4.3): document-level over-determination of the
+	// initialization system.
+	s.validateInitializationOverdetermination(model, basePath)
 
 	// The §6.4 operator placeholder. In an operator-composed / coupled model
 	// `_var` stands for each matching state variable of the system this one is
@@ -1598,16 +1596,22 @@ func computeEquationBalance(model *Model) (EquationBalance, bool) {
 	credited := make(map[string]bool)
 	extraSet := make(map[string]bool)
 	for _, eq := range model.Equations {
-		// An `ic`-op equation PRESCRIBES an initial value; it is not a
-		// determining equation and does not count toward the balance, exactly as
-		// `initialization_equations` (its out-of-band spelling) does not
-		// (esm-spec §4.9.4, §11.4). It still CREDITS its target: an unknown held
-		// at its initial value and exported through a coupling is defined, not
-		// missing (tests/valid/wildfire_atmosphere_ocean.esm's wind_u/wind_v).
-		if node, ok := asExprNode(eq.LHS); !ok || node.Op != OpIC {
+		// An initialization equation (one that mentions `ic` anywhere, esm-spec
+		// §11.4) holds at the start of the run only: it has the separate balance
+		// of §11.4.3 and does not count here (§11.4.4 "Balance"). An explicit
+		// initial condition still CREDITS its target: an unknown held at its
+		// initial value and exported through a coupling is defined, not missing
+		// (tests/valid/wildfire_atmosphere_ocean.esm's wind_u/wind_v).
+		targets := equationCreditTargets(eq)
+		if isInitializationEquation(eq.LHS, eq.RHS) {
+			targets = nil
+			if target, _, ok := explicitInitialCondition(eq.LHS, eq.RHS); ok {
+				targets = []string{target}
+			}
+		} else {
 			bal.Equations++
 		}
-		for _, target := range equationCreditTargets(eq) {
+		for _, target := range targets {
 			// A SCOPED target (`D(Chemistry.O3, t)`) drives a variable owned by
 			// ANOTHER system and says nothing about this model's balance.
 			if strings.Contains(target, ".") {
@@ -1648,16 +1652,8 @@ func equationCreditTargets(eq Equation) []string {
 	}
 	// A non-differential equation credits the variable its LHS assigns to: a
 	// bare-variable or element-wise definition (`v ~ f(…)`,
-	// `index(v,i) ~ aggregate(…)`), or an `ic` prescription — an unknown with an
-	// initial condition and no dynamics is a PRESCRIBED field, held at its
-	// initial value and typically exported through a coupling
-	// (tests/valid/wildfire_atmosphere_ocean.esm's wind_u/wind_v).
+	// `index(v,i) ~ aggregate(…)`).
 	target := extractVariableFromLHS(eq.LHS)
-	if target == "" {
-		if node, ok := asExprNode(eq.LHS); ok && node.Op == OpIC && len(node.Args) > 0 {
-			target = extractVariableFromLHS(node.Args[0])
-		}
-	}
 	if target == "" {
 		return nil
 	}
@@ -2702,20 +2698,21 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 	}
 	s.validateTestRefs(system.Tests, allVars, basePath, systemName)
 
-	// v0.8.0 §11.4.1: an `ic`-op equation MUST NOT appear inside a reaction
+	// v0.8.0 §11.4.1: an `ic` equation MUST NOT appear inside a reaction
 	// system's `constraint_equations`. A reaction system has no `equations`
 	// field and hosts no ICs — a species' initial value is its scalar
 	// `species.default`, or a scoped-reference `ic` equation in a MODEL. The
 	// document is schema-valid (`constraint_equations` is an array of Equation
 	// and `ic` is a legal op) but is rejected here structurally.
 	for i, eq := range system.ConstraintEquations {
-		node, ok := asExprNode(eq.LHS)
-		if !ok || node.Op != OpIC {
+		// An initialization equation: one that mentions `ic` anywhere (§11.4).
+		ics := icArgsOf(eq.RHS, icArgsOf(eq.LHS, nil))
+		if len(ics) == 0 {
 			continue
 		}
 		species := ""
-		if len(node.Args) > 0 {
-			if sp, ok := node.Args[0].(string); ok {
+		if len(ics[0]) > 0 {
+			if sp, ok := ics[0][0].(string); ok {
 				species = sp
 			}
 		}

@@ -99,12 +99,13 @@ struct _EquationPartition
     geom_setup_arrays::Dict{String, AbstractArray{Float64}}
     derived_extents::Dict{String, Int}
     equations::Vector{Equation}
-    init_equations::Vector{Equation}
     discrete_defs::Dict{String, ASTExpr}
     eq_ics::Dict{String, Float64}
     field_ics::Vector{Tuple{String, ASTExpr}}
     ic_start::_IcStart
     ic_plan::_IcPlan
+    # The initialization system (esm-spec §11.4.3), its seeds range-resolved.
+    ic_system::_IcSystem
 end
 
 # Phase 3: the state layout, the initial state and the parameter tuple.
@@ -132,8 +133,9 @@ _n_total(L::_StatePlan) = length(L.var_map_ext)
 _with_equations(parts::_EquationPartition, equations::Vector{Equation}) =
     _EquationPartition(
     parts.param_names, parts.observed_names, parts.state_var_names, parts.param_scope,
-    parts.geom_setup_arrays, parts.derived_extents, equations, parts.init_equations,
-    parts.discrete_defs, parts.eq_ics, parts.field_ics, parts.ic_start, parts.ic_plan
+    parts.geom_setup_arrays, parts.derived_extents, equations,
+    parts.discrete_defs, parts.eq_ics, parts.field_ics, parts.ic_start, parts.ic_plan,
+    parts.ic_system
 )
 
 # The observed substitution split (`_split_observed_and_derivatives`): the
@@ -379,6 +381,9 @@ mutable struct BuildProducts
     stats::NamedTuple
     kernels::AbstractVector
     forcing_epoch::_ForcingEpoch
+    # What the strip class `initialization` took (`_StrippedInitialization`),
+    # or `nothing`.
+    ic_stripped::Any
 end
 BuildProducts() = BuildProducts(
     Dict{String, Array{Float64}}(), Dict{String, Any}(), Dict{String, ASTExpr}(),
@@ -386,7 +391,7 @@ BuildProducts() = BuildProducts(
     CompilerReport(:native),
     Dict{String, ASTExpr}(), Dict{String, Int}(),
     NamedTuple(), Dict{String, Int}(),
-    Int[], nothing, nothing, NamedTuple(), Any[], _new_forcing_epoch()
+    Int[], nothing, nothing, NamedTuple(), Any[], _new_forcing_epoch(), nothing
 )
 
 """

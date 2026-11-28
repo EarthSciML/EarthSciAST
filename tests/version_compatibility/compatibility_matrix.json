@@ -1,7 +1,7 @@
 {
   "version_compatibility_test_matrix": {
-    "description": "Expected behavior for ESM format version compatibility testing. Re-based on esm 2.0.0 (library at 2.4.0: 2.1.0 added `lb` / `ub` variable bounds, esm-spec §6.3.2, 2.2.0 widened the pointwise lift, esm-spec §10.5, with no on-disk change, and 2.3.0 deprecated `neg` / `pow`, esm-spec §4.2, and added the canonical unit spelling, esm-spec §4.8.2, and the Markdown / Typst source formats, esm-spec §1.2, also with no on-disk change, and 2.4.0 made `grad`, `div` and `laplacian` ordinary operator names, with no on-disk change): 2.0.0 removed the operators and fields that needed code outside the expression AST (fn, function_tables/table_lookup, skolem, rank, argmin/argmax, the geometry leaves, the aggregate alias) and otherwise changed nothing, so the library implements major version 2 AND still loads major 1 (user ruling): a 1.x document that uses no removed construct loads as written, its own 1.x version gates (solver_*, const units, faq too old) still apply, and one that uses a removed construct is refused with `removed_op`, naming `python -m earthsci_ast.migrate`. Major 0 is REJECTED (the 1.0.0 break carries no deprecation path), and so is any major above 2. Each fixture declares the version it is NAMED for — these files exercise the version GATE, and a fixture restamped to the library's own version tests nothing.",
-    "library_version": "2.4.0",
+    "description": "Expected behavior for ESM format version compatibility testing. Re-based on esm 2.0.0 (library at 2.5.0: 2.1.0 added `lb` / `ub` variable bounds, esm-spec §6.3.2, 2.2.0 widened the pointwise lift, esm-spec §10.5, with no on-disk change, and 2.3.0 deprecated `neg` / `pow`, esm-spec §4.2, and added the canonical unit spelling, esm-spec §4.8.2, and the Markdown / Typst source formats, esm-spec §1.2, also with no on-disk change, and 2.4.0 made `grad`, `div` and `laplacian` ordinary operator names, with no on-disk change, and 2.5.0 generalized `ic` equations and deprecated `initialization_equations`, which a loader rewrites, esm-spec §11.4.4): 2.0.0 removed the operators and fields that needed code outside the expression AST (fn, function_tables/table_lookup, skolem, rank, argmin/argmax, the geometry leaves, the aggregate alias) and otherwise changed nothing, so the library implements major version 2 AND still loads major 1 (user ruling): a 1.x document that uses no removed construct loads as written, its own 1.x version gates (solver_*, const units, faq too old) still apply, and one that uses a removed construct is refused with `removed_op`, naming `python -m earthsci_ast.migrate`. Major 0 is REJECTED (the 1.0.0 break carries no deprecation path), and so is any major above 2. Each fixture declares the version it is NAMED for — these files exercise the version GATE, and a fixture restamped to the library's own version tests nothing.",
+    "library_version": "2.5.0",
     "migration_notes": {
       "0.x_to_1.0.0": {
         "summary": "Unified variable model — `states` and `observed` collapse into one `unknown` type whose behaviour is stated by equations, the per-variable `expression` field is removed, `brownian` and `discrete` become parameters carrying a `distribution` / `update`, and `data_loaders` becomes `data_sources`, a pure ingest registry. A CLEAN BREAK: a 1.0.0 library rejects every 0.x document rather than migrating it. See esm-spec.md §6.3 and §8.5.",
@@ -39,6 +39,16 @@
         ],
         "migration_path": [
           "None needed. To keep a model classified as a PDE, write the derivative with spatial `D` (MIGRATION.md, esm 2.4.0 section)."
+        ]
+      },
+      "2.4.0_to_2.5.0": {
+        "summary": "`ic(v)` may appear anywhere in an equation, and every equation that mentions it is an initialization equation (esm-spec §11.4.3). `initialization_equations` is deprecated: a loader rewrites it into `ic` equations, or into `guesses` for a model with no time derivative, with the warning `deprecated_field` (§11.4.4). Every 2.4.0 document loads.",
+        "breaking_changes": [
+          "In a model with no time derivative, an initialization equation whose left-hand side is not a bare unknown is refused at load with `deprecated_field`.",
+          "An `ic` whose argument is not a variable or `D` of one is refused at load with `ic_invalid_argument`."
+        ],
+        "migration_path": [
+          "None needed: the loader rewrites `initialization_equations`. Write `ic` equations instead (esm-spec §11.4.3)."
         ]
       }
     },
@@ -126,7 +136,14 @@
         "file": "version_2_4_0_baseline.esm",
         "file_version": "2.4.0",
         "expected_behavior": "load_success",
-        "description": "Exact version match - should load successfully, with no version warning. 2.4.0 changes no on-disk shape (`grad`, `div` and `laplacian` became ordinary operator names, esm-spec §4.2), so this document is the 2.0.0 baseline restamped.",
+        "description": "An EARLIER minor of the supported major since the esm 2.5.0 bump, loaded without warning. It held the exact-version-match role while the library was 2.4.0; version_2_5_0_baseline.esm now holds that role. 2.4.0 changes no on-disk shape (`grad`, `div` and `laplacian` became ordinary operator names, esm-spec §4.2), so this document is the 2.0.0 baseline restamped.",
+        "warnings": []
+      },
+      {
+        "file": "version_2_5_0_baseline.esm",
+        "file_version": "2.5.0",
+        "expected_behavior": "load_success",
+        "description": "Exact version match - should load successfully, with no version warning. This document uses neither generalized `ic` equations nor `initialization_equations`, so it is the 2.4.0 baseline restamped.",
         "warnings": []
       },
       {
@@ -169,10 +186,17 @@
       {
         "file": "version_2_5_1_major_rejection.esm",
         "file_version": "2.5.1",
+        "expected_behavior": "load_success",
+        "description": "2.5.1 - the library's own minor with a newer patch: fully compatible, no warning. It was the future-major rejection while the library was 1.x and the newer-minor warning while it was 2.4.0; version_3_0_0_major_rejection.esm and version_2_6_0_newer_minor.esm took those roles.",
+        "warnings": []
+      },
+      {
+        "file": "version_2_6_0_newer_minor.esm",
+        "file_version": "2.6.0",
         "expected_behavior": "load_with_warning",
-        "description": "2.5.1 - a NEWER minor of the supported major 2: loaded with a warning. It was the future-major rejection while the library was 1.x; version_3_0_0_major_rejection.esm took that role.",
+        "description": "2.6.0 - a NEWER minor of the supported major 2: loaded with a warning.",
         "warnings": [
-          "2.5.1 is newer than the current library version 2.4.0. Some features may not be supported."
+          "2.6.0 is newer than the current library version 2.5.0. Some features may not be supported."
         ]
       },
       {

@@ -1,0 +1,103 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_disjoint_faq",
+    "description": "esm-spec 11.4.3: two explicit initial conditions over disjoint cells of u (i in [1,1] and i in [2,3]) are not a conflict.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "index_sets": {
+    "n": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "n"
+          ],
+          "default": 100.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": 0.0
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                1
+              ]
+            },
+            "expr": 1.0
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                2,
+                3
+              ]
+            },
+            "expr": 2.0
+          }
+        }
+      ]
+    }
+  }
+}

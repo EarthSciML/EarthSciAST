@@ -69,13 +69,20 @@ class TestVersionCompatibility:
         version_2_0_0_baseline.esm until esm 2.1.0,
         version_2_1_0_variable_bounds.esm until esm 2.2.0, and
         version_2_2_0_pointwise_lift.esm until esm 2.3.0, and
-        version_2_3_0_deprecated_neg.esm until esm 2.4.0.
+        version_2_3_0_deprecated_neg.esm until esm 2.4.0, and
+        version_2_4_0_baseline.esm until esm 2.5.0.
         """
-        fixture = load_fixture("version_2_4_0_baseline.esm")
+        fixture = load_fixture("version_2_5_0_baseline.esm")
         assert fixture["esm"] == _EXPECTED_VERSION
         with no_version_warning():
             result = load_document(fixture)
         assert result.esm == _EXPECTED_VERSION
+
+        # The earlier minor of the current major loads as written, with no
+        # warning.
+        with no_version_warning():
+            result = load_document(load_fixture("version_2_4_0_baseline.esm"))
+        assert result.esm == "2.4.0"
 
         # The 2.3.0 fixture spells unary minus with the deprecated `neg`, so
         # its load also warns `deprecated_op` (not a version warning); the
@@ -208,11 +215,21 @@ class TestVersionCompatibility:
             load_document(fixture)
 
     def test_major_version_2_5_1(self):
-        """2.5.1 is a newer minor of the current major: it loads with a warning.
+        """2.5.1 is a newer PATCH of the current version: it loads with no
+        version warning."""
+        assert _CURRENT_VERSION[:2] == (2, 5)
+        with no_version_warning():
+            load_document(load_fixture("version_2_5_1_major_rejection.esm"))
+
+    def test_newer_minor_2_6_0(self):
+        """2.6.0 is a newer minor of the current major: it loads with a warning.
         A future major is rejected (``test_large_version_numbers_rejection``)."""
         assert _CURRENT_VERSION[0] == 2
-        with pytest.warns(UserWarning, match="2.5.1 is newer than"):
-            load_document(load_fixture("version_2_5_1_major_rejection.esm"))
+        with pytest.warns(
+            UserWarning,
+            match="2.6.0 is newer than the current library version 2.5.0",
+        ):
+            load_document(load_fixture("version_2_6_0_newer_minor.esm"))
 
     def test_invalid_version_string(self):
         """Should reject invalid version string format."""

@@ -4,8 +4,8 @@
  * mass-action dimensional constraint on reaction rates.
  */
 
-import { isExprNode } from '../expression.js'
 import { ERROR_CODES } from '../errors.js'
+import { icNodes } from '../initialization.js'
 import {
   checkDimensions,
   tryParseUnit,
@@ -159,15 +159,12 @@ export function validateReactionSystemICs(
   if (!constraintEquations) return errors
 
   for (let i = 0; i < constraintEquations.length; i++) {
-    const lhs = constraintEquations[i]?.lhs
-    if (!isExprNode(lhs)) continue
-    const node = lhs
-    if (node.op !== 'ic') continue
-
-    let species: string | null = null
-    if (node.args && node.args.length > 0 && typeof node.args[0] === 'string') {
-      species = node.args[0]
-    }
+    const eq = constraintEquations[i]
+    // An initialization equation: one that mentions `ic` anywhere (esm-spec §11.4).
+    const ics = eq === undefined ? [] : [...icNodes(eq.lhs), ...icNodes(eq.rhs)]
+    if (ics.length === 0) continue
+    const first = ics[0]!.args?.[0]
+    const species = typeof first === 'string' ? first : null
 
     errors.push({
       path: `${systemPath}/constraint_equations/${i}`,

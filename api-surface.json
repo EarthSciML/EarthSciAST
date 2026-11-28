@@ -1299,6 +1299,14 @@
       }
     },
     {
+      "name": "code_ic_invalid_argument",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeICInvalidArgument"
+      }
+    },
+    {
       "name": "code_indexed_definition_unsupported_form",
       "kind": "constant",
       "tier": "extension",
@@ -7781,6 +7789,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "StrippedEvent"
+      }
+    },
+    {
+      "name": "stripped_initialization",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "StrippedInitialization"
       }
     },
     {

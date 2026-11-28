@@ -102,9 +102,12 @@ fn a_true_body_counts_instead_of_panicking() {
 /// test.
 #[test]
 fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
-    let cases: [(&str, serde_json::Value); 4] = [
+    // `ic` is not on this list: from esm 2.5.0 an equation that reads `ic`
+    // anywhere is an initialization equation (esm-spec §11.4.3), taken out of
+    // the dynamics and evaluated or solved at `t0` by the initialization
+    // system, never by the evaluator (`tests/ic_system_conformance.rs`).
+    let cases: [(&str, serde_json::Value); 3] = [
         ("distinct", json!({ "op": "distinct", "args": ["row"] })),
-        ("ic", json!({ "op": "ic", "args": ["row"] })),
         ("enum", json!({ "op": "enum", "args": ["colors", "red"] })),
         (
             "apply_operator",
@@ -241,9 +244,12 @@ fn no_scalar_document_both_validates_and_returns_nan() {
     }
     use Validates::*;
 
-    let cases: [(&str, Validates, serde_json::Value); 4] = [
+    // `ic` is not on this list: `ic(p)` of a parameter is refused at load
+    // (`ic_invalid_argument`, esm-spec §4.2), and an equation that reads `ic`
+    // of an unknown is an initialization equation (esm 2.5.0), which the
+    // initialization system evaluates, not the evaluator.
+    let cases: [(&str, Validates, serde_json::Value); 3] = [
         ("distinct", Yes, json!({ "op": "distinct", "args": ["p"] })),
-        ("ic", Yes, json!({ "op": "ic", "args": ["p"] })),
         (
             "enum",
             NoBecauseSymbolOperands,

@@ -9,7 +9,7 @@
 //! so neither assembles these stages by hand and they run in one order. Their
 //! product, [`NormalizedModel`], is the only input the later stages accept.
 
-use super::compile::{apply_shape_rewrites_with, model_from_flattened};
+use super::compile::{apply_shape_rewrites_with, model_from_flattened, model_from_flattened_with};
 use super::recurrence_group::lower_recurrence_groups;
 use super::shape_table::ShapeTable;
 use super::{HashMap, IndexSet};
@@ -31,10 +31,13 @@ pub(crate) enum BuildInput<'a> {
     /// A flattened system: every name dot-namespaced, the coupling applied.
     /// `inherited` is the shape table of the build of a system this one was
     /// cut from (`ArrayCompiled::from_flattened_shaped`), whose decided
-    /// shapes this one may no longer decide.
+    /// shapes this one may no longer decide. `init` is the system's
+    /// initialization system when the caller analysed it already
+    /// ([`crate::initialization::InitSystem::of`]).
     Flattened {
         flat: &'a FlattenedSystem,
         inherited: Option<&'a ShapeTable>,
+        init: Option<&'a crate::initialization::InitSystem>,
     },
 }
 
@@ -88,7 +91,14 @@ pub(crate) fn normalize(
             unqualify(&mut model, local);
             (model, None)
         }
-        BuildInput::Flattened { flat, inherited } => (model_from_flattened(flat), inherited),
+        BuildInput::Flattened {
+            flat,
+            inherited,
+            init: Some(init),
+        } => (model_from_flattened_with(flat, init), inherited),
+        BuildInput::Flattened {
+            flat, inherited, ..
+        } => (model_from_flattened(flat), inherited),
     };
     // The lift may add definitions; the build resolves against the result.
     let mut shapes = apply_shape_rewrites_with(&mut model, &index_sets, inherited, &mut registry)?;

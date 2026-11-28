@@ -220,7 +220,8 @@ function _build_var_dict(flat::FlattenedSystem)
     # parameter values into ODEProblem construction without
     # requiring the caller to pass u0/p maps manually.
     _with_default(v, val) =
-        val === nothing ? v : Symbolics.setdefaultval(v, Float64(val))
+        val === nothing ? v :
+        Symbolics.setdefaultval(v, val isa AbstractVector{<:Real} ? Float64.(val) : Float64(val))
 
     _with_description(v, desc_text) =
         desc_text === nothing ? v :

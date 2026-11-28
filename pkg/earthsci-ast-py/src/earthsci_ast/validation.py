@@ -46,8 +46,22 @@ from typing import Any
 
 from jsonschema import ValidationError as JsonSchemaValidationError
 
-from .classification import observed_unknowns, ode_states
-from .error_handling import DEFINITION_UNIT_MISMATCH, KEY_PRECISION_UNSPECIFIED, ErrorCode
+from .classification import (
+    explicit_initial_condition,
+    faq_output_box,
+    ic_target,
+    index_set_extent,
+    is_initial_condition,
+    observed_unknowns,
+    ode_states,
+    walk,
+)
+from .error_handling import (
+    DEFINITION_UNIT_MISMATCH,
+    IC_SYSTEM_UNBALANCED,
+    KEY_PRECISION_UNSPECIFIED,
+    ErrorCode,
+)
 from .esm_types import EsmFile
 from .parse import SchemaValidationError, SubsystemRefError, load_path, load_string
 from .precision import unspecified_keys
@@ -267,6 +281,10 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
 
         # 1. Equation-Unknown Balance validation
         _validate_equation_balance_enhanced(esm_file, structural_errors)
+
+        # 1a. Over-determination of the initialization system that the
+        # document shows by itself (esm-spec §11.4.3, "What validate reports").
+        _validate_ic_system_overdetermination(esm_file, structural_errors)
 
         # 1b. A cycle among observeds across a model or subsystem boundary
         # (esm-spec §4.9.7), on the parsed tree, so a subsystem mounted by
@@ -557,20 +575,6 @@ def _validate_content_presence(esm_file: EsmFile, structural_errors: list[Valida
         )
 
 
-def _is_initial_condition_equation(equation) -> bool:
-    """True if an equation's LHS is an ``ic`` node (an initial-condition spec).
-
-    An ``ic`` equation (``{op:"ic", args:[state]}`` = value) pins a state's
-    starting value; it is NOT a governing equation that determines an unknown, so
-    it must be excluded from the equation-unknown balance count. A model may
-    therefore carry one governing ``D``/algebraic equation per state PLUS any
-    number of ``ic`` equations (e.g. a second-order system supplying ICs for both
-    the value and its derivative) without tripping the balance check.
-    """
-    lhs = getattr(equation, "lhs", None)
-    return getattr(lhs, "op", None) == "ic"
-
-
 def _is_operator_style(model) -> bool:
     """True if the model is an OPERATOR (spec §6.4) — its equations are written
     against the reserved ``_var`` placeholder rather than against locally
@@ -631,10 +635,9 @@ def _validate_equation_balance_enhanced(
         )
         num_unknowns = len(unknown_names)
 
-        # Count governing equations only — `ic` equations pin initial conditions,
-        # not unknowns, so they do not participate in the balance (see
-        # `_is_initial_condition_equation`).
-        num_equations = sum(1 for eq in model.equations if not _is_initial_condition_equation(eq))
+        # Count governing equations only: every equation that mentions `ic` is
+        # an initialization equation (esm-spec §4.9.4, §11.4.3) and stays out.
+        num_equations = sum(1 for eq in model.equations if not is_initial_condition(eq))
 
         if num_equations == num_unknowns:
             continue
@@ -667,6 +670,116 @@ def _validate_equation_balance_enhanced(
                 details=details,
             )
         )
+
+
+class _UnreadableExtent(Exception):
+    """A count ``validate``'s over-determination check needs is not in the
+    document: it makes no finding on that model."""
+
+
+def _validate_ic_system_overdetermination(
+    esm_file: EsmFile, structural_errors: list[ValidationError]
+) -> None:
+    """esm-spec §11.4.3 "What validate reports", per model: the initialization
+    equations that are not explicit initial conditions, in scalar equations (a
+    side that is a ``faq`` with output indices counts one per cell of its
+    ranges, any other equation one), against the cells of the starting values
+    they mention, a value counting all its cells unless one explicit initial
+    condition of the model sets every one of them. More equations than cells
+    is over-determination the document shows before any supplied value:
+    ``ic_system_unbalanced``. A model whose count needs an extent the document
+    does not state (an index set without a size, a scoped name, ``ic(D(x))``)
+    gets no finding; everything else in the balance is the build's."""
+    sets = getattr(esm_file, "index_sets", None) or {}
+
+    def box_cells(box: list[tuple[int, int]]) -> int:
+        return math.prod(max(hi - lo + 1, 0) for lo, hi in box)
+
+    def extents_of(model: Any, name: str) -> list[int]:
+        var = (getattr(model, "variables", None) or {}).get(name)
+        if var is None:
+            raise _UnreadableExtent(name)
+        out = []
+        for ax in getattr(var, "shape", None) or []:
+            n = index_set_extent(sets[ax]) if ax in sets else None
+            if n is None:
+                raise _UnreadableExtent(ax)
+            out.append(n)
+        return out
+
+    def count(model: Any) -> tuple[int, int, list[str]] | None:
+        explicit: list[tuple[str, Any]] = []
+        others = []
+        for eq in getattr(model, "equations", None) or []:
+            if not is_initial_condition(eq):
+                continue
+            found = explicit_initial_condition(eq.lhs, eq.rhs)
+            if found is not None:
+                explicit.append(found)
+            else:
+                others.append(eq)
+        if not others:
+            return None
+        try:
+            n_eq = 0
+            mentioned: list[str] = []
+            for eq in others:
+                boxes = [faq_output_box(side, sets) for side in (eq.lhs, eq.rhs)]
+                box = next((b for b in boxes if b is not None), None)
+                n_eq += box_cells(box) if box is not None else 1
+                for node in (*walk(eq.lhs), *walk(eq.rhs)):
+                    if getattr(node, "op", None) == "ic":
+                        name = ic_target(node)
+                        if name is None:
+                            raise _UnreadableExtent("ic(D(x))")
+                        if name not in mentioned:
+                            mentioned.append(name)
+            free: list[str] = []
+            room = 0
+            for name in mentioned:
+                extents = extents_of(model, name)
+                full = [(1, n) for n in extents]
+                covered = False
+                for target, value in explicit:
+                    if target == name:
+                        box = faq_output_box(value, sets)
+                        covered = covered or box is None or box == full
+                if not covered:
+                    free.append(name)
+                    room += math.prod(extents)
+        except (_UnreadableExtent, ValueError):
+            return None
+        return n_eq, room, free
+
+    def visit(model: Any, path: str) -> None:
+        counted = count(model)
+        if counted is not None and counted[0] > counted[1]:
+            n_eq, room, free = counted
+            structural_errors.append(
+                ValidationError(
+                    path=path,
+                    message=(
+                        f"{IC_SYSTEM_UNBALANCED}: the initialization system is "
+                        f"over-determined: the initialization equations that are not explicit "
+                        f"initial conditions are {n_eq} scalar equation(s), and the starting "
+                        f"values they mention that no explicit initial condition sets have "
+                        f"{room} cell(s) (esm-spec §11.4.3)"
+                    ),
+                    code=IC_SYSTEM_UNBALANCED,
+                    details={
+                        "direction": "over-determined",
+                        "equations": n_eq,
+                        "unknowns": free,
+                    },
+                )
+            )
+        for sname, sub in (getattr(model, "subsystems", None) or {}).items():
+            if not isinstance(sub, dict):
+                visit(sub, f"{path}/subsystems/{sname}")
+
+    for mname, model in (getattr(esm_file, "models", None) or {}).items():
+        if not isinstance(model, dict):
+            visit(model, f"/models/{mname}")
 
 
 def _validate_stoich(

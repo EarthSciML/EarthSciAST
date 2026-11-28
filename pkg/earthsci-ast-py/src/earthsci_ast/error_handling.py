@@ -542,13 +542,24 @@ STRIPPED_PROBLEM_NOT_SOLVABLE = "stripped_problem_not_solvable"
 
 #: The initialization system (esm-spec §11.4.3, esm 2.5.0) has more scalar
 #: equations than unknowns, or fewer, or no assignment of one equation to each
-#: unknown. Registered with the spec; not raised until the initialization
-#: system is implemented.
+#: unknown. Names the direction, the unknowns and equations left over, and a
+#: supplied value that made an unknown a known.
 IC_SYSTEM_UNBALANCED = "ic_system_unbalanced"
 
+#: Two systems define non-additive equations for one dependent variable, or
+#: two explicit initial conditions set the same cell of one unknown (esm-spec
+#: §11.4.3; ``ConflictingDerivativeError``, esm-libraries-spec §4.7.5).
+CONFLICTING_DERIVATIVE = "conflicting_derivative"
+
+#: An ``ic`` whose argument is neither a variable reference (bare or scoped)
+#: nor ``D`` of one — ``ic(index(u, i))``, ``ic(a + b)`` — refused at load
+#: (esm-spec §4.2 ``ic``). An element's starting value is ``index(ic(u), i)``.
+IC_INVALID_ARGUMENT = "ic_invalid_argument"
+
 #: The solve of the initialization system did not converge (esm-spec §11.4.3).
-#: This binding has no nonlinear initialization solve; registered for the
-#: uniform vocabulary.
+#: This binding has no nonlinear initialization solve (it refuses a truly
+#: implicit system with ``unsupported_construct``); registered for the uniform
+#: vocabulary.
 IC_SYSTEM_UNSOLVED = "ic_system_unsolved"
 
 #: A kernel spec's output, ``dt_params`` entry or map target does not resolve.

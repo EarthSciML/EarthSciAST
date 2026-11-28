@@ -106,6 +106,7 @@ const GROUPS = [
         "strip_and_expose_conformance_test.jl",
         "conformance_provider_forcing_test.jl",
         "conformance_ic_at_start_test.jl",
+        "conformance_ic_system_test.jl",
         "percell_route_refusal_test.jl",
         "percell_license_test.jl",
         "observed_program_test.jl",

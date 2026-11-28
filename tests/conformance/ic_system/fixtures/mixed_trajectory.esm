@@ -1,0 +1,76 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_mixed_trajectory",
+    "description": "esm-spec 11.4.2: an equation that mentions ic is an initialization equation and holds at t0 only, so D(x) ~ -(x - ic(x))/tau, which also reads x and D(x) outside ic, is refused with ic_reads_state.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "tau": {
+          "type": "parameter",
+          "units": "s",
+          "default": 2.0,
+          "description": "relaxation time"
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "relaxes toward its starting value"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "x",
+                      {
+                        "op": "ic",
+                        "args": [
+                          "x"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              "tau"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 3.0
+        }
+      ]
+    }
+  }
+}

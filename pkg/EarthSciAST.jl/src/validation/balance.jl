@@ -164,13 +164,14 @@ function _validate_model_balance_here(
     unknown_list = unknowns(model)
     n_unknowns = length(unknown_list)
 
-    # An `ic` equation prescribes an initial value, not a determining equation,
-    # so it does not count toward the balance.
-    n_eqs = count(eq -> !(eq.lhs isa OpExpr && eq.lhs.op == "ic"), model.equations)
+    # An initialization equation (one that mentions `ic`, esm-spec §4.9.4,
+    # §11.4.3) holds at t0 only: it has its own balance and does not count here.
+    n_eqs = count(eq -> !_is_initialization_equation(eq), model.equations)
 
     # Names credited by the model's own equation left-hand sides.
     equation_vars = Set{String}()
     for eq in model.equations
+        _is_initialization_equation(eq) && continue
         union!(equation_vars, _equation_lhs_names(eq.lhs))
     end
     missing_for = String[u for u in unknown_list if !(u in equation_vars)]
@@ -205,5 +206,77 @@ function _validate_model_balance_here(
     end
 
 
+    return errors
+end
+
+"""
+    _validate_ic_overdetermination(model, path, sizes) -> Vector{StructuralError}
+
+esm-spec §11.4.3 "What `validate` reports": the over-determination one model's
+initialization equations show by themselves, before any supplied value. Its
+equations that are not explicit initial conditions ([`_ic_role`](@ref), with no
+name read as an observed; the target a plain name) count their scalar equations
+([`_ic_equation_count`](@ref) with no variable shapes: a `faq` side with output
+indices one per cell, anything else one); the starting values they mention
+count all their cells, unless the model's explicit initial conditions set every
+one of them. More equations than cells is reported as `ic_system_unbalanced`.
+No finding when an extent cannot be read (an index set without a size, a scoped
+name, `ic(D(x))`). Everything else in the balance is the build's.
+"""
+function _validate_ic_overdetermination(
+        model::Model, path::String, sizes::AbstractDict
+    )::Vector{StructuralError}
+    errors = StructuralError[]
+    sys = Equation[]
+    covered = Dict{String, Any}()   # explicit target => nothing (all) or its cells
+    for eq in model.equations
+        r = _ic_role(eq)
+        r.kind === :dynamics && continue
+        if r.kind === :explicit && !occursin('.', r.target)
+            cells = _ic_cover_cells(r.oriented.rhs, sizes)
+            prev = get(covered, r.target, missing)
+            covered[r.target] = (cells === nothing || prev === nothing) ? nothing :
+                union(prev === missing ? Set{Vector{Int}}() : prev, cells)
+        else
+            push!(sys, eq)
+        end
+    end
+    isempty(sys) && return errors
+    n_eqs = 0
+    names = String[]
+    for eq in sys
+        c = _ic_equation_count(eq, sizes, Dict{String, Vector{String}}())
+        c === nothing && return errors
+        n_eqs += c
+        for side in (eq.lhs, eq.rhs), (n, is_d) in _ic_reads(side)
+            (is_d || occursin('.', n)) && return errors
+            n in names || push!(names, n)
+        end
+    end
+    n_values = 0
+    free = String[]
+    for n in names
+        v = get(model.variables, n, nothing)
+        v === nothing && return errors
+        cells = 1
+        for s in (v.shape === nothing ? () : v.shape)
+            sz = get(sizes, String(s), nothing)
+            sz === nothing && return errors
+            cells *= sz
+        end
+        c = get(covered, n, missing)
+        (c === nothing || (c !== missing && length(c) >= cells)) && continue
+        n_values += cells
+        push!(free, n)
+    end
+    n_eqs > n_values || return errors
+    _report!(
+        errors, ERROR_CODES.IC_SYSTEM_UNBALANCED, path,
+        "The initialization system is over-determined: the initialization equations " *
+            "that are not explicit initial conditions stand for $(n_eqs) scalar " *
+            "equation(s), and the starting values they mention that no explicit initial " *
+            "condition sets have $(n_values) cell(s) (esm-spec §11.4.3)",
+        Dict{String, Any}("equations" => n_eqs, "starting_values" => free)
+    )
     return errors
 end

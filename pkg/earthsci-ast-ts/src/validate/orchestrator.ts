@@ -7,6 +7,7 @@
  * and shared helpers; the check modules never import back, so there is no cycle.
  */
 
+import { validateInitializationOverdetermination } from './ic-checks.js'
 import {
   validateSchema,
   loadDocument,
@@ -200,6 +201,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       if (!isCoupled) {
         errors.push(...validateEquationBalance(model, modelPath))
       }
+      errors.push(...validateInitializationOverdetermination(model, modelPath, esmFile))
       // A coupled model IS reference-checked (F-1). It gets exactly one
       // concession over a standalone model: the §6.4 operator placeholder
       // `_var`. An operator-composed model is written against a GENERIC state it
@@ -286,6 +288,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           if (!isCoupled) {
             errors.push(...validateEquationBalance(subsystem, subsystemPath))
           }
+          errors.push(...validateInitializationOverdetermination(subsystem, subsystemPath, esmFile))
           errors.push(
             ...validateReferenceIntegrity(
               subsystem,

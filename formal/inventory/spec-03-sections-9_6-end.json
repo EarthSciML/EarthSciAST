@@ -447,6 +447,15 @@
       "note": "ic_system_unbalanced says whether the initialization system is over- or under-determined and names the unknowns and equations left over."
     },
     {
+      "id": "spec.9.6.6.ic-invalid-argument-names",
+      "section": "9.6.6",
+      "quote": "MUST name the node's location.",
+      "class": "semantic",
+      "phase": 6,
+      "area": "diagnostics",
+      "note": "ic_invalid_argument names the location of the malformed ic node (or the ic of a parameter)."
+    },
+    {
       "id": "spec.9.6.6.ic-system-unsolved-names",
       "section": "9.6.6",
       "quote": "MUST name the equations whose residual stayed above tolerance and the guesses the solve started from.",

@@ -2503,19 +2503,6 @@ func validateModelUnits(modelName string, model *Model, basePath string, scoped 
 			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}
 	}
-	// An initialization equation reaching a unit-bearing definition: the
-	// definition-unit check (esm-spec §9.6.12).
-	for i, eq := range model.InitializationEquations {
-		le, ok := scoped.lowered(basePath+"/initialization_equations", eq.LHS, eq.RHS)
-		if !ok {
-			continue
-		}
-		var fs []defUnitFinding
-		ut := unitTyper{defs: le.registry, defFindings: &fs}
-		_, _ = ut.propagate(le.LHS, env)
-		_, _ = ut.propagate(le.RHS, env)
-		definitionUnitFindings(fs, fmt.Sprintf("%s/initialization_equations/%d", basePath, i), result)
-	}
 	validateObservedVariableUnitsScoped(model, env, basePath, scoped, result)
 	checkConversionFactorConsistency(modelName, model, result)
 	checkPhysicalConstantUnits(modelName, model, result)

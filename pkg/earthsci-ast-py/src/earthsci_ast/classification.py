@@ -64,7 +64,8 @@ The cross-language oracle is ``tests/conformance/classification/``.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from itertools import product
 from typing import Any
 
 from .esm_types import EXPR_WIRE_SPEC, ExprNode
@@ -75,20 +76,31 @@ __all__ = [
     "algebraic_unknowns",
     "assert_partitions",
     "brownian_parameters",
+    "cells_set",
     "constant_parameters",
     "declared_system_kind",
     "discrete_parameters",
+    "equation_shape",
+    "explicit_initial_condition",
+    "faq_output_box",
+    "ic_as_values",
+    "ic_target",
+    "index_set_extent",
     "inlined_unknowns",
     "is_brownian_parameter",
     "is_discrete_parameter",
+    "is_initial_condition",
     "is_observed_unknown",
     "is_ode_state",
+    "mentions_ic",
     "model_nodes",
     "observed_definitions",
     "observed_unknowns",
     "ode_states",
     "parameters",
     "sampled_parameters",
+    "solved_form",
+    "start_value_reads",
     "system_kind",
     "unknowns",
 ]
@@ -190,8 +202,14 @@ def _variables(model: Any) -> dict[str, Any]:
 
 
 def _equations(model: Any) -> list:
+    """The model's equations that are not initialization equations: an
+    equation that mentions ``ic`` anywhere holds at ``t0`` only (esm-spec
+    §11.4.3) and takes no part in classification (§6.3.1) or the main balance
+    (§4.9.4)."""
     equations = _field(model, "equations", []) or []
-    return list(equations) if isinstance(equations, (list, tuple)) else []
+    if not isinstance(equations, (list, tuple)):
+        return []
+    return [eq for eq in equations if not is_initial_condition(eq)]
 
 
 def _var_type(var: Any) -> str | None:
@@ -305,10 +323,207 @@ def _rhs(equation: Any) -> Any:
     return _field(equation, "rhs")
 
 
+def mentions_ic(expr: Any) -> bool:
+    """Whether ``expr`` (dict or :class:`ExprNode` spelling) has an ``ic`` node
+    anywhere."""
+    return any(_op(node) == "ic" for node in walk(expr))
+
+
 def is_initial_condition(equation: Any) -> bool:
-    """True for an ``ic(x) ~ v`` equation. An initial condition pins a value at
-    t=0; it neither defines an unknown nor participates in the §4.9.4 balance."""
-    return _op(_lhs(equation)) == "ic"
+    """True for an INITIALIZATION equation: one that mentions ``ic`` anywhere in
+    either side (esm 2.5.0, esm-spec §11.4.3) — ``ic(x) ~ v``, and also
+    ``ic(x) + ic(y) ~ total``. It holds at ``t0`` only; it neither defines an
+    unknown nor participates in the §4.9.4 balance."""
+    return mentions_ic(_lhs(equation)) or mentions_ic(_rhs(equation))
+
+
+# === Initialization equations (esm-spec §11.4.3) ===========================
+#
+# The one answer to "is this an explicit initial condition / in solved form,
+# and for which target?" and "which cells does it set, how many scalar
+# equations is it?". Flatten, validate, the build's planner and strip all ask
+# here, on either spelling of an expression.
+
+
+def ic_target(node: Any) -> str | None:
+    """``u`` when ``node`` is exactly ``ic(u)`` of a variable reference (bare or
+    scoped), else ``None``. ``ic(D(x))`` has no target."""
+    if _op(node) != "ic":
+        return None
+    args = _args(node)
+    return args[0] if len(args) == 1 and isinstance(args[0], str) else None
+
+
+def start_value_reads(expr: Any) -> set[str]:
+    """The unknowns whose starting value ``expr`` reads: the ``w`` of every
+    ``ic(w)`` in it."""
+    out: set[str] = set()
+    for node in walk(expr):
+        name = ic_target(node)
+        if name is not None:
+            out.add(name)
+    return out
+
+
+def solved_form(
+    lhs: Any, rhs: Any, can_target: Callable[[str], bool] | None = None
+) -> tuple[str, Any] | None:
+    """``(u, e)`` when the equation ``lhs ~ rhs`` is in SOLVED FORM for ``u``
+    (esm-spec §11.4.3): one side is exactly ``ic(u)``, ``can_target(u)`` holds
+    (the caller's test that ``u`` is an unknown that is not an observed), and
+    the other side ``e`` does not mention ``ic(u)``. The left-hand spelling is
+    tried first. ``index(ic(u), k) ~ e`` is not in solved form."""
+    for side, other in ((lhs, rhs), (rhs, lhs)):
+        u = ic_target(side)
+        if u is None or (can_target is not None and not can_target(u)):
+            continue
+        if u not in start_value_reads(other):
+            return u, other
+    return None
+
+
+def explicit_initial_condition(
+    lhs: Any, rhs: Any, can_target: Callable[[str], bool] | None = None
+) -> tuple[str, Any] | None:
+    """``(u, e)`` when ``lhs ~ rhs`` is an EXPLICIT initial condition (esm-spec
+    §11.4.3): ``ic(u) ~ e`` or the mirrored ``e ~ ic(u)``, ``e`` mentioning no
+    ``ic`` at all, and ``can_target(u)`` (``u`` not an observed; ``validate``,
+    which cannot tell, passes none)."""
+    for side, other in ((lhs, rhs), (rhs, lhs)):
+        u = ic_target(side)
+        if u is None or (can_target is not None and not can_target(u)):
+            continue
+        if not mentions_ic(other):
+            return u, other
+    return None
+
+
+def ic_as_values(expr: Any) -> Any:
+    """``expr`` (either spelling) with every ``ic(a)`` read as ``a``: a scope
+    that binds each unknown's name to its starting value evaluates it as the
+    starting values, and its index sets are the operands'."""
+    if _op(expr) == "ic" and len(_args(expr)) == 1:
+        return ic_as_values(_args(expr)[0])
+    if isinstance(expr, ExprNode):
+        from .expr_walk import map_children
+
+        return map_children(expr, ic_as_values)
+    if isinstance(expr, Mapping):
+        return {k: ic_as_values(v) for k, v in expr.items()}
+    if isinstance(expr, list):
+        return [ic_as_values(v) for v in expr]
+    return expr
+
+
+def index_set_extent(entry: Any) -> int | None:
+    """The extent of a declared index set: its ``size``, else the number of its
+    ``members``; ``None`` when the document does not state it."""
+    size = _field(entry, "size")
+    if isinstance(size, int) and not isinstance(size, bool):
+        return size
+    members = _field(entry, "members")
+    if isinstance(members, (list, tuple)):
+        return len(members)
+    return None
+
+
+def faq_output_box(node: Any, index_sets: Any) -> list[tuple[int, int]] | None:
+    """The 1-based inclusive ``(lo, hi)`` of each output index of ``node``, a
+    ``faq`` with output indices, in ``output_idx`` order: a literal
+    ``[lo, hi]``, or ``[1, extent]`` of a declared index set. ``None`` when
+    ``node`` is not such a ``faq``; :class:`ValueError` when a range has no
+    static extent."""
+    if _op(node) != "faq":
+        return None
+    out_idx = _slot(node, "output_idx", "output_idx")
+    if not out_idx:
+        return None
+    ranges = _slot(node, "ranges", "ranges") or {}
+    box: list[tuple[int, int]] = []
+    for name in out_idx:
+        spec = ranges.get(name) if isinstance(ranges, Mapping) else None
+        if isinstance(spec, Mapping) and "from" in spec:
+            entry = (index_sets or {}).get(spec["from"])
+            n = index_set_extent(entry) if entry is not None else None
+            if n is None:
+                raise ValueError(f"output index {name!r}: index set {spec['from']!r} has no size")
+            box.append((1, n))
+        elif (
+            isinstance(spec, (list, tuple))
+            and len(spec) == 2
+            and all(isinstance(b, int) and not isinstance(b, bool) for b in spec)
+        ):
+            box.append((int(spec[0]), int(spec[1])))
+        else:
+            raise ValueError(f"output index {name!r} has no static [lo, hi] range")
+    return box
+
+
+def cells_set(value: Any, extents: tuple[int, ...], index_sets: Any) -> list[int]:
+    """The cells (0-based row-major offsets into a variable of ``extents``) an
+    initial condition whose value side is ``value`` sets: the box of a ``faq``
+    with output indices, else every cell (esm-spec §11.4.3, "Explicit initial
+    conditions"). :class:`ValueError` for a box that does not fit."""
+    if not extents:
+        return [0]
+    box = faq_output_box(value, index_sets)
+    total = 1
+    for n in extents:
+        total *= n
+    if box is None:
+        return list(range(total))
+    if len(box) != len(extents):
+        raise ValueError(f"{len(box)} output indices for a {len(extents)}-D unknown")
+    for (lo, hi), n in zip(box, extents):
+        if lo < 1 or hi > n:
+            raise ValueError(f"the output range [{lo}, {hi}] is outside 1..{n}")
+    out: list[int] = []
+    for multi in product(*(range(lo, hi + 1) for lo, hi in box)):
+        lin = 0
+        for i, n in zip(multi, extents):
+            lin = lin * n + (i - 1)
+        out.append(lin)
+    return out
+
+
+def equation_shape(
+    lhs: Any,
+    rhs: Any,
+    declared_axes: Callable[[str], Any],
+    index_sets: Any,
+) -> list[int]:
+    """The extents of an equation's result (esm-spec §4.3.4): the union, by
+    index-set name, of its sides' frames. A ``faq`` with output indices
+    contributes its box, an operand consumed by ``index`` or by a ``faq``
+    without output indices contributes none, ``ic(a)`` is ``a``'s frame, and a
+    bare name its declared axes (``declared_axes(name)``). Its product is the
+    equation's count of scalar equations; ``index(ic(u), k) ~ e`` is one."""
+    frame: dict[Any, int] = {}
+
+    def visit(e: Any) -> None:
+        if isinstance(e, str):
+            for ax in declared_axes(e) or ():
+                if ax not in frame:
+                    entry = (index_sets or {}).get(ax)
+                    frame[ax] = (index_set_extent(entry) if entry is not None else None) or 1
+            return
+        op = _op(e)
+        if op is None or op == "index":
+            return
+        if op == "faq":
+            box = faq_output_box(e, index_sets)
+            ranges = _slot(e, "ranges", "ranges") or {}
+            for name, (lo, hi) in zip(_slot(e, "output_idx", "output_idx") or (), box or ()):
+                spec = ranges.get(name)
+                key = spec["from"] if isinstance(spec, Mapping) and "from" in spec else (lo, hi)
+                frame.setdefault(key, max(hi - lo + 1, 0))
+            return
+        for a in _args(e):
+            visit(a)
+
+    visit(lhs)
+    visit(rhs)
+    return list(frame.values())
 
 
 def ode_states(model: Any) -> list[str]:

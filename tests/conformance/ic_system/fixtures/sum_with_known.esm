@@ -1,0 +1,89 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_sum_with_known",
+    "description": "esm-spec 11.4.3: ic(a) + ic(b) ~ total is not explicit in ic(b) even though ic(a) is known from an explicit initial condition, so it is a truly implicit system. b has no default: a default would make ic(b) a known (11.4.3 'Declared defaults') and the equation a surplus one.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "total": {
+          "type": "parameter",
+          "units": "1",
+          "default": 10.0,
+          "description": "a + b at the start"
+        },
+        "a": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0,
+          "description": "explicit: ic(a) ~ 3"
+        },
+        "b": {
+          "type": "unknown",
+          "units": "1",
+          "description": "unknown of the implicit system"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "a"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "b"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "a"
+            ]
+          },
+          "rhs": 3.0
+        },
+        {
+          "lhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "ic",
+                "args": [
+                  "a"
+                ]
+              },
+              {
+                "op": "ic",
+                "args": [
+                  "b"
+                ]
+              }
+            ]
+          },
+          "rhs": "total"
+        }
+      ]
+    }
+  }
+}

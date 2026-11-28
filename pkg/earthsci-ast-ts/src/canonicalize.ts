@@ -23,6 +23,7 @@ import {
 } from './numeric-literal.js'
 import { canonicalUnitSpelling } from './unit-conversion.js'
 import { wireOldSpellings } from './old-spellings.js'
+import { initializationEquationsMigrated } from './initialization-migration.js'
 
 // `CanonicalizeError` is DEFINED in numeric-literal.ts (the lowest module in
 // the canonical-form stack) so its nonfinite specialization
@@ -620,13 +621,19 @@ function isPlainObject(x: unknown): x is Record<string, unknown> {
  * `expression_templates` / `expression_template_imports` as `operators` /
  * `operator_imports`, `apply_expression_template` as `apply_operator`, and a
  * spatial `D` (one whose `wrt` is not `t` and names no parameter of its
- * definition), `δ` and `∂` as `partial` (esm-spec §9.6.12, §4.2).
+ * definition), `δ` and `∂` as `partial` (esm-spec §9.6.12, §4.2). A
+ * deprecated `initialization_equations` block, and a pre-2.5.0 initial
+ * condition of a parameter, are migrated as the loader migrates them (esm-spec
+ * §11.4.4), so the canonical form, and every printed document, never carries
+ * the field.
  * These are the rules of Lean `Adapter.Doc.spellRules` and `Adapter.Doc.conv`.
  */
 export function canonicalizeDocument<T>(input: T): T {
   // The spellings an earlier document wrote read as the esm-2.4.0 ones
   // (esm-spec §9.6.12, §4.2; Lean `Adapter.Doc.spellRules`), on a copy.
-  const doc = wireOldSpellings(input)
+  // A deprecated `initialization_equations` block is read as the load reads it
+  // (esm-spec §11.4.4), so the canonical form never carries the field.
+  const doc = initializationEquationsMigrated(wireOldSpellings(input))
   const walk = (value: unknown, isMap: boolean): unknown => {
     if (Array.isArray(value)) return value.map((v) => walk(v, false))
     if (!isPlainObject(value)) return value

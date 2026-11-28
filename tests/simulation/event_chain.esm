@@ -211,24 +211,6 @@
             ]
           },
           "rhs": 0.0
-        },
-        {
-          "lhs": {
-            "op": "ic",
-            "args": [
-              "dose_counter"
-            ]
-          },
-          "rhs": 0
-        },
-        {
-          "lhs": {
-            "op": "ic",
-            "args": [
-              "heating_active"
-            ]
-          },
-          "rhs": 1
         }
       ],
       "tolerance": {

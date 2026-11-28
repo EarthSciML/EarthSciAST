@@ -1,0 +1,84 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_rhs_solved",
+    "description": "esm-spec 11.4.3: `e ~ ic(u)` is solved form exactly like `ic(u) ~ e` when e reads no ic(u). 3 ~ ic(x) is an explicit initial condition; ic(x) + 1 ~ ic(z) is a triangular equation for z.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0,
+          "description": "explicit, right-hand side form: 3 ~ ic(x)"
+        },
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0,
+          "description": "triangular, right-hand side form: ic(x) + 1 ~ ic(z)"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "z"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "ic",
+                "args": [
+                  "x"
+                ]
+              },
+              1.0
+            ]
+          },
+          "rhs": {
+            "op": "ic",
+            "args": [
+              "z"
+            ]
+          }
+        },
+        {
+          "lhs": 3.0,
+          "rhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

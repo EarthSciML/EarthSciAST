@@ -70,6 +70,7 @@ pub(crate) fn validate_model(
     errors.extend(lhs_name_errors(esm_file, model_name, model));
 
     ctx.check_equation_balance(errors);
+    check_initialization_over_determination(esm_file, model_name, model, errors);
     let unit_env = ctx.check_unit_declarations(errors);
     ctx.check_initialization_equation_refs(errors);
     ctx.check_guess_refs(errors);
@@ -1672,11 +1673,12 @@ fn implicitly_declared_symbols(esm_file: &EsmFile) -> HashSet<String> {
     if let Some(models) = &esm_file.models {
         for model in models.values() {
             for eq in &model.equations {
-                // An `ic` equation's RHS is a COORDINATE EXPRESSION (§11.4): its
-                // free symbols name spatial coordinates, e.g. an ignition front
-                // at `x < x0`.
-                if is_ic_equation(&eq.lhs) {
-                    collect_bare_symbols(&eq.rhs, &mut symbols);
+                // An explicit initial condition's right-hand side (either
+                // spelling) is a COORDINATE EXPRESSION (§11.4, §4.9.1 (iii)):
+                // its free symbols name spatial coordinates, e.g. an ignition
+                // front at `x < x0`.
+                if let Some((_, rhs)) = crate::initialization::explicit_form(eq) {
+                    collect_bare_symbols(rhs, &mut symbols);
                 }
                 collect_coordinate_symbols(&eq.lhs, &mut symbols);
                 collect_coordinate_symbols(&eq.rhs, &mut symbols);
@@ -1953,7 +1955,7 @@ fn lhs_name_errors_in(
     for (k, eq) in model.equations.iter().enumerate() {
         let lhs = &eq.lhs;
         let lhs_path = || format!("{path}/equations/{k}/lhs");
-        if is_ic_equation(lhs) {
+        if crate::initialization::is_initialization_equation(eq) {
             continue;
         }
         if let Some(name) = lhs_defined_name(lhs)
@@ -2127,11 +2129,6 @@ fn collect_free_lhs_subscripts(
             }
         }
     }
-}
-
-/// True when this LHS marks an initial condition (`{"op": "ic", ...}`).
-fn is_ic_equation(lhs: &crate::Expr) -> bool {
-    matches!(lhs, crate::Expr::Operator(op) if op.op == "ic")
 }
 
 /// Collect the `dim` axis of every node that carries one, regardless of its
@@ -4200,8 +4197,48 @@ fn expr_references_name(expr: &crate::Expr, name: &str) -> bool {
 fn count_defining_equations(equations: &[crate::Equation]) -> usize {
     equations
         .iter()
-        .filter(|eq| !is_ic_equation(&eq.lhs))
+        .filter(|eq| !crate::initialization::is_initialization_equation(eq))
         .count()
+}
+
+/// esm 2.5.0 (esm-spec §11.4.3 "What `validate` reports"): the
+/// over-determination of the model's initialization system the document
+/// shows by itself ([`crate::initialization::document_over_determination`]).
+/// Everything else in the balance needs the build's supplied values and
+/// classification.
+fn check_initialization_over_determination(
+    esm_file: &EsmFile,
+    model_name: &str,
+    model: &crate::Model,
+    errors: &mut Vec<StructuralError>,
+) {
+    let size = |set: &str| {
+        esm_file
+            .index_sets
+            .as_ref()
+            .and_then(|r| r.get(set))
+            .and_then(crate::initialization::index_set_size)
+    };
+    let Some((system, n_equations, free_cells)) =
+        crate::initialization::document_over_determination(model, &size)
+    else {
+        return;
+    };
+    errors.push(StructuralError {
+        path: format!("/models/{model_name}/equations/{}", system[0]),
+        code: StructuralErrorCode::IcSystemUnbalanced,
+        message: format!(
+            "the initialization system is over-determined: {n_equations} scalar \
+             initialization equation(s) that are not explicit initial conditions, and \
+             {free_cells} cell(s) of the starting values they mention that no explicit \
+             initial condition of the model sets (esm-spec §11.4.3)"
+        ),
+        details: serde_json::json!({
+            "equations": system,
+            "scalar_equations": n_equations,
+            "starting_values": free_cells,
+        }),
+    });
 }
 
 /// Attribute equations to unknowns, for the DETAIL payload of an
@@ -4223,7 +4260,7 @@ fn analyze_equation_mismatch(
     let mut lhs_vars = HashSet::new();
 
     for equation in equations {
-        if is_ic_equation(&equation.lhs) {
+        if crate::initialization::is_initialization_equation(equation) {
             continue; // an initial condition defines nothing (see count above)
         }
         match &equation.lhs {

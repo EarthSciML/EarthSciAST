@@ -1,0 +1,152 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_observed_and_tendency",
+    "description": "esm-spec 11.4.2 item 8: ic(y) of an observed y is its definition with each unknown w replaced by ic(w), and ic(D(x)) is x's tendency at the starting values. ic(y) ~ 2*ic(o) with o ~ x + 1; ic(w) ~ ic(D(x)) with D(x) ~ -k*x.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5,
+          "description": "decay rate of x"
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0,
+          "description": "explicit: ic(x) ~ 4"
+        },
+        "o": {
+          "type": "unknown",
+          "units": "1",
+          "description": "observed: o ~ x + 1"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0,
+          "description": "triangular: ic(y) ~ 2*ic(o)"
+        },
+        "w": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0,
+          "description": "triangular: ic(w) ~ ic(D(x)), x's tendency at the start"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "x"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "o",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "x",
+              1.0
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "w"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 4.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "y"
+            ]
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              2.0,
+              {
+                "op": "ic",
+                "args": [
+                  "o"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "w"
+            ]
+          },
+          "rhs": {
+            "op": "ic",
+            "args": [
+              {
+                "op": "D",
+                "args": [
+                  "x"
+                ],
+                "wrt": "t"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

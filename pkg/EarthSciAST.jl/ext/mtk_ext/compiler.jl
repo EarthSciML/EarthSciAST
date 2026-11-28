@@ -158,19 +158,13 @@ function _mtk_refuse_unsupported_file(file::EarthSciAST.EsmFile, _strip_taken)
     return nothing
 end
 
-# A `faq`-valued initialization equation (esm-spec §6.2) seeds the cells of an
-# array state; this compiler takes initial values from defaults and `ic`
-# equations only.
-function _mtk_refuse_faq_initialization(flat::FlattenedSystem)
-    init = EarthSciAST._faq_initialization(flat)
-    isempty(init) || _mtk_refuse(
-        _mtk_equation_label(first(init)),
-        "it is a `faq`-valued initialization equation, which this compiler has no " *
-            "lowering for: it would start the array from its default instead. " *
-            _MTK_TRY_INSTEAD
-    )
-    return nothing
-end
+# esm-spec §11.4.2 (esm 2.5.0): an initialization equation holds at t0 only,
+# so one that reads a state's trajectory outside `ic` (`D(x) ~ -(x - ic(x))/tau`)
+# is refused with `ic_reads_state` under this compiler too. The rest of the
+# initialization system rides into ModelingToolkit as `initialization_eqs`
+# (`ModelingToolkit.System(flat)`), whose initialization solves it.
+_mtk_refuse_ic_trajectory_reads(flat::FlattenedSystem) =
+    EarthSciAST._refuse_flat_ic_trajectory_reads(flat)
 
 # The first operator in `e` that `_esm_to_symbolic` has no arm for, or `nothing`.
 function _mtk_unlowered_op(e::EsmExpr)
@@ -557,6 +551,48 @@ function _mtk_ics_to_guesses!(system)
     return String[string(var) for (var, _) in moved]
 end
 
+# esm-spec §11.4.3 "Declared defaults": the default of an ODE state is its
+# known starting value, which ModelingToolkit holds fixed as an initial
+# condition, UNLESS an equation of the initialization system is in solved form
+# for that state (`_ic_role`): then the default yields, and it moves to
+# `guesses`, the starting point of the solve. An explicit initial condition is
+# never overridden: an equation solved for its target is not explicit in it.
+function _mtk_init_defaults_to_guesses!(system, flat::FlattenedSystem, handles)
+    isempty(flat.initialization_equations) && return String[]
+    ics = getfield(system, :initial_conditions)
+    (ics isa AbstractDict && !isempty(ics)) || return String[]
+    explicit = Set{String}(first(p) for p in flat.field_ics)
+    names = Set{String}()
+    isobs = n -> haskey(flat.observed_variables, n)
+    for eq in flat.initialization_equations
+        t = EarthSciAST._ic_role(eq; isobserved = isobs).target
+        t === nothing || t in explicit || push!(names, t)
+    end
+    targets = Set{Any}(
+        Symbolics.unwrap(handles[n]) for n in names if haskey(handles, n)
+    )
+    # An array unknown's handles are its cells; its initial condition is keyed
+    # by the whole array.
+    for (hn, h) in handles
+        br = findfirst('[', hn)
+        br === nothing && continue
+        hn[1:prevind(hn, br)] in names || continue
+        x = Symbolics.unwrap(h)
+        SymUtils.iscall(x) && SymUtils.operation(x) === getindex &&
+            push!(targets, SymUtils.arguments(x)[1])
+    end
+    isempty(targets) && return String[]
+    guesses = getfield(system, :guesses)
+    moved = String[]
+    for (var, val) in collect(pairs(ics))
+        Symbolics.unwrap(var) in targets || continue
+        delete!(ics, var)
+        guesses isa AbstractDict && !haskey(guesses, var) && (guesses[var] = val)
+        push!(moved, string(var))
+    end
+    return moved
+end
+
 function _mtk_eliminated(v, eliminated::Set{Any})
     v in eliminated && return true
     SymUtils.symtype(v) <: AbstractArray || return false
@@ -783,7 +819,7 @@ function _mtk_problem_impl(input, req::EarthSciAST._ProblemRequest)
     span = req.span
     prep = EarthSciAST._prepare_run(
         input; metaparameters = req.metaparameters, base_path = req.base_path,
-        refuse_file = _mtk_refuse_unsupported_file, refuse_flat = _mtk_refuse_faq_initialization
+        refuse_file = _mtk_refuse_unsupported_file, refuse_flat = _mtk_refuse_ic_trajectory_reads
     )
     flat = prep.flat
     EarthSciAST._refuse_parameter_definitions(
@@ -834,6 +870,9 @@ function _mtk_problem_impl(input, req::EarthSciAST._ProblemRequest)
     # An `ic` on a variable the compile solved away is a GUESS, not a
     # constraint (see `_mtk_ics_to_guesses!`).
     _mtk_ics_to_guesses!(system)
+    # A declared default of a state an initialization equation is solved for
+    # is a starting point, never a constraint (esm-spec §11.4.3).
+    _mtk_init_defaults_to_guesses!(system, flat, _mtk_handles(system, rev))
 
     # The parameter overrides bind here: `op` is ModelingToolkit's merged
     # initial-value / parameter map, so a value named in `p` is what the

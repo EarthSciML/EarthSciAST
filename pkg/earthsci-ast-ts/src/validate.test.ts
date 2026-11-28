@@ -1220,10 +1220,12 @@ describe('(h) reference integrity covers every expression-bearing field', () => 
       '/models/M/guesses/u',
     ],
     [
+      // The deprecated block is read as an `ic` equation appended to
+      // `equations` (esm 2.5.0, esm-spec §11.4.4), so the finding names it there.
       'an initialization equation',
       { initialization_equations: [{ lhs: 'u', rhs: { op: '*', args: [2, 'k'] } }] },
       { initialization_equations: [{ lhs: 'u', rhs: { op: '*', args: [2, 'nope'] } }] },
-      '/models/M/initialization_equations/0/rhs',
+      '/models/M/equations/1/rhs',
     ],
     [
       'a continuous-event condition',

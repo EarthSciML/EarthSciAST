@@ -264,6 +264,12 @@ function _build_partition_and_materialize(
         Dict{String, Any}(const_arrays), geom_setup_arrays, cls.const_obs_arrays
     )
     join_obs_defs = observed_definitions(model)
+    # The initialization system (esm-spec §11.4.3): classified and ordered
+    # here; its explicit equations' seeds are resolved below with the
+    # initialization equations, in dependency order.
+    ic_struct = _ic_system_structure(model, model.initialization_equations)
+    seed_at = Int[i for (i, e) in enumerate(ic_struct.eqs) if e.seed !== nothing]
+    ic_seeds = Equation[ic_struct.eqs[i].seed for i in seed_at]
     # A key column computed from scalar parameters folds their values into the
     # match set, so each one it reads is recorded as read at build
     # (`:structural`: a `remake` that changes it is refused).
@@ -275,7 +281,7 @@ function _build_partition_and_materialize(
                     join_key_arrays, join_var_shapes, join_obs_defs
                 ),
                 _resolve_join_gates(
-                    model.initialization_equations,
+                    ic_seeds,
                     index_sets, vi_maps, join_key_arrays,
                     join_var_shapes, join_obs_defs
                 ),
@@ -321,10 +327,15 @@ function _build_partition_and_materialize(
             eq for eq in equations
                 if !(_vi_typed_lhs_base(eq.lhs) in vi_vars)
         ]
-        init_equations = Equation[
-            eq for eq in init_equations
-                if !(_vi_typed_lhs_base(eq.lhs) in vi_vars)
-        ]
+        for eq in init_equations
+            _vi_typed_lhs_base(eq.lhs) in vi_vars && throw(
+                TreeWalkError(
+                    ERROR_CODES.UNSUPPORTED_CONSTRUCT,
+                    "the initialization equation $(_ic_text(eq)) sets a value-invention " *
+                        "variable, which is materialized at setup, not given a starting value"
+                )
+            )
+        end
     end
 
     # ---- Extract discrete-cadence materialize defs (RANGE-RESOLVED) + drop them ----
@@ -368,10 +379,37 @@ function _build_partition_and_materialize(
         (plan, _ic_evaluate(plan, ic_t0, ic_data)...)
     end
 
+    # The resolved seeds back on their equations, one for one (every pass
+    # above maps the seed list position by position).
+    length(init_equations) == length(seed_at) || error(
+        "internal: the initialization system's seeds were not resolved one for one"
+    )
+    ic_eqs = copy(ic_struct.eqs)
+    for (k, i) in enumerate(seed_at)
+        ic_eqs[i] = _with_seed(ic_eqs[i], init_equations[k])
+    end
+    # An explicit `faq` initial condition over some of its target's cells is
+    # seeded first, before the system (`_ic_partial_faq`).
+    partial = Tuple{String, ASTExpr}[
+        (t, r) for (t, r) in raw_field_ics if _ic_partial_faq(t, r, model, index_sets, derived_extents)
+    ]
+    if !isempty(partial)
+        gone = Set{String}(first(p) for p in partial)
+        field_ics = Tuple{String, ASTExpr}[p for p in field_ics if !(first(p) in gone)]
+        pre = _IcSysEq[
+            _IcSysEq(
+                Equation(OpExpr("ic", ASTExpr[VarExpr(t)]), r), t, String[], String[t],
+                Equation(VarExpr(t), r), true
+            ) for (t, r) in partial
+        ]
+        ic_eqs = vcat(pre, ic_eqs)
+    end
+    ic_system = _IcSystem(ic_eqs)
+
     return _EquationPartition(
         param_names, observed_names, state_var_names, param_scope,
-        geom_setup_arrays, derived_extents, equations, init_equations,
-        discrete_defs, eq_ics, field_ics, ic_start, ic_plan
+        geom_setup_arrays, derived_extents, equations,
+        discrete_defs, eq_ics, field_ics, ic_start, ic_plan, ic_system
     )
 end
 
@@ -617,7 +655,8 @@ function _build_compile_evaluator(
         initial_conditions::AbstractDict, tspan,
         products::Union{Nothing, BuildProducts}, materialize_out::Union{Nothing, DiscreteMaterializer},
         form::_BuildForm,
-        caller_u0 = nothing
+        caller_u0 = nothing,
+        ic_t0::Float64 = 0.0
     )
     u0 = layout.u0
     p = layout.p
@@ -679,13 +718,27 @@ function _build_compile_evaluator(
         )
     end
 
-    # The faq-valued initialization equations seed `u0`. A caller's `u0` is
-    # part of the state they read, and a cell it names keeps its value.
-    caller_slots = _apply_caller_u0!(u0, layout.var_map, parts.init_equations, caller_u0)
-    seeded = _seed_faq_init_u0!(
-        u0, parts.init_equations, initial_conditions, state_scope, p;
-        skip_slots = caller_slots
+    # The initialization system (esm-spec §11.4.3): balanced, its implicit
+    # part refused or stripped, and its triangular part seeded in dependency
+    # order against the state built so far. A caller's `u0` is part of the
+    # state the seeds read, and a cell it names keeps its value.
+    ic_seeds, ic_stripped = _ic_system_finish(
+        parts.ic_system, model, layout.var_map, u0;
+        eq_ics = parts.eq_ics, field_ics = parts.field_ics,
+        initial_conditions = initial_conditions, caller_u0 = caller_u0,
+        index_sets = index_sets,
+        params = p === nothing ? Dict{String, Float64}() :
+            Dict{String, Float64}(String(k) => Float64(v) for (k, v) in pairs(p) if v isa Real)
     )
+    products === nothing || (products.ic_stripped = ic_stripped)
+    caller_slots = _apply_caller_u0!(u0, layout.var_map, ic_seeds, caller_u0)
+    seeded = _seed_faq_init_u0!(
+        u0, ic_seeds, initial_conditions, state_scope, p;
+        skip_slots = caller_slots, t0 = ic_t0
+    )
+    # The stripped implicit part's unknowns hold their starting points.
+    ic_stripped === nothing || products === nothing ||
+        filter!(s -> !(_slot_key(layout.var_map, s) in ic_stripped.unknowns), products.unvalued_slots)
     # A cell an initialization equation set has a starting value.
     products === nothing || isempty(seeded) ||
         filter!(s -> !(s in seeded), products.unvalued_slots)
@@ -1359,6 +1412,10 @@ function _build_evaluator_impl_inner(
     # (so the interned DAG is the lowered one). Identity — hence byte-identical —
     # for a model with no `broadcast` node.
     model = _lower_broadcast_model(model)
+    # ---- The initialization system leaves the equation stream (esm-spec §11.4.3) ----
+    # Every initialization equation that is not an explicit initial condition
+    # (build_ic_system.jl), before any pass reads the equations as dynamics.
+    model = _split_initialization_system(model)
     # A lane build (src/range/lanes.jl) computes 0-d observeds of `t` per lane.
     model = _range_promote_model(_range_spec_now(), model)
     # ---- Structural interning (hash-consing) of the expression AST (perf
@@ -1475,7 +1532,7 @@ function _build_evaluator_impl_inner(
     # refuses the move instead of returning a state the equations did not see.
     if products !== nothing
         products.ic_reseed = layout.ic_reseed === nothing ? nothing :
-            isempty(parts.init_equations) ? layout.ic_reseed :
+            isempty(parts.ic_system.eqs) ? layout.ic_reseed :
             (_, _) -> throw(
                 TreeWalkError(
                     "E_TREEWALK_UNSUPPORTED_EQUATION",
@@ -1514,7 +1571,8 @@ function _build_evaluator_impl_inner(
         const_array_boundaries = const_array_boundaries, param_arrays = param_arrays,
         initial_conditions = initial_conditions, tspan = tspan, products = products,
         materialize_out = materialize_out, form = build_form,
-        caller_u0 = _caller_u0
+        caller_u0 = _caller_u0,
+        ic_t0 = _ic_t0 === nothing ? _pick_tspan(tspan)[1] : Float64(_ic_t0)
     )
 end
 

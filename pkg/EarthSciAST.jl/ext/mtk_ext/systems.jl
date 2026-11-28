@@ -27,6 +27,7 @@ function _split_ic_equations(flat::FlattenedSystem, L::_Lowering)
     # `field_ics` are classified OUT of `flat.equations` (esm-libraries-spec
     # §4.7.5 step 4), so they have to be read from their own field or the states
     # they seed silently fall back to their bare `default`.
+    allvars = merge(flat.state_variables, flat.observed_variables, flat.parameters)
     for (vn, rhs) in flat.field_ics
         haskey(L.vars, vn) || throw(
             SimulateError(
@@ -34,7 +35,10 @@ function _split_ic_equations(flat::FlattenedSystem, L::_Lowering)
                 ERROR_CODES.UNDEFINED_VARIABLE
             )
         )
-        push!(ic_values, (vn, _esm_to_symbolic(rhs, L)))
+        # A lower-rank right-hand side aligns by index-set name and repeats
+        # along the axes it does not carry (esm-spec §11.4.3 "Arrays").
+        aligned = EarthSciAST._ic_aligned_rhs(vn, rhs, allvars)
+        push!(ic_values, (vn, _esm_to_symbolic(aligned === nothing ? rhs : aligned, L)))
     end
     for eq in flat.equations
         if eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "ic"
@@ -283,6 +287,31 @@ function ModelingToolkit.System(
     event_kwargs = Pair{Symbol, Any}[]
     isempty(cont_cbs) || push!(event_kwargs, :continuous_events => cont_cbs)
     isempty(disc_cbs) || push!(event_kwargs, :discrete_events => disc_cbs)
+    # esm-spec §11.4.4 "ModelingToolkit export": every initialization equation
+    # that is not an explicit initial condition becomes an `initialization_eqs`
+    # entry with each `ic(w)` written as `w` (and `ic(D(x))` as `D(x)`); the
+    # `guesses` become the system's guesses. ModelingToolkit's own consistent
+    # initialization adds a DAE's algebraic equations, so they are not exported
+    # a second time.
+    if !isempty(flat.initialization_equations)
+        init_eqs = Vector{MTKEquation}()
+        for eq in flat.initialization_equations
+            _push_lowered_equation!(
+                init_eqs,
+                _esm_to_symbolic(EarthSciAST._ic_as_state(eq.lhs), L),
+                _esm_to_symbolic(EarthSciAST._ic_as_state(eq.rhs), L)
+            )
+        end
+        push!(event_kwargs, :initialization_eqs => init_eqs)
+    end
+    if !isempty(flat.guesses)
+        g = Dict{Any, Any}()
+        for (name, val) in flat.guesses
+            haskey(var_dict, name) || continue
+            g[var_dict[name]] = val isa Real ? Float64(val) : _esm_to_symbolic(val, L)
+        end
+        isempty(g) || push!(event_kwargs, :guesses => g)
+    end
     return ModelingToolkit.System(
         eqs, L.t, dvs, parameters;
         name = sys_name, event_kwargs..., kwargs...

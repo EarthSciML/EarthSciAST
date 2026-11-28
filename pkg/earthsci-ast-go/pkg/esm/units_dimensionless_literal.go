@@ -80,7 +80,6 @@ func dimensionlessLiteralFindings(file *ESMFile, scoped *scopedUnitIndex) (out [
 		env, _ := buildModelUnitEnv(model)
 		scoped.extend(env, model.Subsystems)
 		visitEquations(pointer, "equations", env, model.Equations)
-		visitEquations(pointer, "initialization_equations", env, model.InitializationEquations)
 		for _, name := range sortedKeys(model.Subsystems) {
 			if _, inline := subsystemAsMap(model.Subsystems[name]); !inline {
 				continue

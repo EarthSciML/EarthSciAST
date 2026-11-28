@@ -1422,19 +1422,79 @@ function _stripped_problem(input, req::_ProblemRequest, classes::Vector{String})
         input isa AbstractDict ?
         load_document(input; base_path = req.base_path, metaparameters = found.metaparameters) :
         _load_run_path(String(input), found.metaparameters)
-    sfile, sobj = _strip_document(file, classes)
-    prob = _esm_problem(sfile, req; strip_taken = classes, found = found)
+    sfile, sobj, flat = _strip_document(file, classes)
+    # A `u0` entry of an algebraic unknown the strip moved to `z` is that
+    # unknown's warm start, never a state element (esm-spec §11.4.3
+    # "Precedence"): a full `u0` is not refused for naming it.
+    znames = String[b.name for b in sobj.z_layout]
+    state_u0, z_u0 = _split_z_u0(req.u0, znames, keys(flat.state_variables))
+    sreq = state_u0 === req.u0 ? req : _with_u0(req, state_u0)
+    # The build reads both: the implicit part of the initialization system is
+    # handed back, and the stripped algebraic unknowns' starting values are the
+    # caller's (`_ic_system_finish`).
+    prob = task_local_storage(:esm_strip_initialization, "initialization" in classes) do
+        task_local_storage(:esm_strip_algebraic, znames) do
+            _esm_problem(sfile, sreq; strip_taken = classes, found = found)
+        end
+    end
+    sflat = prob.build.seed.prep.flat
+    si = _stripped_init_from_build(prob.build.products.ic_stripped, sflat)
+    append!(sobj.initialization.residuals, si.residuals)
+    append!(sobj.initialization.unknowns, si.unknowns)
+    append!(sobj.initialization.x0, si.x0)
     if !isempty(sobj.z_layout)
-        sflat = prob.build.seed.prep.flat
         params = Dict{String, Float64}(
             k => Float64(v.default) for (k, v) in sflat.parameters if v.default isa Real
         )
         for (k, v) in req.p
             haskey(params, String(k)) && (params[String(k)] = Float64(v))
         end
-        append!(sobj.z0, _z_starting_values(sflat, sobj.z_layout, params, req.span[1]))
+        append!(
+            sobj.z0, _z_starting_values(
+                sflat, sobj.z_layout, params, req.span[1]; u0 = z_u0, guesses = sflat.guesses,
+                built = k -> (i = get(prob.var_map, k, 0); i == 0 ? nothing : prob.u0[i])
+            )
+        )
     end
     return _with(prob; stripped = sobj)
+end
+
+# `req` with its caller `u0` replaced.
+_with_u0(req::_ProblemRequest, u0) = _ProblemRequest(
+    (f === :u0 ? u0 : getfield(req, f) for f in fieldnames(_ProblemRequest))...
+)
+
+# A caller `u0` split into the part naming state elements and the part naming
+# the stripped algebraic unknowns `znames` (by flattened element name). A key's
+# base (before any `[…]`) is resolved over every state name `states` of the
+# flattened original by the one caller-key resolver (`resolve_key`, esm-spec
+# §6.6.2): exact, qualified, or a unique suffix. It names a `z` unknown when it
+# resolves to one; a key whose base is ambiguous is refused, never guessed at.
+function _split_z_u0(u0, znames::Vector{String}, states)
+    (u0 isa AbstractDict && !isempty(znames)) || return u0, Dict{String, Float64}()
+    table = NameTable(union(Set{String}(znames), Set{String}(String(n) for n in states)))
+    zset = Set{String}(znames)
+    state = empty(u0)
+    z = Dict{String, Float64}()
+    for (k, v) in u0
+        key = String(k)
+        br = findfirst('[', key)
+        base = br === nothing ? key : key[1:prevind(key, br)]
+        suffix = br === nothing ? "" : key[br:end]
+        r = resolve_key(table, base)
+        r.how === :ambiguous && throw(
+            SimulateError(
+                _override_ambiguous_message("u0", key, r.candidates; kind = "state"),
+                ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS
+            )
+        )
+        if r.name !== nothing && r.name in zset
+            z[r.name * suffix] = Float64(v)
+        else
+            state[k] = v
+        end
+    end
+    return (isempty(z) ? u0 : state), z
 end
 
 # The providers of `req` described (`_provider_traits`) and the loader extents

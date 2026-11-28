@@ -42,11 +42,16 @@ impl StripSet {
     pub const PARAMETER_UPDATES: StripSet = StripSet(4);
     /// Every implicit equation; its algebraic unknowns move from `u` to `z`.
     pub const ALGEBRAIC: StripSet = StripSet(8);
+    /// *(esm 2.5.0.)* The truly implicit part of the initialization system
+    /// (esm-spec §11.4.3): handed to the caller, its unknowns left at their
+    /// starting points.
+    pub const INITIALIZATION: StripSet = StripSet(16);
 
-    const NAMES: [(&'static str, StripSet); 4] = [
+    const NAMES: [(&'static str, StripSet); 5] = [
         ("algebraic", StripSet::ALGEBRAIC),
         ("continuous_events", StripSet::CONTINUOUS_EVENTS),
         ("discrete_events", StripSet::DISCRETE_EVENTS),
+        ("initialization", StripSet::INITIALIZATION),
         ("parameter_updates", StripSet::PARAMETER_UPDATES),
     ];
 
@@ -201,6 +206,65 @@ pub struct StrippedConstructs {
     pub(crate) z_layout: Vec<ZBlock>,
     pub(crate) z0: Vec<Option<f64>>,
     pub(crate) residuals: Vec<StrippedResidual>,
+    pub(crate) initialization: StrippedInitialization,
+}
+
+/// The removed implicit part of the initialization system (`strip` class
+/// `initialization`, API_SPEC §5.8; the member's shape as PR #820 drafted it).
+#[derive(Debug, Clone, Default)]
+pub struct StrippedInitialization {
+    /// Its starting values, as element names in state-layout order.
+    pub unknowns: Vec<String>,
+    /// The starting point of each: the supplied value of an algebraic
+    /// unknown, else its `guesses` entry, else its declared default.
+    pub x0: Vec<Option<f64>>,
+    /// One per removed equation, `ic` terms kept.
+    pub residuals: Vec<StrippedResidual>,
+}
+
+impl StrippedInitialization {
+    /// The member as JSON: `{"residuals", "unknowns", "x0"}`.
+    fn to_json(&self) -> Value {
+        let mut m = Map::new();
+        m.insert(
+            "residuals".into(),
+            Value::Array(self.residuals.iter().map(residual_json).collect()),
+        );
+        m.insert(
+            "unknowns".into(),
+            Value::Array(
+                self.unknowns
+                    .iter()
+                    .map(|n| Value::String(n.clone()))
+                    .collect(),
+            ),
+        );
+        m.insert(
+            "x0".into(),
+            Value::Array(
+                self.x0
+                    .iter()
+                    .map(|v| match v {
+                        Some(x) if x.is_finite() => number_json(*x),
+                        _ => Value::Null,
+                    })
+                    .collect(),
+            ),
+        );
+        Value::Object(m)
+    }
+}
+
+fn residual_json(r: &StrippedResidual) -> Value {
+    let mut m = Map::new();
+    m.insert("id".into(), Value::String(r.id.clone()));
+    m.insert("origin".into(), origin_json(&r.origin));
+    m.insert(
+        "shape".into(),
+        Value::Array(r.shape.iter().map(|&n| Value::from(n)).collect()),
+    );
+    m.insert("expr".into(), expr_json(&r.expr));
+    Value::Object(m)
 }
 
 impl StrippedConstructs {
@@ -251,7 +315,15 @@ impl StrippedConstructs {
     /// Whether anything was removed. A Problem is stripped exactly when this
     /// is false.
     pub fn is_empty(&self) -> bool {
-        self.events.is_empty() && self.parameter_updates.is_empty() && self.residuals.is_empty()
+        self.events.is_empty()
+            && self.parameter_updates.is_empty()
+            && self.residuals.is_empty()
+            && self.initialization.residuals.is_empty()
+    }
+
+    /// The removed implicit part of the initialization system.
+    pub fn initialization(&self) -> &StrippedInitialization {
+        &self.initialization
     }
 
     /// The classes whose constructs were actually removed, ascending.
@@ -268,6 +340,9 @@ impl StrippedConstructs {
         }
         if !self.residuals.is_empty() {
             set |= StripSet::ALGEBRAIC;
+        }
+        if !self.initialization.residuals.is_empty() {
+            set |= StripSet::INITIALIZATION;
         }
         set.names()
     }
@@ -350,24 +425,10 @@ impl StrippedConstructs {
         );
         alg.insert(
             "residuals".into(),
-            Value::Array(
-                self.residuals
-                    .iter()
-                    .map(|r| {
-                        let mut m = Map::new();
-                        m.insert("id".into(), Value::String(r.id.clone()));
-                        m.insert("origin".into(), origin_json(&r.origin));
-                        m.insert(
-                            "shape".into(),
-                            Value::Array(r.shape.iter().map(|&n| Value::from(n)).collect()),
-                        );
-                        m.insert("expr".into(), expr_json(&r.expr));
-                        Value::Object(m)
-                    })
-                    .collect(),
-            ),
+            Value::Array(self.residuals.iter().map(residual_json).collect()),
         );
         root.insert("algebraic".into(), Value::Object(alg));
+        root.insert("initialization".into(), self.initialization.to_json());
         Value::Object(root)
     }
 
@@ -482,6 +543,14 @@ pub(crate) fn is_strippable_implicit(lhs: &Expr) -> bool {
         body,
         Expr::Operator(n) if matches!(n.op.as_str(), "ic" | "D")
     )
+}
+
+/// Whether `eq` is a strippable implicit equation: an implicit left-hand
+/// side ([`is_strippable_implicit`]) on an equation that is not an
+/// initialization equation (one that mentions `ic`, esm-spec §11.4.3; class
+/// `initialization` takes those).
+pub(crate) fn is_strippable_implicit_equation(eq: &crate::types::Equation) -> bool {
+    is_strippable_implicit(&eq.lhs) && !crate::initialization::is_initialization_equation(eq)
 }
 
 /// Whether `spec` is a symbolic update `set` strips: every rule is
@@ -888,7 +957,7 @@ fn remove_model_implicit(model: &mut Model) -> usize {
     let before = model.equations.len();
     model
         .equations
-        .retain(|eq| !is_strippable_implicit(&eq.lhs));
+        .retain(|eq| !is_strippable_implicit_equation(eq));
     let mut removed = before - model.equations.len();
     for (_, sub) in model.inline_subsystems_mut() {
         removed += remove_model_implicit(sub);
@@ -904,7 +973,7 @@ fn collect_algebraic(
     let mut counters: HashMap<String, usize> = HashMap::new();
     let mut read: HashSet<String> = HashSet::new();
     for (k, eq) in flat.equations.iter().enumerate() {
-        if !is_strippable_implicit(&eq.lhs) {
+        if !is_strippable_implicit_equation(eq) {
             continue;
         }
         let origin = flat
@@ -1065,12 +1134,17 @@ pub(crate) fn declared_sets(name: &str, flat: &FlattenedSystem) -> Option<Vec<St
         .map(|v| v.shape.clone().unwrap_or_default())
 }
 
-/// The `z` starting values: each unknown's `ic` equation evaluated at the
-/// start of the run, else its declared default, column-major.
+/// The `z` warm start (API_SPEC §5.8) of a Problem that holds no starting
+/// state to read it from (one with no differential equations, or a build
+/// without the `solve` feature): per element, the unknown's explicit `ic`
+/// value at the start of the run, else the caller's `u0` entry (a supplied
+/// value of an algebraic unknown is a starting guess, esm-spec §11.4.3), else
+/// its `guesses` entry, else its declared default, column-major.
 pub(crate) fn z_starting_values(
     flat: &FlattenedSystem,
     z: &[ZBlock],
     params: &HashMap<String, f64>,
+    u0: &HashMap<String, f64>,
 ) -> Vec<Option<f64>> {
     let index_sets: HashMap<String, crate::types::IndexSet> = flat
         .index_sets
@@ -1081,26 +1155,34 @@ pub(crate) fn z_starting_values(
     for b in z {
         let len = b.shape.iter().product::<usize>().max(1);
         let ic = flat
-            .equations
+            .field_ics
             .iter()
-            .find_map(|eq| match &eq.lhs {
-                Expr::Operator(n)
-                    if n.op == "ic"
-                        && matches!(n.args.first(), Some(Expr::Variable(v)) if *v == b.name) =>
-                {
-                    Some(eq.rhs.clone())
-                }
-                _ => None,
-            })
+            .find(|(t, _)| *t == b.name)
+            .map(|(_, r)| r.clone());
+        let local = b.name.rsplit_once('.').map_or(b.name.as_str(), |(_, l)| l);
+        let supplied: Option<Vec<f64>> = (len == 1)
+            .then(|| u0.get(&b.name).or_else(|| u0.get(local)).map(|&v| vec![v]))
+            .flatten()
             .or_else(|| {
-                flat.field_ics
-                    .iter()
-                    .find(|(t, _)| *t == b.name)
-                    .map(|(_, r)| r.clone())
-            });
+                let cells: Option<Vec<f64>> = (1..=len)
+                    .map(|i| {
+                        u0.get(&format!("{}[{i}]", b.name))
+                            .or_else(|| u0.get(&format!("{local}[{i}]")))
+                            .copied()
+                    })
+                    .collect();
+                cells.filter(|_| len > 1)
+            })
+            .or_else(|| u0.get(&b.name).or_else(|| u0.get(local)).map(|&v| vec![v]));
         let values: Option<Vec<f64>> = ic
             .and_then(|rhs| {
                 crate::simulate_array::eval_buildtime_values(&rhs, &index_sets, params).ok()
+            })
+            .or(supplied)
+            .or_else(|| {
+                flat.guesses.get(&b.name).and_then(|g| {
+                    crate::simulate_array::eval_buildtime_values(g, &index_sets, params).ok()
+                })
             })
             .or_else(|| {
                 flat.state_variables

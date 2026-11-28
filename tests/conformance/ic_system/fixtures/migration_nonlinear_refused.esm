@@ -1,0 +1,73 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "ic_migration_nonlinear_refused",
+    "description": "esm-spec 11.4.4: in a model with no time derivative, an initialization equation whose left-hand side is not a bare unknown has no meaning as a starting point; the loader rejects the document with deprecated_field as an error.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "N": {
+      "variables": {
+        "Ksp": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1e-06,
+          "description": "solubility product"
+        },
+        "H": {
+          "type": "unknown",
+          "units": "1",
+          "description": "hydrogen ion"
+        },
+        "SO4": {
+          "type": "unknown",
+          "units": "1",
+          "description": "sulfate"
+        }
+      },
+      "system_kind": "nonlinear",
+      "equations": [
+        {
+          "lhs": {
+            "op": "*",
+            "args": [
+              "H",
+              "H",
+              "SO4"
+            ]
+          },
+          "rhs": "Ksp"
+        },
+        {
+          "lhs": "H",
+          "rhs": {
+            "op": "*",
+            "args": [
+              2.0,
+              "SO4"
+            ]
+          }
+        }
+      ],
+      "initialization_equations": [
+        {
+          "lhs": {
+            "op": "*",
+            "args": [
+              "H",
+              "SO4"
+            ]
+          },
+          "rhs": 1.0
+        }
+      ]
+    }
+  }
+}

@@ -160,6 +160,9 @@ const (
 	// whole vocabulary.
 	CodeICSystemUnbalanced = "ic_system_unbalanced"
 	CodeICSystemUnsolved   = "ic_system_unsolved"
+	// CodeICInvalidArgument: esm 2.5.0 (esm-spec §4.2), an `ic` whose argument
+	// is neither a variable reference nor D of one, refused at load.
+	CodeICInvalidArgument = "ic_invalid_argument"
 	// codeOperatorInjectTargetIsLoader: registered for the uniform code
 	// vocabulary; this binding folds the case into
 	// CodeTemplateInjectTargetNotComponent.

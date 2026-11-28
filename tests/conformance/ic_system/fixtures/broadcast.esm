@@ -1,0 +1,273 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_broadcast",
+    "description": "esm-spec 11.4.3 'Arrays': an initialization equation over arrays is elementwise, aligned by index-set name (4.3.4 rule 1). MOSAIC Kelvin's ic(aw) ~ aw0 with aw over [lev, bin] and aw0 over [lev] repeats along bin; ic(cw) ~ fac with fac over [bin] repeats along lev (the second axis, so positional alignment is caught); ic(bw) ~ ic(aw) * fac is a triangular equation whose operands align on different axes.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 2
+    },
+    "bin": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "K": {
+      "variables": {
+        "aw0": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "default": [
+            0.9,
+            0.8
+          ],
+          "description": "per-level starting water activity"
+        },
+        "fac": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "bin"
+          ],
+          "default": [
+            1.0,
+            2.0,
+            3.0
+          ],
+          "description": "per-bin factor"
+        },
+        "aw": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev",
+            "bin"
+          ],
+          "default": 100.0,
+          "description": "explicit, lower-rank rhs: aw[k, b] = aw0[k]"
+        },
+        "cw": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev",
+            "bin"
+          ],
+          "default": 100.0,
+          "description": "explicit, lower-rank rhs on the second axis: cw[k, b] = fac[b]"
+        },
+        "bw": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev",
+            "bin"
+          ],
+          "default": 100.0,
+          "description": "triangular: bw[k, b] = aw[k, b] * fac[b]"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "bin"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "aw",
+                    "i",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "output_idx": [
+              "i",
+              "j"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "bin"
+              }
+            },
+            "expr": 0.0,
+            "output_idx": [
+              "i",
+              "j"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "bin"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "cw",
+                    "i",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "output_idx": [
+              "i",
+              "j"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "bin"
+              }
+            },
+            "expr": 0.0,
+            "output_idx": [
+              "i",
+              "j"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "bin"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "bw",
+                    "i",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "output_idx": [
+              "i",
+              "j"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "bin"
+              }
+            },
+            "expr": 0.0,
+            "output_idx": [
+              "i",
+              "j"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "aw"
+            ]
+          },
+          "rhs": "aw0"
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "cw"
+            ]
+          },
+          "rhs": "fac"
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "bw"
+            ]
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "ic",
+                "args": [
+                  "aw"
+                ]
+              },
+              "fac"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -75,6 +75,9 @@ pub(crate) struct OldSpellings {
     pub(crate) fields: Vec<String>,
     /// Op renames, in walk order.
     pub(crate) ops: Vec<String>,
+    /// Models whose deprecated `initialization_equations` were rewritten
+    /// (esm 2.5.0, [`crate::ic_migration`]).
+    pub(crate) initialization: Vec<String>,
 }
 
 impl OldSpellings {
@@ -82,13 +85,26 @@ impl OldSpellings {
     /// `deprecated_op`, each only when it has a site.
     pub(crate) fn warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
+        let mut parts = Vec::new();
         if !self.fields.is_empty() {
-            out.push(format!(
-                "deprecated_field: the fields `expression_templates` and \
-                 `expression_template_imports` are read as `operators` and \
-                 `operator_imports` (esm 2.4.0, esm-spec §9.6.12). Read at: {}.",
+            parts.push(format!(
+                "the fields `expression_templates` and `expression_template_imports` are read \
+                 as `operators` and `operator_imports` (esm 2.4.0, esm-spec §9.6.12). Read at: \
+                 {}.",
                 self.fields.join(", ")
             ));
+        }
+        if !self.initialization.is_empty() {
+            parts.push(format!(
+                "`initialization_equations` is rewritten into `ic` equations in `equations`, \
+                 or into `guesses` for a model with no time derivative, and an old initial \
+                 condition of a parameter into its `default` (esm 2.5.0, esm-spec §11.4.4). \
+                 Read at: {}.",
+                self.initialization.join(", ")
+            ));
+        }
+        if !parts.is_empty() {
+            out.push(format!("deprecated_field: {}", parts.join(" ")));
         }
         if !self.ops.is_empty() {
             out.push(format!(
@@ -164,6 +180,9 @@ fn walk(
                         out.fields
                             .push(format!("{here}/{} ({old})", pointer_token(new)));
                     }
+                }
+                if map.get("op").and_then(Value::as_str) == Some("ic") && params.is_none() {
+                    crate::ic_migration::check_ic_node(map, &at.pointer())?;
                 }
                 let renamed = match map.get("op").and_then(Value::as_str) {
                     Some(OLD_APPLY_OP) => Some((
@@ -250,6 +269,16 @@ fn walk(
 /// Read every old spelling of `doc` as its esm-2.4.0 name, in place, and
 /// return the sites read (fields, then ops). See the module documentation.
 pub(crate) fn rewrite_old_spellings(doc: &mut Value) -> Result<OldSpellings, DiagnosticError> {
+    let mut out = rewrite_spellings(doc)?;
+    out.initialization = crate::ic_migration::migrate_initialization_equations(doc)?;
+    // After the migration, which writes `ic` of unknowns only.
+    crate::ic_migration::check_ic_parameter_arguments(doc)?;
+    Ok(out)
+}
+
+/// The renames of [`rewrite_old_spellings`] (fields and ops), without the
+/// `initialization_equations` migration.
+fn rewrite_spellings(doc: &mut Value) -> Result<OldSpellings, DiagnosticError> {
     let mut out = OldSpellings::default();
     // The document's own renamed independent variable (`domain.
     // independent_variable` when declared and not "t"), esm-spec §4.2.
@@ -274,7 +303,7 @@ pub(crate) fn rewrite_old_spellings(doc: &mut Value) -> Result<OldSpellings, Dia
 /// may reach without the load's wire boundary (template lowering, template
 /// machinery). A document already read is left as it is, silently.
 pub(crate) fn wire_old_spellings(doc: &mut Value) -> Result<(), DiagnosticError> {
-    if !has_old_spellings(doc) {
+    if !has_old_spellings(doc) && !crate::ic_migration::needs_migration(doc) {
         return Ok(());
     }
     for w in rewrite_old_spellings(doc)?.warnings() {
@@ -286,13 +315,19 @@ pub(crate) fn wire_old_spellings(doc: &mut Value) -> Result<(), DiagnosticError>
 /// `doc` read through its old spellings, without warnings, when it has any
 /// (and they read without conflict): the document a schema check judges, as
 /// the loader reads it before its schema check (`δ`, `∂` and the old field
-/// names are not schema names).
+/// names are not schema names), and the document the canonical form and the
+/// printers show. When the `initialization_equations` migration refuses the
+/// document, the renames still apply and the old block is left as written.
 pub(crate) fn read_silently(doc: &Value) -> Option<Value> {
-    if !has_old_spellings(doc) {
+    if !has_old_spellings(doc) && !crate::ic_migration::needs_migration(doc) {
         return None;
     }
     let mut read = doc.clone();
-    rewrite_old_spellings(&mut read).ok()?;
+    rewrite_spellings(&mut read).ok()?;
+    let mut migrated = read.clone();
+    if crate::ic_migration::migrate_initialization_equations(&mut migrated).is_ok() {
+        read = migrated;
+    }
     Some(read)
 }
 
@@ -302,10 +337,11 @@ pub(crate) fn read_silently(doc: &Value) -> Option<Value> {
 pub(crate) fn has_old_spellings(doc: &Value) -> bool {
     match doc {
         Value::Object(map) => {
-            if map
-                .keys()
-                .any(|k| k == "expression_templates" || k == "expression_template_imports")
-            {
+            if map.keys().any(|k| {
+                k == "expression_templates"
+                    || k == "expression_template_imports"
+                    || k == "initialization_equations"
+            }) {
                 return true;
             }
             if let Some(op) = map.get("op").and_then(Value::as_str) {
