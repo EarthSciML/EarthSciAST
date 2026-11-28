@@ -2154,6 +2154,22 @@ impl ArrayCompiled {
                 u[slot] = false;
             }
         }
+        // A stripped algebraic unknown's warm start (`strip` class
+        // `algebraic`, API_SPEC §5.8 as PR #820 drafted it): its explicit `ic`
+        // value over a supplied one.
+        if self.alg_stripped {
+            for w in &self.held_at_ic {
+                let Some(vs) = self.var_shapes.get(w) else {
+                    continue;
+                };
+                let n = vs.shape.iter().copied().product::<usize>().max(1);
+                for slot in vs.flat_offset..vs.flat_offset + n {
+                    if let Some(&v) = field_ic_map.get(&slot) {
+                        ic_vec[slot] = v;
+                    }
+                }
+            }
+        }
         let mut keep_guess = overridden.clone();
         keep_guess.extend(field_ic_map.keys().copied());
         for slot in self.seed_stripped_starting_points(&mut ic_vec, &resolved_params, &keep_guess) {

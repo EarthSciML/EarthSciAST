@@ -1140,10 +1140,10 @@ fn reference_integrity_reaches_every_expression_bearing_block() {
         .structural_errors
         .iter()
         .find(|e| e.message.contains("GHOST_INIT"))
-        .expect("undefined name in initialization_equations must be caught");
+        .expect("undefined name in a migrated initialization equation must be caught");
     assert!(matches!(e.code, StructuralErrorCode::UndefinedVariable));
     assert!(
-        e.path.contains("/initialization_equations/0"),
+        e.path.contains("/equations/1"),
         "the pointer must name the offending block, got {}",
         e.path
     );

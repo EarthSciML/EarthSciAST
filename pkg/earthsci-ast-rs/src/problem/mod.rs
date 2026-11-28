@@ -1388,6 +1388,26 @@ fn strip_and_build(
         params.insert("t".to_string(), tspan.0);
         constructs.z0 =
             crate::strip::z_starting_values(&flat, &constructs.z_layout, &params, &u0);
+        // The Problem holds each `z` unknown at its warm start (explicit `ic`,
+        // then the caller's `u0`, then `guesses`, then the default), built by
+        // the same evaluator as every initial condition; read it there.
+        if let Ok(state) = initial_state(&prob) {
+            let names = prob.state_variable_names();
+            let mut z0: Vec<Option<f64>> = Vec::new();
+            for b in &constructs.z_layout {
+                let base = |n: &str| n.split('[').next().unwrap_or(n).to_string();
+                z0.extend(
+                    names
+                        .iter()
+                        .zip(&state)
+                        .filter(|(n, _)| base(n) == b.name)
+                        .map(|(_, &v)| Some(v)),
+                );
+            }
+            if z0.len() == constructs.z0.len() {
+                constructs.z0 = z0;
+            }
+        }
     }
     prob.stripped = Rc::new(constructs);
     prob.strip_source = Some(Rc::new(stripped.file));

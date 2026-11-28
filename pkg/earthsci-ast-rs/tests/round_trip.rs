@@ -582,14 +582,12 @@ fn test_nonlinear_isorropia_shape_round_trip() {
         .and_then(|m| m.get("IsorropiaEq"))
         .expect("IsorropiaEq model missing");
     assert_eq!(model.system_kind.as_deref(), Some("nonlinear"));
-    assert_eq!(
-        model
-            .initialization_equations
-            .as_ref()
-            .map(|eqs| eqs.len())
-            .unwrap_or(0),
-        2,
-        "expected two initialization equations",
+    // esm 2.5.0 (esm-spec §11.4.4): a model with no time derivative reads
+    // its deprecated initialization equations as guesses; both unknowns
+    // already have one, which is kept.
+    assert!(
+        model.initialization_equations.is_none(),
+        "the deprecated block does not survive the load",
     );
     assert_eq!(
         model.guesses.as_ref().map(|g| g.len()).unwrap_or(0),

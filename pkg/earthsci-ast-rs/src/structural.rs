@@ -1676,8 +1676,18 @@ fn implicitly_declared_symbols(esm_file: &EsmFile) -> HashSet<String> {
                 // An `ic` equation's RHS is a COORDINATE EXPRESSION (§11.4): its
                 // free symbols name spatial coordinates, e.g. an ignition front
                 // at `x < x0`.
+                // Only the conventional short axes (`x`, `y`, `z`): a named
+                // axis is an index-set key or a `dim` already, and any other
+                // free name is an undefined variable — which a migrated
+                // `initialization_equations` entry must still report
+                // (esm-spec §11.4.4; the TypeScript and Python checkers).
                 if is_ic_equation(&eq.lhs) {
-                    collect_bare_symbols(&eq.rhs, &mut symbols);
+                    let mut bare = HashSet::new();
+                    collect_bare_symbols(&eq.rhs, &mut bare);
+                    symbols.extend(
+                        bare.into_iter()
+                            .filter(|s| matches!(s.as_str(), "x" | "y" | "z")),
+                    );
                 }
                 collect_coordinate_symbols(&eq.lhs, &mut symbols);
                 collect_coordinate_symbols(&eq.rhs, &mut symbols);
