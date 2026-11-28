@@ -2626,7 +2626,7 @@
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel/initialization_equations/0/rhs",
+        "path": "/models/TestModel/equations/1/rhs",
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in initialization equation but not declared",
         "details": {

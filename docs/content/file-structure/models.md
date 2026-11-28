@@ -116,7 +116,7 @@ differentiated variable, and the independent variable goes in `wrt`. Writing
 
 | Field | Meaning |
 |---|---|
-| `initialization_equations` | Equations solved once at initialization. |
+| `initialization_equations` | Deprecated (esm 2.5.0). The loader rewrites each into an `ic` equation in `equations` (or into `guesses` for a model with no time derivative) and warns `deprecated_field`. Write initialization equations with `ic` instead: `ic(x) ~ x0`, `ic(z) ~ ic(x) + 1`, `ic(x) + ic(y) ~ total` (esm-spec §11.4.3). |
 | `guesses` | Initial guesses for an implicit solve, `name -> value or expression`. |
 | `system_kind` | Declared system kind, when it cannot be derived. |
 | `discrete_events` / `continuous_events` | Event definitions; see [coupling](../../coupling/). |
