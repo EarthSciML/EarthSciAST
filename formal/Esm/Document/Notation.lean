@@ -181,8 +181,9 @@ def coreOps : List OpRow := [
     tier := escape,
     latex := r"the escape form \esm{D}{fields}{u}; the earlier \operatorname{D}_{x}(u, a, b) is read as partial",
     typst := r#"the escape form esm.node("D", #(…), u); the earlier op("D")_(x)(u, a, b) is read as partial"# },
-  { op := "ic", tier := native, latex := "N(t_{0}) = …, equation left-hand side only",
-    typst := "N(t_0) = …" },
+  { op := "ic", tier := native,
+    latex := r"N(t_{0}) for ic of a name, anywhere in an equation; ic of D(N) in the escape form \esm{ic}{{}}{\frac{\mathrm{d} N}{\mathrm{d} t}}",
+    typst := r#"N(t_0); ic of D(N) in the escape form esm.node("ic", #(:), (dif N)/(dif t))"# },
   { op := "Pre", tier := call, latex := r"\operatorname{Pre}(x)", typst := r#"op("Pre")(x)"# },
   { op := "enum", tier := call, latex := r"\operatorname{enum}(\mathit{Land}, \mathit{urban})",
     typst := r#"op("enum")(italic("Land"), italic("urban"))"# },
@@ -463,9 +464,9 @@ def skeleton : List SkeletonRow := [
     typst := "#var($N$, …)" },
   { field := "equations", home := .displayMath,
     markdown := "one $$…$$ per equation, in order", typst := "one $ … $ per equation" },
-  { field := "initialization_equations, constraint_equations", home := .mathInContainer,
-    markdown := ":::initialization / :::constraints on a line of its own, one $$ display per equation, then :::",
-    typst := "#initialization[$ … $] / #constraints[$ … $], one per equation" },
+  { field := "constraint_equations; initialization_equations (deprecated, esm 2.5.0: read always, printed only for a document whose migration is refused, since the canonical form rewrites the field into ic equations or guesses, esm-spec §11.4.4)", home := .mathInContainer,
+    markdown := ":::constraints / :::initialization on a line of its own, one $$ display per equation, then :::",
+    typst := "#constraints[$ … $] / #initialization[$ … $], one per equation" },
   { field := "reactions", home := .reactionLine,
     markdown := r"one line per reaction, $$\ce{A + B ->[{$k$}] C}$$ {#id key=value}",
     typst := "one line per reaction, #ce[A + B ->[$k$] C] <id>; with other fields #reaction(key: value)[#ce[…]] <id>" },
@@ -666,7 +667,8 @@ def variants : List Variant := [
     readsAs := "the native node, exp(x)" },
   { spelling := "per-model declarations table", surface := .markdown, readsAs := "the declarations" },
   { spelling := ":::initialization or :::constraints holding several displays, blank lines between",
-    surface := .markdown, readsAs := "consecutive initialization equations or constraints" },
+    surface := .markdown,
+    readsAs := "consecutive initialization equations or constraints (an initialization container reads as the deprecated initialization_equations, which the canonical form then migrates)" },
   { spelling := r"a stoichiometric coefficient of 1 written out ($1$ A)", surface := .both,
     readsAs := "coefficient 1" },
   { spelling := r#"a formula-shaped species written as math ($\mathrm{NO_{2}}$, $upright("NO")_2$)"#,
@@ -689,8 +691,9 @@ def variants : List Variant := [
 /-! ## Canonical-form spelling rules
 
 Redundant spellings the canonical form merges (landing with the canonical unit spelling).
-`esm-lean canon` (`spellRules` in `Adapter/Doc.lean`) applies the `neg`, `pow` and `faq`
-default-field rules (the last as `faqDefaults`) and
+`esm-lean canon` (`spellRules` in `Adapter/Doc.lean`, then `Source.InitMigration`)
+applies the `neg`, `pow` and `faq` default-field rules (the last as `faqDefaults`), the
+`initialization_equations` migration, and
 respells every `units` and `default_units` string (`Esm.Units.canon`, under which `""`,
 `"1"` and `"dimensionless"` are all `"1"`); a `const` node whose units spell `"1"` drops
 them, so one whose value is a number is that bare number, whatever other fields it has
@@ -723,7 +726,10 @@ def spellingRules : List SpellingRule := [
   { from_ := "expression_template_imports (old name)", into := "operator_imports", corpusCount := 212 },
   { from_ := "expression_templates (old name)", into := "operators", corpusCount := 196 },
   { from_ := r#"D with wrt present and not "t" (spec §4.2, unless the wrt is a parameter of the enclosing definition), δ, ∂"#,
-    into := "partial", corpusCount := 140 }
+    into := "partial", corpusCount := 140 },
+  { from_ := "initialization_equations of a model (deprecated, esm-spec §11.4.4)",
+    into := "a parameter's default for an initial condition of a parameter (and, below esm 2.5.0, for an ic(k) equation of one); the rest ic equations appended to equations, or guesses entries for a model with no time derivative (Source.InitMigration; a document the migration refuses is kept as written)",
+    corpusCount := 9 }
 ]
 
 end Esm.Document.Notation
