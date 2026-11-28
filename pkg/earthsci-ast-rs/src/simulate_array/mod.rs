@@ -851,6 +851,9 @@ pub struct ArrayCompiled {
     /// Whether the caller took the implicit part of the initialization system
     /// (`strip` class `initialization`, API_SPEC §5.8).
     pub(crate) init_stripped: bool,
+    /// Whether the caller took the implicit equations (`strip` class
+    /// `algebraic`): a held unknown starts from its `guesses` entry.
+    pub(crate) alg_stripped: bool,
     /// The STATE-FREE observed definitions a field `ic` RHS reads, in
     /// dependency order (esm-spec §6.6.5 "Build-time evaluation scope").
     ///

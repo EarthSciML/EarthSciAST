@@ -28,8 +28,6 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use indexmap::IndexMap;
-
 use crate::flatten::{FlattenedSystem, TermOrigin};
 use crate::simulate::SimulateError;
 use crate::types::{Equation, Expr, ExpressionNode};
@@ -869,11 +867,6 @@ fn mark_coverage(rhs: &Expr, ext: &[usize], mask: &mut [bool]) {
             d += 1;
         }
     }
-}
-
-/// The `guesses` of the flattened system a removed unknown starts from.
-pub(crate) fn guess_of<'a>(flat_guesses: &'a IndexMap<String, Expr>, name: &str) -> Option<&'a Expr> {
-    flat_guesses.get(name)
 }
 
 #[cfg(test)]

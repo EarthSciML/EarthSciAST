@@ -1091,6 +1091,7 @@ impl ArrayCompiled {
             init_system: Default::default(),
             init_guesses: Default::default(),
             init_stripped: false,
+            alg_stripped: false,
             ic_scope,
             index_sets: index_sets.clone(),
             namespace: None,
@@ -2038,7 +2039,12 @@ fn capture_ic_scope(
         })
         .chain(flat_ics.iter().map(|(t, rhs)| (t.clone(), free_names(rhs))))
         .collect();
-    let ic_reads: HashSet<String> = ics.iter().flat_map(|(_, r)| r.iter().cloned()).collect();
+    let mut ic_reads: HashSet<String> = ics.iter().flat_map(|(_, r)| r.iter().cloned()).collect();
+    // The initialization system's triangular steps read the scope too (they
+    // read states by name on purpose, so they are not checked for that).
+    for eq in model.initialization_equations.iter().flatten() {
+        ic_reads.extend(free_names(&eq.rhs));
+    }
     if ic_reads.is_empty() {
         return IcScope::default();
     }

@@ -1890,11 +1890,11 @@ fn build_problem(
     )?;
     // `strip` class `initialization` (API_SPEC §5.8): the caller takes the
     // implicit part of the initialization system.
-    if taken.contains(crate::strip::StripSet::INITIALIZATION)
-        && let Backend::Array(c) = &mut backend
+    if let Backend::Array(c) = &mut backend
         && let Some(c) = Rc::get_mut(c)
     {
-        c.init_stripped = true;
+        c.init_stripped = taken.contains(crate::strip::StripSet::INITIALIZATION);
+        c.alg_stripped = taken.contains(crate::strip::StripSet::ALGEBRAIC);
     }
 
     // ---- (4a) The missing-data gate (esm-spec §10.10). ---------------------

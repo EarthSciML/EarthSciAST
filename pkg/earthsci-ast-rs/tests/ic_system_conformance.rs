@@ -120,10 +120,21 @@ fn ic_system_cases() {
         };
         let names = prob.state_variable_names();
         let expected = numbers(&c["expected"]);
+        // This binding keeps a stripped algebraic unknown (a `z` unknown) in
+        // the Problem's state vector, held at its warm start; the manifest's
+        // `expected` is the state without them (API_SPEC §5.8: `u` is the
+        // state layout with the `z` unknowns removed).
+        let z: Vec<String> = stripped(&prob)
+            .algebraic_unknowns()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let in_z = |n: &str| z.iter().any(|w| n == w || n.starts_with(&format!("{w}[")));
         let got: HashMap<&str, f64> = names
             .iter()
             .map(String::as_str)
             .zip(u0.iter().copied())
+            .filter(|(n, _)| !in_z(n))
             .collect();
         let mut want_names: Vec<&String> = expected.keys().collect();
         want_names.sort();

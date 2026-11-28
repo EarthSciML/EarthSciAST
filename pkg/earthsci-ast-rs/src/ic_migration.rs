@@ -142,7 +142,8 @@ fn migrate_model(
             return Err(err(
                 codes::DEPRECATED_FIELD,
                 format!(
-                    "{ptr}/initialization_equations/{k}: the model has no time derivative, so \
+                    "deprecated_field: {ptr}/initialization_equations/{k}: the model has no time \
+                     derivative, so \
                      its initialization equations are starting points for its solve and move \
                      into `guesses` (esm-spec §11.4.4); this one's left-hand side is not a bare \
                      unknown, so it has no reading as a starting point. Write a `guesses` entry \
@@ -322,7 +323,7 @@ pub(crate) fn check_ic_node(map: &Map<String, Value>, at: &str) -> Result<(), Di
     Err(err(
         codes::UNSUPPORTED_CONSTRUCT,
         format!(
-            "{at}: malformed `ic`: its one argument must be a variable reference or `D` of one \
+            "unsupported_construct: {at}: malformed `ic`: its one argument must be a variable reference or `D` of one \
              (esm-spec §4.2); an element's starting value is written `index(ic(u), i)`, not \
              `ic(index(u, i))`"
         ),

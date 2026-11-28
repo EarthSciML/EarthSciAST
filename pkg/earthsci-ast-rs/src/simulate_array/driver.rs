@@ -1445,6 +1445,13 @@ impl ArrayCompiled {
             for (name, arr) in self.forcing.borrow().iter() {
                 scope.entry(name.clone()).or_insert_with(|| arr.clone());
             }
+            // A state-free observed of the build-time scope (a shaped
+            // parameter's `const` data included), or a shaped parameter the
+            // forcing buffer does not hold yet, reads as a field initial
+            // condition reads it.
+            for name in super::compile::free_names(rhs) {
+                self.bind_ic_scope_name(&name, &mut scope, &mut step_params, mode, 0);
+            }
             let params = &step_params;
             if !super::compile::is_cell_assigning_faq(rhs) {
                 // A scalar target: one value, its right-hand side's.
@@ -1952,15 +1959,11 @@ impl ArrayCompiled {
         // An initialization equation assigns its whole target, and a held
         // state (no `D`, no definition) is not an ODE state. A stripped
         // implicit part's unknown with a guess starts from it.
-        let guessed: Vec<String> = if self.init_stripped {
-            self.init_system
-                .implicit_unknowns()
-                .into_iter()
-                .filter(|w| self.init_guesses.contains_key(w))
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let guessed: Vec<String> = self
+            .guess_seeded_unknowns()
+            .into_iter()
+            .filter(|w| self.init_guesses.contains_key(w))
+            .collect();
         for target in self
             .init_faqs
             .iter()
@@ -2151,7 +2154,9 @@ impl ArrayCompiled {
                 u[slot] = false;
             }
         }
-        for slot in self.seed_stripped_starting_points(&mut ic_vec, &resolved_params, &overridden) {
+        let mut keep_guess = overridden.clone();
+        keep_guess.extend(field_ic_map.keys().copied());
+        for slot in self.seed_stripped_starting_points(&mut ic_vec, &resolved_params, &keep_guess) {
             if let Some(u) = unset.as_mut() {
                 u[slot] = false;
             }
@@ -2165,6 +2170,53 @@ impl ArrayCompiled {
     }
 
     #[cfg(feature = "solve")]
+    /// Bind `name` into a step's build-time scope when nothing binds it yet:
+    /// a state-free observed of [`Self::ic_scope`] (its own reads first), else
+    /// a forcing slot's declared value.
+    #[cfg(feature = "solve")]
+    fn bind_ic_scope_name(
+        &self,
+        name: &str,
+        scope: &mut HashMap<String, ArrayD<f64>>,
+        params: &mut HashMap<String, f64>,
+        mode: BuildEval,
+        depth: usize,
+    ) {
+        if depth > 64 || scope.contains_key(name) || params.contains_key(name) {
+            return;
+        }
+        if let Some(def) = self.ic_scope.defs.iter().find(|d| d.name == name) {
+            for dep in &def.deps {
+                self.bind_ic_scope_name(dep, scope, params, mode, depth + 1);
+            }
+            for need in &def.needs {
+                self.bind_ic_scope_name(need, scope, params, mode, depth + 1);
+            }
+            if let Ok(Routed::Value(v, _)) = eval_buildtime_field_routed(
+                Some(&def.name),
+                &def.body,
+                &self.index_sets,
+                params,
+                scope,
+                mode,
+                &self.operators,
+            ) {
+                match v {
+                    Value::Array(a) => {
+                        scope.insert(name.to_string(), *a);
+                    }
+                    Value::Scalar(x) => {
+                        params.insert(name.to_string(), x);
+                    }
+                }
+            }
+            return;
+        }
+        if let Some(Some(v)) = self.forcing_default(name) {
+            scope.insert(name.to_string(), v);
+        }
+    }
+
     /// The supplied values of `initial_conditions` (canonical keys), per
     /// state, as the column-major elements they set.
     pub(crate) fn supplied_elements(
@@ -2241,10 +2293,7 @@ impl ArrayCompiled {
         keep: &HashSet<usize>,
     ) -> Vec<usize> {
         let mut out = Vec::new();
-        if !self.init_stripped {
-            return out;
-        }
-        for w in self.init_system.implicit_unknowns() {
+        for w in self.guess_seeded_unknowns() {
             let (Some(vs), Some(guess)) = (self.var_shapes.get(&w), self.init_guesses.get(&w))
             else {
                 continue;
@@ -2267,6 +2316,24 @@ impl ArrayCompiled {
                 ic_vec[slot] = v;
                 out.push(slot);
             }
+        }
+        out
+    }
+
+    /// The unknowns whose `guesses` entry is a starting point of this
+    /// Problem's state: the unknowns of a stripped implicit initialization
+    /// part (`strip` class `initialization`), and the stripped algebraic
+    /// unknowns (`strip` class `algebraic`, whose warm start the caller
+    /// takes), below an explicit `ic` and a supplied value.
+    fn guess_seeded_unknowns(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        if self.init_stripped {
+            out.extend(self.init_system.implicit_unknowns());
+        }
+        if self.alg_stripped {
+            let mut held: Vec<&String> = self.held_at_ic.iter().collect();
+            held.sort();
+            out.extend(held.into_iter().cloned());
         }
         out
     }
