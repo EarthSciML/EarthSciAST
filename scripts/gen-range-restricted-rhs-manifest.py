@@ -55,7 +55,13 @@ DOCS = {
     "lanes_column": {"document": "fixtures/lanes_column.esm"},
     "lanes_surface_region": {"document": "fixtures/lanes_surface_region.esm"},
     "lanes_time_observed_ic": {"document": "fixtures/lanes_time_observed_ic.esm"},
+    "lanes_data_and_time_observeds": {"document": "fixtures/lanes_data_and_time_observeds.esm"},
+    "lanes_args_operand_list": {"document": "fixtures/lanes_args_operand_list.esm"},
     "lanes_forcing_contraction": {"document": "fixtures/lanes_forcing_contraction.esm"},
+    "lanes_elementwise_by_name": {"document": "fixtures/lanes_elementwise_by_name.esm"},
+    "lanes_time_observed_whole_domain": {
+        "document": "fixtures/lanes_time_observed_whole_domain.esm"
+    },
     "global_horizontal_sum": {"document": "fixtures/global_horizontal_sum.esm"},
     "global_scalar_state": {"document": "fixtures/global_scalar_state.esm"},
     "esd_ppm_1d_periodic": {
@@ -644,6 +650,57 @@ def lane_cases():
             "covers": ["lanes", "time_observed_read_by_ic"],
         }
     )
+    # A whole-domain state-free observed of the data (no lane computes it
+    # from its own cell) and an array observed of t that reads it, both read
+    # by the state equation: the lane program gathers the first per lane and
+    # computes the second per lane. The same cells as the cases above.
+    out.append(
+        {
+            "id": "lanes_data_and_time_observeds",
+            "kind": "lanes",
+            **doc_ref("lanes_data_and_time_observeds"),
+            "selection": SELECT_ALL,
+            "lane_kind": "cells",
+            "lane_sets": ["lon", "lat", "lev"],
+            "capacity": cap,
+            "batches": [
+                {"id": "mixed_levels", "cells": perm[:cap], "n": cap},
+                {
+                    "id": "mixed_levels_padded",
+                    "cells": perm[cap : cap + 11] + [perm[cap]] * (cap - 11),
+                    "n": 11,
+                },
+            ],
+            "negative_control": {"batch": "mixed_levels", "swap_lanes": [1, 2]},
+            "covers": ["lanes", "state_free_observed", "time_observed_per_lane"],
+        }
+    )
+    # An observed of t defined by an array faq whose `args` list only its
+    # operand arrays: computed per lane, in a batch whose lanes are each at
+    # their own time (`times`, one per lane; the harness compares lane l with
+    # the whole-domain program at times[l]) and in one at t = 0.
+    out.append(
+        {
+            "id": "lanes_args_operand_list",
+            "kind": "lanes",
+            **doc_ref("lanes_args_operand_list"),
+            "selection": SELECT_ALL,
+            "lane_kind": "cells",
+            "lane_sets": ["lon", "lat", "lev"],
+            "capacity": cap,
+            "batches": [
+                {
+                    "id": "mixed_times",
+                    "cells": perm[:cap],
+                    "n": cap,
+                    "times": [0.25 * k + (0.5 if k % 3 == 0 else 0.0) for k in range(cap)],
+                },
+                {"id": "one_time", "cells": perm[cap : 2 * cap], "n": cap},
+            ],
+            "negative_control": {"batch": "one_time", "swap_lanes": [1, 2]},
+            "covers": ["lanes", "faq_args_operand_list", "per_lane_times"],
+        }
+    )
     # Forcing data feeding a pointwise operator: a whole-domain contraction of a
     # forcing array (forcing only) read at a computed subscript, and forcing
     # arrays pre-gathered per lane at an affine and a non-affine subscript.
@@ -675,6 +732,76 @@ def lane_cases():
             ],
             "negative_control": {"batch": "batch_2", "swap_lanes": [1, 2]},
             "covers": ["lanes", "forcing_only_contraction", "pre_gathered_computed_subscript"],
+        }
+    )
+    # Shape-less elementwise observeds whose operands' axes come in other
+    # orders, or are a subset on a trailing axis, align by index-set name in
+    # the whole-domain program and in the lane program alike: at one time and
+    # at a time per lane. Its own generator, so the cases above keep theirs.
+    erng = random.Random(816)
+    cells = [[i, j] for j in range(1, 4) for i in range(1, 5)]
+    perm = cells[:]
+    erng.shuffle(perm)
+    cap = 8
+    out.append(
+        {
+            "id": "lanes_elementwise_by_name",
+            "kind": "lanes",
+            **doc_ref("lanes_elementwise_by_name"),
+            "selection": SELECT_ALL,
+            "lane_kind": "cells",
+            "lane_sets": ["lon", "lat"],
+            "capacity": cap,
+            "batches": [
+                {"id": "one_time", "cells": perm[:cap], "n": cap},
+                {
+                    "id": "one_time_padded",
+                    "cells": perm[cap:] + [perm[cap]] * (2 * cap - len(perm)),
+                    "n": len(perm) - cap,
+                },
+                {
+                    "id": "mixed_times",
+                    "cells": perm[cap:] + perm[: 2 * cap - len(perm)],
+                    "n": cap,
+                    "times": [0.3 * k + (0.5 if k % 2 else 0.0) for k in range(cap)],
+                },
+            ],
+            "negative_control": {"batch": "one_time", "swap_lanes": [1, 2]},
+            "covers": ["lanes", "elementwise_alignment_by_name", "per_lane_times"],
+        }
+    )
+    # Observeds of t that read other cells of the lane set have no lane form:
+    # the lane program computes them over the whole domain once per call, so a
+    # call at one time (`t = 0`, or every lane at one time) equals the
+    # whole-domain program and a call at mixed times is refused naming them.
+    out.append(
+        {
+            "id": "lanes_time_observed_whole_domain",
+            "kind": "lanes",
+            **doc_ref("lanes_time_observed_whole_domain"),
+            "selection": SELECT_ALL,
+            "lane_kind": "cells",
+            "lane_sets": ["x"],
+            "capacity": 4,
+            "batches": [
+                {"id": "one_time", "cells": [[4], [1], [5], [2]], "n": 4},
+                {"id": "one_time_padded", "cells": [[3], [5], [3], [3]], "n": 2},
+                {
+                    "id": "every_lane_at_one_time",
+                    "cells": [[2], [3], [1], [4]],
+                    "n": 4,
+                    "times": [0.75] * 4,
+                },
+                {
+                    "id": "mixed_times",
+                    "cells": [[2], [3], [1], [4]],
+                    "n": 4,
+                    "times": [0.25, 0.75, 0.75, 1.5],
+                    "expect_mixed_times": ["M.p", "M.q"],
+                },
+            ],
+            "negative_control": {"batch": "one_time", "swap_lanes": [1, 2]},
+            "covers": ["lanes", "time_observed_whole_domain", "mixed_times_refused"],
         }
     )
     # A lane program over an operator that reads a neighbour is refused.

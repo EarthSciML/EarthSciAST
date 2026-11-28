@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from .. import typst_dict
-from ..math import EMPTY_SYM, parse_typst, print_typst
+from ..math import EMPTY_SYM, parse_typst, print_typst, print_typst_eqn
 from ..math import token as K
 from ..math import typst as mtypst
 from ..math.expr import Sym, name_ok
@@ -731,7 +731,7 @@ def _item_ok_tm(t: Tm) -> bool:
 
 def typ_of(s: Sym, e: Eqn) -> str:
     """``Typ.typOf``: an equation's Typst math under the symbol table ``s``."""
-    return print_typst(s, eq_expr(e))
+    return print_typst_eqn(s, eq_expr(e))
 
 
 def pr_t(s: Sym, e: Eqn) -> str:

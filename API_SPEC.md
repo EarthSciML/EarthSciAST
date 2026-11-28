@@ -401,9 +401,14 @@ not a typed file. A printer puts the document in canonical form first, so
 result is in canonical form.
 
 `print_math(expr, names, format)` prints one expression, or one equation (an
-object with `lhs` and `rhs`, printed as its two sides around `=`), as the math a
-document display holds, without its delimiters: LaTeX for `markdown`, Typst
-math for `typst`. `names` plays the part of the names a component declares
+object with `lhs` and `rhs`), as the math a document display holds, without its
+delimiters: LaTeX for `markdown`, Typst math for `typst`. An equation prints as
+in a document: its two sides around `=`, except that an equation `x = faq`
+whose `faq` has output indices prints in its defining form when that reads back
+as exactly the equation, the output indices on the left side and their ranges
+after the right side (Typst `y_j = sum_(i in S) w_(i, j), j in C`). An
+expression whose top is `==` is a comparison and prints as any expression does,
+never in the defining form. `names` plays the part of the names a component declares
 (its variables, species and parameters, and the document's index sets): a name
 in it prints in its declared shape and the printer avoids spellings that would
 collide with it. No template is in scope. The golden set's `math` field is
@@ -416,8 +421,10 @@ which they read through its serialized form.
 reads one expression, or one equation, with the document readers' math parser
 (`Math.parseLatex` / `Math.parseTypst`) under the same declared names, no
 template in scope, and inside the same reader bounds as a document read. Text
-whose top is `=` reads as an equation (`{lhs, rhs}`), as a display does; any
-other text reads as an expression. It refuses as the document readers do, with
+whose top is `=` reads as an equation (`{lhs, rhs}`), as a display does, and
+so does an equation in its defining form (`y_j = …, j in C`), whose right side
+reads as the `faq` with output indices it writes; any other text reads as an
+expression. It refuses as the document readers do, with
 `removed_op` or `parse_error` (below). `expression_names(expr)` lists the
 names an expression or equation uses (its string leaves under `lhs`, `rhs` and
 `args`), in order of first use: the `names` to show an expression on its own.
@@ -939,6 +946,7 @@ docstring repeats:
 | `malformed_index` | an `index` node with no operand |
 | `subscript_rank_mismatch` | a gather whose subscript count is not the array's rank |
 | `subscript_not_static` | a subscript that is not an integer function of the loop indices and build-time tables |
+| `positional_gather` | an elementwise combination with an anonymous array operand, which broadcasts positionally (esm-spec §4.3.4) |
 | `gathered_reduction_shape` | a gathered reduction whose output indices do not match its subscripts |
 | `region_value_shape` | a `makearray` region value whose rank does not match the region |
 | `region_multi_index` | a `makearray` region selected by a subscript of several loop indices |
@@ -1725,18 +1733,26 @@ keep their global 1-based values.
   evaluated from `cells`: coordinate expressions, level gates, and affine reads
   of forcing, array parameters, const arrays and state-free observeds.
   State-free observeds keep their whole-domain build-time values and are
-  gathered per lane. A read that leaves the cell (pointwise) or the column
-  (column) is refused with `compiler_refused_rule`, naming the rule and saying
-  "lane".
+  gathered per lane, or computed per lane, bitwise equal. A read that leaves
+  the cell (pointwise) or the column (column) is refused with
+  `compiler_refused_rule`, naming the rule and saying "lane", except in an
+  observed of `t` (not of a state), which is computed over the whole domain
+  instead (see "A time per lane"). A shape-less elementwise observed reads
+  each operand by index-set name (esm-spec §4.3.4) in a lane as in the
+  whole-domain program, whatever order the operands list their sets in.
 - **Array `faq` reads.** An array `faq` read at loop subscripts (a whole-array
-  right-hand side `D(x) = faq{…}`, or a `makearray` region value) is its body at
+  right-hand side `D(x) = faq{…}`, an observed of a state or of `t` defined
+  whole, `x = faq{…}`, or a `makearray` region value) is its body at
   the lane's cell, and a range that is not an output index stays a contraction.
   Each output axis must run over exactly what reads it: the whole lane set
   (`from` that set with no `of`, or `[1, n]`), the range of a non-lane loop
   variable that starts at 1, or a `makearray` region's own bounds. A value that
   does not fit, a computed subscript, a nested binder that would capture a
-  renamed index, and an array `faq` carrying `args`, `key`, `join` or
-  `distinct` are refused.
+  renamed index, and an array `faq` carrying a `key`, a `join`, `distinct`, or
+  an `args` list holding anything but the names of its operand arrays are
+  refused. An `args` list of operand names (esm-spec §4.3.1, the form the
+  planner writes for a time-blended data field) carries no meaning of its own
+  and does not stop the lane form.
 - **Pre-gathered inputs.** `lane_inputs` returns per-lane buffers for every
   non-state input, `gather_lane_inputs!` fills them for a `cells` list, and the
   pre-gathered evaluation reads them in place of the gathers. Its results are
@@ -1750,11 +1766,25 @@ keep their global 1-based values.
   0-d observed that depends on `t` is one value per lane, an array observed of
   `t` with a lane form is computed per lane, and a pre-gathered read never
   involves `t`; a batch at mixed times is evaluated in one pass. An observed
-  of `t` the state equations reach that has no lane form (for example one
-  written over a set that is not a lane set) does not stop the build: the
-  one-time call is unchanged, and a call whose lanes `1..n` have different
-  times is an error naming that observed (Rust `RhsError::MixedTimes`, Julia
-  `ArgumentError`).
+  of `t` the state equations reach that has no lane form (one written over a
+  set that is not a lane set, or one that reads other cells of a lane set,
+  such as `q[i] = Σ_m s[m]/(i+m)`) does not stop the build: it, and every
+  observed of `t` it reads, is computed over the whole domain once per call;
+  the one-time call is unchanged, and a call whose lanes `1..n` have different
+  times is an error naming those observeds (Rust `RhsError::MixedTimes`,
+  Julia `ArgumentError`).
+- **Cost.** A call does work proportional to its lanes, never to the domain.
+  Each observed of a state or of `t` that has a lane form is computed per
+  lane, in a call at one time too; only one with no lane form (and the
+  observeds of `t` it reads) is evaluated over the domain, once per call.
+  A state-free observed (one that reads neither a state nor `t`) is computed
+  either over the domain, at most once per parameter vector and forcing set,
+  per workspace or once for the lane program and shared by its workspaces,
+  and then gathered at each lane's cell; or per lane, in each call, bitwise
+  equal to the whole-domain value at the lane's cell. The two are equivalent.
+  So the first call on a workspace, or the first after a new parameter vector
+  or forcing set, may do domain-sized work for these observeds; every other
+  call does not.
 - **Capacity.** Julia loops over lanes with a run-time count, so one build
   serves every `L` (`L = size(cells, 2)`). Rust slot boxes are static, so a lane
   program is built per capacity (re-lowering only, no document rebuild) and `L`

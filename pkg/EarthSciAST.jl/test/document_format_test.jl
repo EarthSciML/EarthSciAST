@@ -41,14 +41,13 @@ const DOCFMT_FILES = (
 _docfmt_jeq(a::AbstractDict, b::AbstractDict) =
     length(a) == length(b) && all(pairs(a)) do (k, v)
     key = String(k)
-    found = false
-    for (k2, v2) in pairs(b)
-        if String(k2) == key
-            found = _docfmt_jeq(v, v2)
-            break
-        end
+    if keytype(b) <: AbstractString
+        return haskey(b, key) && _docfmt_jeq(v, b[key])
     end
-    found
+    for (k2, v2) in pairs(b)
+        String(k2) == key && return _docfmt_jeq(v, v2)
+    end
+    return false
 end
 _docfmt_jeq(a::AbstractVector, b::AbstractVector) =
     length(a) == length(b) && all(_docfmt_jeq(x, y) for (x, y) in zip(a, b))
@@ -79,10 +78,10 @@ function _docfmt_case(case)
         for (key, format) in (("markdown", :markdown), ("typst", :typst))
             text = String(case[key])
             printed = print_document(esm, format)
-            check(printed == text, "print $key differs:\n--- got\n$printed\n--- want\n$text")
+            printed == text || check(false, "print $key differs:\n--- got\n$printed\n--- want\n$text")
             try
                 back = parse_document(text, format)
-                check(_docfmt_jeq(back, esm), "parse $key differs:\n--- got\n$(JSON.json(back))")
+                _docfmt_jeq(back, esm) || check(false, "parse $key differs:\n--- got\n$(JSON.json(back))")
             catch e
                 check(false, "parse $key refused: $(sprint(showerror, e))")
             end
@@ -92,13 +91,13 @@ function _docfmt_case(case)
         esm = case["esm"]
         try
             back = parse_document(String(case["input"]), format)
-            check(_docfmt_jeq(back, esm), "parse differs:\n--- got\n$(JSON.json(back))")
+            _docfmt_jeq(back, esm) || check(false, "parse differs:\n--- got\n$(JSON.json(back))")
         catch e
             check(false, "parse refused: $(sprint(showerror, e))")
         end
         canonical = String(case["canonical"])
         printed = print_document(esm, format)
-        check(printed == canonical, "print differs:\n--- got\n$printed\n--- want\n$canonical")
+        printed == canonical || check(false, "print differs:\n--- got\n$printed\n--- want\n$canonical")
     elseif kind == "refusal"
         format = _docfmt_format(String(case["surface"]))
         want = String(case["error"])
@@ -179,10 +178,7 @@ end
 @testset "document source formats (CONFORMANCE §5.58)" begin
     @testset "golden set: $file" for file in DOCFMT_FILES
         fixture = JSON.parse(read(joinpath(DOCFMT_DIR, file), String))
-        failures = String[]
-        for case in fixture["cases"]
-            append!(failures, _docfmt_case(case))
-        end
+        failures = reduce(vcat, map_corpus(_docfmt_case, fixture["cases"]); init = String[])
         isempty(failures) || @info "document_format/$file failures" n = length(failures) first =
             join(first(failures, 5), "\n\n")
         @test isempty(failures)

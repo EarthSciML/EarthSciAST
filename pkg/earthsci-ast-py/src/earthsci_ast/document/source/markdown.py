@@ -15,7 +15,7 @@ from typing import Any
 
 from .. import limits
 from .. import yaml_codec as yaml
-from ..math import EMPTY_SYM, latex, parse_latex, print_latex
+from ..math import EMPTY_SYM, latex, parse_latex, print_latex, print_latex_eqn
 from ..math import token as K
 from ..math.expr import Sym, name_ok
 from ..math.printer import esc_t, raw_b, unesc_t
@@ -853,7 +853,7 @@ def item_ok_tm(t: Tm) -> bool:
 
 def latex_of(s: Sym, e: Eqn) -> str:
     """``Md.latexOf``: an equation's LaTeX under the symbol table ``s``."""
-    return print_latex(s, eq_expr(e))
+    return print_latex_eqn(s, eq_expr(e))
 
 
 def pr_md(s: Sym, e: Eqn) -> str:

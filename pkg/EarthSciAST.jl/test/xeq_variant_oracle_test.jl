@@ -136,10 +136,8 @@ const ONE_EQ_VARIANTS = Ref(0)
     @testset "compile-once fixture (7³, one equation)" begin
         # Single equation: no cross-equation sharing possible — the hoist must
         # be a pure no-op (same variant count, same bits).
-        build(compiler) = ESM.Internal.build(
-            ESM.flatten(ESM.load_path(FIX));
-            compiler = compiler
-        )
+        flat = ESM.flatten(ESM.load_path(FIX))
+        build(compiler) = ESM.Internal.build(flat; compiler = compiler)
         on, _off = _xeq_oracle(build)
         @test length(on[2]) == 343
         # The references are calls: no expansion sub-kernel; fifteen
@@ -151,10 +149,8 @@ const ONE_EQ_VARIANTS = Ref(0)
 
     @testset "two equations sharing template roots" begin
         FIX2 = _xeq_two_eq_fixture(FIX)
-        build(compiler) = ESM.Internal.build(
-            ESM.flatten(ESM.load_path(FIX2));
-            compiler = compiler
-        )
+        flat = ESM.flatten(ESM.load_path(FIX2))
+        build(compiler) = ESM.Internal.build(flat; compiler = compiler)
         on, off = _xeq_oracle(build)
         @test length(on[2]) == 2 * 343
         # THE A3 property, stated without an oracle switch: two equations over
@@ -200,10 +196,8 @@ const ONE_EQ_VARIANTS = Ref(0)
             "proxy27.esm"
         )
         if isfile(P27)
-            build(compiler) = ESM.Internal.build(
-                ESM.load_path(P27);
-                compiler = compiler
-            )
+            file = ESM.load_path(P27)
+            build(compiler) = ESM.Internal.build(file; compiler = compiler)
             _xeq_oracle(build)
         else
             @test isfile(P27)

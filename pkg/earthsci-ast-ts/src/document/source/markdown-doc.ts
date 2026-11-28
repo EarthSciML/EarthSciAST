@@ -9,7 +9,7 @@
  */
 
 import { jobj, type Json } from '../json.js'
-import { latexLex, nameOk, parseLatex, printLatex, type Sym } from '../math/index.js'
+import { latexLex, nameOk, parseLatex, printLatex, printLatexEqn, type Sym } from '../math/index.js'
 import { chars, type Chars } from '../number.js'
 import { escChar, isIdent } from '../strings.js'
 import * as yaml from '../yaml.js'
@@ -46,7 +46,7 @@ const FENCE = '```'
 // ## Equations in LaTeX
 
 /** `Md.latexOf`: an equation's LaTeX under the symbol table `s`. */
-const latexOf = (s: Sym, e: Eqn): string => printLatex(s, eqExpr(e))
+const latexOf = (s: Sym, e: Eqn): string => printLatexEqn(s, eqExpr(e))
 
 /** `Md.prMd`: an equation's math text: its `_comment` as a LaTeX comment line, then the equation. */
 function prMd(s: Sym, e: Eqn): string {

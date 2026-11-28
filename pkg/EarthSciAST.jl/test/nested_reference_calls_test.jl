@@ -23,8 +23,8 @@ const _NRC_PATH = joinpath(
     TESTUTILS_REPO_ROOT, "tests", "conformance", "geometry_templates", "fixtures", "nested_overlap_regrid.esm"
 )
 
-function _nrc_rhs(compiler::Symbol, path::AbstractString = _NRC_PATH)
-    prob = EarthSciAST.esm_problem(path, (0.0, 1.0); compiler = compiler)
+function _nrc_rhs(compiler::Symbol, file::EarthSciAST.EsmFile)
+    prob = EarthSciAST.esm_problem(file, (0.0, 1.0); compiler = compiler)
     prog = EarthSciAST.rhs_program(prob)
     du = zeros(length(prob.u0))
     EarthSciAST.rhs!(
@@ -50,7 +50,7 @@ end
     # E' = Σ_i A_ij F_i / A_j over the candidate pairs: 21/9, 33/9, 57/9, 69/9.
     expected = [21, 33, 57, 69] ./ 9
     for compiler in (:interpreter, :native)
-        du = _nrc_rhs(compiler)
+        du = _nrc_rhs(compiler, file)
         got = [du[only(k for k in keys(du) if endswith(k, "E[$j]"))] for j in 1:4]
         @test isapprox(got, expected; rtol = 1.0e-14)
     end
@@ -79,10 +79,9 @@ end
         b = get(eq["rhs"], "bindings", nothing)
         b !== nothing && get(b, "A_ij", nothing) == "A_ij" && (b["A_ij"] = "A_dense")
     end
-    path = joinpath(mktempdir(), "nested_overlap_regrid_renamed.esm")
-    open(io -> JSON3.write(io, doc), path, "w")
+    renamed = EarthSciAST.load_document(doc; base_path = dirname(_NRC_PATH))
     for compiler in (:interpreter, :native)
-        du = _nrc_rhs(compiler, path)
+        du = _nrc_rhs(compiler, renamed)
         got = [du[only(k for k in keys(du) if endswith(k, "E[$j]"))] for j in 1:4]
         @test isapprox(got, expected; rtol = 1.0e-14)
     end

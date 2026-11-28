@@ -8,7 +8,15 @@ import { describe, expect, it } from 'vitest'
 import { fromPlain, jarr, jint, jobj, jstr, type Json } from '../json.js'
 import { losslessJsonParse } from '../../numeric-literal.js'
 import { readFixture } from '../../test-helpers.js'
-import { parseLatex, parseTypst, printLatex, printTypst, type Sym } from './index.js'
+import {
+  parseLatex,
+  parseTypst,
+  printLatex,
+  printLatexEqn,
+  printTypst,
+  printTypstEqn,
+  type Sym,
+} from './index.js'
 import { render as latexRender } from './latex.js'
 import { dNode } from './parse.js'
 import { keyToks, mkNode, node } from './print.js'
@@ -227,14 +235,14 @@ describe('math: the golden set', () => {
         const [sy, e] = component(cs.esm as Plain)
         const lx = math.latex as string
         const ty = math.typst as string
-        const pl = printLatex(sy, e)
-        if (pl !== lx) failures.push(`${id}: printLatex\n  got  ${pl}\n  want ${lx}`)
+        const pl = printLatexEqn(sy, e)
+        if (pl !== lx) failures.push(`${id}: printLatexEqn\n  got  ${pl}\n  want ${lx}`)
         const bl = parseLatex(sy, lx)
         if (bl === undefined || JSON.stringify(bl, big) !== JSON.stringify(e, big)) {
           failures.push(`${id}: parseLatex ${lx}\n  got ${JSON.stringify(bl, big)}`)
         }
-        const pt = printTypst(sy, e)
-        if (pt !== ty) failures.push(`${id}: printTypst\n  got  ${pt}\n  want ${ty}`)
+        const pt = printTypstEqn(sy, e)
+        if (pt !== ty) failures.push(`${id}: printTypstEqn\n  got  ${pt}\n  want ${ty}`)
         const bt = parseTypst(sy, ty)
         if (bt === undefined || JSON.stringify(bt, big) !== JSON.stringify(e, big)) {
           failures.push(`${id}: parseTypst ${ty}\n  got ${JSON.stringify(bt, big)}`)

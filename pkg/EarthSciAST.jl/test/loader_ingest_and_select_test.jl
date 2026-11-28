@@ -128,11 +128,7 @@ function _lis_document(dir)
     return doc
 end
 
-_lis_sample(doc, cache_root, key) = Float64.(
-    EA_LIS.provider_sample(
-        EA_LIS.providers_from_document(doc; cache_root = cache_root)[key], 0.0
-    )
-)
+_lis_sample(providers, key) = Float64.(EA_LIS.provider_sample(providers[key], 0.0))
 
 """The `update.from` binding of the parameter a provider key names.
 
@@ -157,15 +153,15 @@ end
     @testset "the document alone decodes, maps and filters the FF10 table" begin
         mktempdir() do dir
             doc = _lis_document(dir)
-            cache = joinpath(dir, "cache")
+            providers = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
             # reader_options selected the two *egu* members and dropped their
             # header lines; codes mapped POLID; record_filter removed the
             # unmapped CO record and the SO2 record with no longitude. All of it
             # from the declaration — FORMAT-08-A-006/007/008.
-            @test _lis_sample(doc, cache, "Ingest.pollutant") == [36.0, 36.0, 1.0]
-            @test _lis_sample(doc, cache, "Ingest.annual") == [100.0, 7.0, 3.0]
-            @test _lis_sample(doc, cache, "Ingest.lon") == [-90.0, -92.0, -93.0]
-            @test _lis_sample(doc, cache, "Ingest.lat") == [40.0, 43.0, 44.0]
+            @test _lis_sample(providers, "Ingest.pollutant") == [36.0, 36.0, 1.0]
+            @test _lis_sample(providers, "Ingest.annual") == [100.0, 7.0, 3.0]
+            @test _lis_sample(providers, "Ingest.lon") == [-90.0, -92.0, -93.0]
+            @test _lis_sample(providers, "Ingest.lat") == [40.0, 43.0, 44.0]
         end
     end
 
@@ -193,12 +189,10 @@ end
         mktempdir() do dir
             doc = _lis_document(dir)
             providers = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
-            insp = EA_LIS.BuildInspection()
             # NOTE the absent metaparameters: the caller passes NO N_REC. The
             # document declares that the loader knows it (FORMAT-08-A-010).
             prep = EA_LIS.esm_problem(
-                doc, (0.0, 1.0); providers = providers, inspect = insp,
-                pushdown_rewrite = true
+                doc, (0.0, 1.0); providers = providers, pushdown_rewrite = true
             )
             @test EA_LIS.observed_field(prep, "is_NOx") == [1.0, 1.0, 0.0]
             # 100 + 7 — the dropped CO/SO2 records contribute nothing, because
@@ -257,8 +251,8 @@ end
             cache = joinpath(dir, "cache")
             provs = EA_LIS.providers_from_document(doc; cache_root = cache)
             @test haskey(provs, "Ingest.lon") && haskey(provs, "Ingest2.lon")
-            @test _lis_sample(doc, cache, "Ingest.lon") == [-90.0, -92.0, -93.0]
-            @test _lis_sample(doc, cache, "Ingest2.lon") == [40.0, 43.0, 44.0]
+            @test _lis_sample(provs, "Ingest.lon") == [-90.0, -92.0, -93.0]
+            @test _lis_sample(provs, "Ingest2.lon") == [40.0, 43.0, 44.0]
         end
     end
 
@@ -343,12 +337,12 @@ end
     @testset "a range select delivers a prefix of the same on-disk array" begin
         mktempdir() do dir
             doc = _lis_document(dir)
-            cache = joinpath(dir, "cache")
-            full = _lis_sample(doc, cache, "Ingest.W")
+            providers = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
+            full = _lis_sample(providers, "Ingest.W")
             @test length(full) == 10               # the unselected variable is unaffected
             @test full[1] == 100.0
             # `stop` is the METAPARAMETER NAME N_SRC (default 4), not a literal.
-            prefix = _lis_sample(doc, cache, "Ingest.src_W")
+            prefix = _lis_sample(providers, "Ingest.src_W")
             @test prefix == full[1:4]
             @test prefix == [100.0, 101.0, 102.0, 103.0]
         end
@@ -382,12 +376,12 @@ end
             # loader — which is what keeps a truncated table aligned.
             doc["data_sources"]["EGU_Emis"]["select"] =
                 Dict("axes" => [Dict("range" => Dict("start" => 0, "stop" => 2))])
-            cache = joinpath(dir, "cache")
+            providers = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
             # [0:2] is the first two SURVIVING records (100, 7) — never the first
             # two raw rows (100, 50) of which one is dropped.
-            @test _lis_sample(doc, cache, "Ingest.annual") == [100.0, 7.0]
-            @test _lis_sample(doc, cache, "Ingest.pollutant") == [36.0, 36.0]
-            @test _lis_sample(doc, cache, "Ingest.lon") == [-90.0, -92.0]
+            @test _lis_sample(providers, "Ingest.annual") == [100.0, 7.0]
+            @test _lis_sample(providers, "Ingest.pollutant") == [36.0, 36.0]
+            @test _lis_sample(providers, "Ingest.lon") == [-90.0, -92.0]
         end
     end
 

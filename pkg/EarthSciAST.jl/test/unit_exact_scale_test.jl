@@ -15,7 +15,7 @@ using Unitful
         # 1 and fail here, so this is what keeps the table complete.
         for (sym, u) in EarthSciAST._UNIT_REGISTRY
             a = Unitful.absoluteunit(u)
-            want = Float64(Unitful.ustrip(Unitful.upreferred(1.0 * a)))
+            want = Float64(Unitful.convfact(Float64, Unitful.upreferred(a), a))
             got = Float64(EarthSciAST._exact_scale(u))
             @test isapprox(got, want; rtol = 1.0e-12) || (@info "exact scale disagrees" sym got want; false)
         end

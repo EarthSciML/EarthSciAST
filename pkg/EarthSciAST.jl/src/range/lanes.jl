@@ -179,6 +179,23 @@ mutable struct _LaneSpec <: _RangeSpec
     # `t` and every observed that depends on it, which the hoist pass keeps
     # off a lane-free lift.
     tnames::Set{String}
+    # The observeds of `t` on a lane set that have no lane form (one reads
+    # another cell of an array on a lane set), with every observed of `t`
+    # they read: computed over the whole domain once per call, at one time,
+    # as an observed of `t` with no lane set is (`_lane_instance`).
+    whole::Set{String}
+end
+_LaneSpec(args::Vararg{Any, 15}) = _LaneSpec(args..., Set{String}())
+
+# Thrown by the lane rewrite of the observed `name` of `t`, which has no lane
+# form: `names` is it and every observed of `t` it reads, which the build
+# retries computing over the whole domain. Not an `EarthSciASTError`, so no
+# recovery from a document error inside the build can swallow it before
+# `_lane_instance` catches it.
+struct _LaneWholeFallback <: Exception
+    name::String
+    names::Vector{String}
+    why::String
 end
 
 _lane_refuse(rule, why) = _refuse_rule(_rule_display(rule), "lane: $why")
@@ -338,6 +355,12 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
         n = (target::VarExpr).name
         sh = haskey(spec.shapes, n) ? spec.shapes[n] : spec.obs_shapes[n]
         length(sh) == length(subs) || return o
+        # A lane array holds lane `l` at `l` on its first lane-set axis and at
+        # 1 on its other lane-set axes (`_lane_box_dim`), whichever of the
+        # scope's loop variables reads that axis: a read aligned by index-set
+        # name (esm-spec §4.3.4), whose lane-set axes come in another order
+        # than the scope's, still reads the lane's own cell.
+        lane_axis = findfirst(s -> s in spec.sets, sh)
         new = ASTExpr[target]
         for d in eachindex(subs)
             s = subs[d]
@@ -348,7 +371,7 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
                         "along the lane set '$(sh[d])', which leaves the " *
                         (spec.kind === :cells ? "cell" : "column")
                 )
-                push!(new, s)
+                push!(new, d == lane_axis ? VarExpr(sc.first) : IntExpr(1))
             else
                 push!(new, _lane_rewrite(spec, ctx, s, sc, rule))
             end
@@ -505,6 +528,23 @@ function _lane_range_set(r)
     return nothing
 end
 
+# Whether a lane may read the array `faq` `F` by its body alone: no `key`,
+# `join` or `distinct` (those are scoped to the node and name its output
+# indices), and an `args` list, if any, that names only operand arrays —
+# variables, none of them an index the node binds. Such a list is the arrays
+# the body reads (esm-spec §4.3.1) and changes nothing. One rule for every
+# array `faq` a lane reads: a whole-array right-hand side, an observed defined
+# whole, and a `makearray` region value.
+function _lane_faq_fields_ok(F::OpExpr)
+    bound(n) = (F.ranges !== nothing && haskey(F.ranges, n)) ||
+        (F.output_idx !== nothing && n in _output_idx_strings(F))
+    return F.key === nothing && (F.join === nothing || isempty(F.join)) &&
+        F.distinct !== true && all(a -> a isa VarExpr && !bound(a.name), F.args)
+end
+
+const _LANE_FAQ_FIELDS_REFUSAL = "carries `key`, `join`, `distinct`, or `args` that are not " *
+    "only the names of its operand arrays"
+
 # `index(faq{output_idx o, ranges, body}, s…)`: the array `faq` read at the
 # subscripts `s`, each a loop variable. That is the body with each `o_d`
 # renamed `s_d` (capture-avoiding); any other range of the `faq` (a
@@ -523,14 +563,8 @@ function _lane_faq_read(
     )
     outs = _output_idx_strings(F)
     length(outs) == length(subs) || _lane_refuse(rule, "an array faq is read at the wrong rank")
-    # `args`, `key`, `join` and `distinct` are scoped to the node itself (they
-    # name its output indices); the body alone moves.
-    (
-        isempty(F.args) && F.key === nothing &&
-            (F.join === nothing || isempty(F.join)) && F.distinct !== true
-    ) || _lane_refuse(
-        rule, "an array faq read inside the lane scope carries `args`, `key`, `join` or `distinct`"
-    )
+    _lane_faq_fields_ok(F) ||
+        _lane_refuse(rule, "an array faq read inside the lane scope " * _LANE_FAQ_FIELDS_REFUSAL)
     renames = Dict{String, ASTExpr}()
     names = Set{String}()
     for (d, (o, s)) in enumerate(zip(outs, subs))
@@ -817,7 +851,7 @@ function _range_restrict_parts(
     # expression of the same global indices.
     for (n, _) in defs
         v = get(model.variables, n, nothing)
-        if v !== nothing && _is_array_shape(v.shape)
+        if v !== nothing && _is_array_shape(v.shape) && !(n in spec.whole)
             sh = String[string(s) for s in v.shape]
             any(s -> s in sh, spec.sets) || continue
             spec.obs_shapes[n] = sh
@@ -882,18 +916,40 @@ function _range_restrict_parts(
         elseif eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in spec.laned
             n = (eq.lhs::VarExpr).name
             R = eq.rhs
-            (
-                R isa OpExpr && _is_faq_op((R::OpExpr).op) &&
-                    length(_output_idx_strings(R::OpExpr)) == length(spec.obs_shapes[n])
-            ) ||
-                _lane_refuse(n, "the observed '$n' is not defined by an array aggregate")
-            R = R::OpExpr
-            sc, rr = _lane_scope_ranges(
-                spec, _output_idx_strings(R), spec.obs_shapes[n],
-                R.ranges, n
-            )
-            body = _lane_rewrite(spec, ctx, R.expr_body, sc, n)
-            filt = R.filter === nothing ? nothing : _lane_rewrite(spec, ctx, R.filter, sc, n)
+            body, filt, rr = try
+                (
+                    R isa OpExpr && _is_faq_op((R::OpExpr).op) &&
+                        length(_output_idx_strings(R::OpExpr)) == length(spec.obs_shapes[n])
+                ) ||
+                    _lane_refuse(n, "the observed '$n' is not defined by an array aggregate")
+                R = R::OpExpr
+                sc, rr = _lane_scope_ranges(
+                    spec, _output_idx_strings(R), spec.obs_shapes[n],
+                    R.ranges, n
+                )
+                (
+                    _lane_rewrite(spec, ctx, R.expr_body, sc, n),
+                    R.filter === nothing ? nothing : _lane_rewrite(spec, ctx, R.filter, sc, n),
+                    rr,
+                )
+            catch err
+                # An observed of `t` (not of a state) with no lane form is
+                # computed over the whole domain instead, with every observed
+                # of `t` it reads, as Rust does.
+                (
+                    err isa TreeWalkError && err.code == ERROR_CODES.COMPILER_REFUSED_RULE &&
+                        spec.tbuf !== nothing && n in spec.tnames && !statedep(n)
+                ) || rethrow()
+                names = String[]
+                stack = String[n]
+                while !isempty(stack)
+                    x = pop!(stack)
+                    (x in names || !haskey(defs, x)) && continue
+                    push!(names, x)
+                    append!(stack, r for r in _referenced_var_names(defs[x]) if r in spec.tnames)
+                end
+                throw(_LaneWholeFallback(n, names, err.detail))
+            end
             push!(
                 eqs, Equation(
                     eq.lhs, reconstruct(
@@ -1046,13 +1102,34 @@ end
 
 # One compiled lane program: its right-hand side, the live lane buffers it
 # reads, its gathers and its build's forcing epoch.
+#
+# An observed of `t` on a lane set with no lane form (it reads another cell)
+# is computed over the whole domain, with every observed of `t` it reads, as
+# an observed of `t` with no lane set is: the build is retried with it in
+# `spec.whole` until no observed falls back. The one-time call is then the
+# whole-domain program's, and a call at mixed times refuses those observeds.
 function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::Int; form = :inplace)
+    whole = Set{String}()
+    while true
+        r = _lane_instance(op, kind, S, chunk, whole; form)
+        r isa _LaneWholeFallback || return r
+        r.name in whole && error("internal error: lanes: '$(r.name)' fell back twice")
+        union!(whole, r.names)
+    end
+    return
+end
+
+function _lane_instance(
+        op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::Int, whole::Set{String};
+        form = :inplace
+    )
     index_bufs = Dict{String, Vector{Float64}}(s => zeros(chunk) for s in S)
     tbuf = form === :oop ? nothing : zeros(chunk)
     spec = _LaneSpec(
         kind, S, chunk, _array_shapes(op), index_bufs, _LaneGather[],
         Set{String}(), Dict{String, Vector{String}}(), Dict{String, Int}(),
-        _program_sets(op), form === :oop, tbuf, Set{String}(), String[], Set{String}()
+        _program_sets(op), form === :oop, tbuf, Set{String}(), String[], Set{String}(),
+        copy(whole)
     )
     # The lane-index buffers are live forcing buffers of the build.
     file, model_name, recorded = op.front
@@ -1067,13 +1144,19 @@ function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::
     tbuf === nothing || (pa["__lane_t"] = tbuf)
     opts.param_arrays = pa
     cap = _WsCapture()
-    f!, _u0, _p, _ts, internal = _with_ws_capture(cap) do
-        _with_compiler_plan(_plan(op.compiler)) do
-            _with_range_spec(spec) do
-                _build_selected(file, model_name, opts)
+    built = try
+        _with_ws_capture(cap) do
+            _with_compiler_plan(_plan(op.compiler)) do
+                _with_range_spec(spec) do
+                    _build_selected(file, model_name, opts)
+                end
             end
         end
+    catch err
+        err isa _LaneWholeFallback && return err
+        rethrow()
     end
+    f!, _u0, _p, _ts, internal = built
     return (;
         f!, internal, index_bufs = Vector{Float64}[index_bufs[s] for s in S],
         gathers = spec.gathers, params = spec.params, cap, pa, tbuf, tshared = spec.tshared,
@@ -1453,9 +1536,10 @@ function _lane_check_times(lp::LaneProgram, ts, n, L)
         throw(
             ArgumentError(
                 "rhs!: the lanes' times differ, but the observed(s) " *
-                    join(("'$x'" for x in lp.tshared), ", ") * " depend on `t` and carry " *
-                    "no lane set, so the lane program evaluates them once per call at one " *
-                    "time; give every lane the same time"
+                    join(("'$x'" for x in lp.tshared), ", ") * " depend on `t` and have " *
+                    "no per-lane form (no lane set, or a read of another cell), so the lane " *
+                    "program evaluates them once per call at one time; give every lane the " *
+                    "same time"
             )
         )
     end
@@ -1492,7 +1576,8 @@ function _range_promote_model(spec::_LaneSpec, model)
     end
     tdep = _range_time_dependent(defs)
     shape(n) = (v = get(model.variables, n, nothing); v === nothing ? nothing : v.shape)
-    laned(n) = (s = shape(n); _is_array_shape(s) && any(x -> String(x) in spec.sets, s))
+    laned(n) = !(n in spec.whole) &&
+        (s = shape(n); _is_array_shape(s) && any(x -> String(x) in spec.sets, s))
     P = Set{String}(n for n in tdep if !_is_array_shape(shape(n)))
     # Only a lane-rewritten definition has a lane index to read one at.
     changed = true
@@ -1642,12 +1727,8 @@ function _lane_membership_read(spec::_LaneSpec, ctx, ma::OpExpr, subs, sc, rule:
         end
         v = value
         read = if v isa OpExpr && _is_faq_op((v::OpExpr).op) && _lane_array_faq(v::OpExpr)
-            (
-                isempty(v.args) && v.key === nothing &&
-                    (v.join === nothing || isempty(v.join)) && v.distinct !== true
-            ) || _lane_refuse(
-                rule, "a faq region value carries `args`, `key`, `join` or `distinct`"
-            )
+            _lane_faq_fields_ok(v::OpExpr) ||
+                _lane_refuse(rule, "a faq region value " * _LANE_FAQ_FIELDS_REFUSAL)
             outs = _output_idx_strings(v)
             dims = length(outs) == length(bounds) ? collect(eachindex(bounds)) :
                 [d for d in eachindex(bounds) if bounds[d][1] != bounds[d][2]]

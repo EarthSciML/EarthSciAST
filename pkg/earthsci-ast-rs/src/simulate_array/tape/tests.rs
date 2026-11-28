@@ -2899,47 +2899,46 @@ fn ab_elementwise_observed_gather_fixture() {
 /// another entry's value and the bitwise comparison fails.
 const PAST_U16: usize = 70_000;
 
-/// `PAST_U16` scalar state variables, each with its own equation (a scalar
-/// diffusion chain, so every derivative reads its neighbours), and as many
-/// parameters, of which the equations near both ends of the chain read ones
-/// past the 16-bit bound. State, parameter and `dy` indices all exceed
-/// 65,535.
+/// Scalar states and parameters straddle the 16-bit boundary. The six
+/// equations at the ends of the chain read both neighbours and a parameter
+/// from the opposite end of the table. Each equation between them reads its
+/// right neighbour only, so those equations form one lane program with more
+/// lanes than a 16-bit index can count, whose evenly spaced state reads and
+/// `dy` writes cross the boundary inside the program.
 #[test]
 fn ab_state_and_parameter_indices_past_u16() {
-    let n = PAST_U16;
+    let max = usize::from(u16::MAX);
+    // Six end equations plus more than `max + 1` filler lanes.
+    let n = max + 8;
+    let state = |k: usize| format!("u{k:05}");
+    let param = |k: usize| format!("c{k:05}");
     let mut vars = serde_json::Map::new();
-    for k in 1..=n {
-        vars.insert(format!("u{k}"), json!({"type": "unknown", "default": 1.0}));
+    for k in 0..n {
+        vars.insert(state(k), json!({"type": "unknown", "default": 1.0}));
         vars.insert(
-            format!("c{k}"),
+            param(k),
             json!({"type": "parameter", "default": 1.0 + k as f64 * 1e-3}),
         );
     }
-    let coeff = |k: usize| {
-        if k <= 3 || k > n - 3 {
-            json!(format!("c{}", n + 1 - k))
-        } else {
-            json!(0.1)
-        }
-    };
-    let eqs: Vec<serde_json::Value> = (1..=n)
+    let eqs: Vec<serde_json::Value> = (0..n)
         .map(|k| {
-            let mut nb = Vec::new();
-            if k > 1 {
-                nb.push(json!(format!("u{}", k - 1)));
-            }
-            if k < n {
-                nb.push(json!(format!("u{}", k + 1)));
-            }
-            let sum = if nb.len() == 1 {
-                nb.pop().unwrap()
+            let rhs = if k < 3 || k >= n - 3 {
+                let left = k.checked_sub(1).map_or(json!(0), |j| json!(state(j)));
+                let right = if k + 1 == n {
+                    json!(0)
+                } else {
+                    json!(state(k + 1))
+                };
+                json!({"op": "*", "args": [param(n - 1 - k), {"op": "-", "args": [
+                    {"op": "+", "args": [left, right]},
+                    {"op": "*", "args": [2, state(k)]}
+                ]}]})
             } else {
-                json!({"op": "+", "args": nb})
+                json!({"op": "*", "args": [-0.125, state(k + 1)]})
             };
             json!({
-                "lhs": {"op": "D", "args": [format!("u{k}")], "wrt": "t"},
-                "rhs": {"op": "*", "args": [coeff(k), {"op": "-", "args": [
-                    sum, {"op": "*", "args": [2, format!("u{k}")]}]}]}
+                "lhs": {"op": "D", "args": [state(k)], "wrt": "t"},
+                "rhs": rhs
             })
         })
         .collect();
@@ -2950,6 +2949,48 @@ fn ab_state_and_parameter_indices_past_u16() {
     });
     let prog = ab_check(doc, -1.0, 1.0);
     assert_eq!(prog.state_vars.len(), n);
+    assert_eq!(prog.params_len, n);
+    assert!(prog.state_vars[max + 1].flat_offset > max);
+    // The fused tape can batch the scalar writes into a lane program.
+    let wide_dy = prog
+        .tables
+        .dy_writes
+        .iter()
+        .any(|w| w.scalar_flat.is_some_and(|i| i > max))
+        || prog.lanes.iter().any(|group| {
+            group.writes.iter().any(|w| match &w.dst {
+                LaneDst::Dy(ix) => (0..group.lanes as usize).any(|l| ix.at(l) as usize > max),
+                LaneDst::Slot(_) => false,
+            })
+        });
+    assert!(
+        wide_dy,
+        "a scalar derivative must write beyond the 16-bit boundary"
+    );
+    // The filler lane program: more than `max + 1` lanes, reading an evenly
+    // spaced run of states that starts below the boundary and ends above it.
+    let crosses = |ix: &LaneIx, lanes: usize| {
+        matches!(ix, LaneIx::Affine { .. })
+            && ix.at(0) as usize <= max
+            && ix.at(lanes - 1) as usize > max
+    };
+    let wide_group = prog.lanes.iter().any(|group| {
+        let lanes = group.lanes as usize;
+        lanes > max + 1
+            && group
+                .inputs
+                .iter()
+                .any(|t| t.kind == LaneKind::State && crosses(&t.ix, lanes))
+            && group
+                .writes
+                .iter()
+                .any(|w| matches!(&w.dst, LaneDst::Dy(ix) if crosses(ix, lanes)))
+    });
+    assert!(
+        wide_group,
+        "a lane program must span more lanes than 16 bits count, reading and \
+         writing an evenly spaced run across the boundary"
+    );
 }
 
 /// More micro-ops and distinct scalar operands on one box than a fused

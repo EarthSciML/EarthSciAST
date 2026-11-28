@@ -280,7 +280,7 @@ func checkIcArguments(n any, at string) error {
 			if !ok {
 				return fmt.Errorf("%s: %s: the argument of `ic` must be a variable reference or `D` of "+
 					"one (esm-spec §4.2); an element of an array unknown is written "+
-					"`index(ic(u), i)`, not `ic(index(u, i))`", codeIcInvalidArgument, pointerOrRoot(at))
+					"`index(ic(u), i)`, not `ic(index(u, i))`", CodeICInvalidArgument, pointerOrRoot(at))
 			}
 		}
 		for _, k := range sortedKeys(v) {
@@ -403,7 +403,7 @@ func (s *structuralScan) validateInitializationOverdetermination(model *Model, b
 	}
 	s.addErr(StructuralError{
 		Path: basePath + "/equations",
-		Code: codeIcSystemUnbalanced,
+		Code: CodeICSystemUnbalanced,
 		Message: fmt.Sprintf("the initialization system is over-determined: %d initialization "+
 			"equation(s) that are not explicit initial conditions mention %d starting value(s) "+
 			"that no explicit initial condition sets (esm-spec §11.4.3)", len(system), starting),

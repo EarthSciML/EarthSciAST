@@ -16,7 +16,7 @@ use super::expr::{REMOVED_OPS, is_deprecated_op, is_formula, is_greek, is_letter
 use super::print::{
     BMAT_MAX_COLS, Ctx, FIELD_CALL_OPS, FaqForm, MkForm, RedK, faq_json, formula_raw, ins_kv,
     is_call_op, is_notation_core, mk_json, mk_node, node, prints_as_call, simple_tok, tname_ok,
-    tparams, unesc_k, unesc_t, up_set,
+    tparams, unesc_k, unesc_t, unlift, up_set,
 };
 use super::surface::neg_num;
 use super::token::{Kw, Sf, Tok};
@@ -2297,10 +2297,43 @@ pub fn need(l: usize, len: usize) -> usize {
     30 * len + (12usize.saturating_sub(l))
 }
 
-/// `Math.parseToks` (Induct.lean): read a whole token list.
+/// `Math.pTail`: range rows separated by commas, to the end of the input: the
+/// ranges of a defining equation's output indices (`x_s = …, s \in S`).
+pub fn p_tail(c: Ctx, f: usize, ts: &[Tok]) -> Option<Vec<Row>> {
+    let mut out = Vec::new();
+    let mut f = f;
+    let mut ts = ts;
+    let is_end = |t: &Tok| is_kw(Kw::Comma, t);
+    loop {
+        f = f.checked_sub(1)?;
+        match p_row(c, f, &is_end, ts)? {
+            (row, []) => {
+                out.push(row);
+                return Some(out);
+            }
+            (row, [Tok::Kw(Kw::Comma), r @ ..]) => {
+                out.push(row);
+                ts = r;
+            }
+            (_, r) => {
+                limits::reached(r);
+                return None;
+            }
+        }
+    }
+}
+
+/// `Math.parseToks` (Induct.lean): read a whole token list: an expression, or
+/// an equation in its defining form (`x_s = …, s \in S`, [`unlift`]).
 pub fn parse_toks(sf: Sf, s: &super::expr::Sym, ts: &[Tok]) -> Option<Json> {
-    match p_or(Ctx { sf, s }, need(1, ts.len()), ts) {
+    let c = Ctx { sf, s };
+    let f = need(1, ts.len());
+    match p_or(c, f, ts) {
         Some((e, [])) => Some(e),
+        Some((q, [Tok::Kw(Kw::Comma), r @ ..])) => match row_parts(p_tail(c, f, r)?)? {
+            (rg, None) => unlift(&q, &rg),
+            _ => None,
+        },
         Some((_, r)) => {
             limits::reached(r);
             None

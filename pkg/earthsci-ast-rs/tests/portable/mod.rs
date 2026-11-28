@@ -27,7 +27,9 @@
 
 pub mod rhs;
 
-use earthsci_ast::{Alg, Compiler, ProblemOptions, Rhs, SolveOptions, esm_problem, solve};
+use earthsci_ast::{
+    Alg, Compiler, ProblemOptions, Rhs, SolveOptions, esm_problem, load_document, solve,
+};
 use serde_json::Value;
 
 macro_rules! scaling_fixture {
@@ -360,12 +362,15 @@ fn refuses_then_drops_reserved_lifting(id: &str, doc: &mut Value) {
 
 /// Native and the interpreter give the same right-hand side, bit for bit, on
 /// one scaling fixture. Native is required for every document, so a refusal
-/// fails.
+/// fails. The document is parsed once: native builds from the raw JSON (the
+/// route that rewrites the document before typing it) and the interpreter
+/// from the typed document, so both `esm_problem` input routes run.
 pub fn check_scaling_fixture(family: &str, n: u64, text: &str) {
-    let doc: Value = serde_json::from_str(text).expect("the fixture parses");
+    let raw: Value = serde_json::from_str(text).expect("the fixture parses");
+    let doc = load_document(&raw).expect("the fixture loads");
     let interp = esm_problem(&doc, (0.0, 1.0), options(Compiler::Interpreter, None))
         .unwrap_or_else(|e| panic!("{family} N={n}: the interpreter does not build it: {e}"));
-    let native = esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None))
+    let native = esm_problem(&raw, (0.0, 1.0), options(Compiler::Native, None))
         .unwrap_or_else(|e| panic!("{family} N={n}: native does not build it: {e}"));
     assert_rhs_agrees(&format!("{family} N={n}"), &native, &interp);
 }

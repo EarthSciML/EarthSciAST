@@ -1,0 +1,25 @@
+{
+  "fixture": "setup_shapeless_param_observed",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "x",
+      "actual": 5.124999999999989
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "x",
+      "actual": 10.249999999999995
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "y",
+      "actual": 1.0
+    }
+  ]
+}
