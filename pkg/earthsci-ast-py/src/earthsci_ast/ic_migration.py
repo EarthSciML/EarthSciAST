@@ -25,6 +25,7 @@ from .errors import ParseError
 
 __all__ = [
     "DeprecatedFieldError",
+    "IcInvalidArgumentError",
     "check_ic_arguments",
     "migrate_initialization_equations",
 ]
@@ -42,6 +43,13 @@ class DeprecatedFieldError(ParseError):
     side is not a bare unknown has no reading as a starting point."""
 
     code = "deprecated_field"
+
+
+class IcInvalidArgumentError(ParseError):
+    """``ic_invalid_argument`` (esm-spec §4.2 ``ic``): the argument of an
+    ``ic`` is neither a variable reference nor ``D`` of one."""
+
+    code = "ic_invalid_argument"
 
 
 def _token(s: str) -> str:
@@ -223,8 +231,8 @@ def _check(e: Any, at: str) -> None:
                     and isinstance(a["args"][0], str)
                 )
             if not ok:
-                raise ParseError(
-                    f"{at}: malformed `ic`: its argument must be a variable reference, bare "
+                raise IcInvalidArgumentError(
+                    f"ic_invalid_argument: {at}: malformed `ic`: its argument must be a variable reference, bare "
                     "or scoped, or `D` of one (esm-spec §4.2 `ic`). An element of an array "
                     "unknown's starting value is written `index(ic(u), i)`, not "
                     "`ic(index(u, i))`."
@@ -240,6 +248,5 @@ def _check(e: Any, at: str) -> None:
 
 def check_ic_arguments(doc: Any) -> None:
     """Refuse at load an ``ic`` whose argument is not a variable reference or
-    ``D`` of one (esm-spec §4.2): the spec names no code for it, so the error
-    is a :class:`~earthsci_ast.errors.ParseError` naming ``ic``."""
+    ``D`` of one (esm-spec §4.2) with ``ic_invalid_argument``."""
     _check(doc, "")
