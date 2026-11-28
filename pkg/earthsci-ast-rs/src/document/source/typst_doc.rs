@@ -20,13 +20,13 @@ use super::typst::{
 use crate::document::json::Json;
 use crate::document::math::expr::name_ok;
 use crate::document::math::token::Sf;
-use crate::document::math::{Sym, parse_typst, print_typst, typst};
+use crate::document::math::{Sym, parse_typst, print_typst, print_typst_eqn, typst};
 use crate::document::strings::bare_key;
 use crate::document::typst_dict;
 
 /// `Typ.typOf`: an equation's Typst math under the symbol table `s`.
 pub fn typ_of(s: &Sym, e: &Eqn) -> Vec<char> {
-    print_typst(s, &eq_expr(e)).chars().collect()
+    print_typst_eqn(s, &eq_expr(e)).chars().collect()
 }
 
 /// `Typ.prT`: its `_comment` as a `//` comment line, then the equation.

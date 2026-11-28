@@ -66,8 +66,13 @@ LaTeX for `:markdown` (Lean `Math.printLatex`), Typst math for `:typst`
 
 `expr` is a decoded ESM expression (a number, a name or an operator node) or an
 equation, an object with `lhs` and `rhs` (other fields, such as `_comment`, are
-not printed), which prints as its two sides around `=` as in a document
-(`Source.eqExpr`). A typed [`ASTExpr`](@ref) or [`Equation`](@ref) is printed
+not printed). An equation prints as in a document (`Source.eqExpr`,
+`Math.printLatexEqn` / `Math.printTypstEqn`): its two sides around `=`, except
+that an equation `x = faq` whose `faq` has output indices prints in its defining
+form when that reads back as exactly the equation, the output indices on the left
+and their ranges after the right side (Typst `y_j = sum_(i in S) w_(i, j), j in C`).
+An expression whose top is `==` is a comparison and prints as any expression does,
+never in the defining form. A typed [`ASTExpr`](@ref) or [`Equation`](@ref) is printed
 through its serialized form. `names` (any collection of strings) plays the part of the
 variables a component declares: a name in it prints in its declared shape, and
 the printer avoids spellings that would collide with it. The result is what a
@@ -88,18 +93,24 @@ function print_math(expr, names, format::Symbol)::String
             _canonical_document_numbers(_canonicalize_document_value(expr, false))
         )
     )
+    eqn = false
     if e isa DJ.JObj
         lhs = DJ.look("lhs", e.kvs)
         rhs = DJ.look("rhs", e.kvs)
         if lhs !== nothing && rhs !== nothing
             e = DJ.JObj(DJ.Kvs(["args" => DJ.JArr(Any[lhs, rhs]), "op" => "=="]))
+            eqn = true
         end
     end
     sym = DocumentFormats.MExpr.Sym(String[String(n) for n in names], Tuple{String, Vector{String}}[])
     # In a reading scope of its own, as `DSource.print_md` is.
     return DocumentFormats.DSource._printing() do
-        format === :markdown ? DocumentFormats.DMath.print_latex(sym, e) :
-            DocumentFormats.DMath.print_typst(sym, e)
+        M = DocumentFormats.DMath
+        if format === :markdown
+            eqn ? M.print_latex_eqn(sym, e) : M.print_latex(sym, e)
+        else
+            eqn ? M.print_typst_eqn(sym, e) : M.print_typst(sym, e)
+        end
     end
 end
 
@@ -113,7 +124,9 @@ names: LaTeX for `:markdown` (Lean `Math.parseLatex`), Typst math for `:typst`
 
 `text` is what a document display holds, without its delimiters. Text whose top
 is `=` reads as an equation, an `OrderedDict` with `lhs` and `rhs`, as a display
-does (`Source.eqSides`); any other text reads as an expression (a number, a name
+does (`Source.eqSides`), and so does an equation in its defining form,
+`y_j = … , j in C`, whose right side reads as the `faq` with output indices it
+writes (`Math.unlift`); any other text reads as an expression (a number, a name
 or an operator node, decoded as [`parse_markdown`](@ref) decodes a document).
 `names` (any collection of strings) plays the part of the variables a component
 declares: it decides how a run of letters reads (in LaTeX, `RT` is the name `RT`

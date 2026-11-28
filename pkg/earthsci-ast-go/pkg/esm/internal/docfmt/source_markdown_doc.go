@@ -14,7 +14,7 @@ import "strings"
 // ## Equations in LaTeX
 
 // mdDocLatexOf is `Md.latexOf`: an equation's LaTeX under the symbol table s.
-func mdDocLatexOf(s *Sym, e *Eqn) []rune { return []rune(mathPrintLatex(s, eqnEqExpr(e))) }
+func mdDocLatexOf(s *Sym, e *Eqn) []rune { return []rune(mathPrintLatexEqn(s, eqnEqExpr(e))) }
 
 // mdDocPrMd is `Md.prMd`: an equation's math text: its `_comment` as a LaTeX
 // comment line, then the equation.
@@ -25,7 +25,7 @@ func mdDocPrMd(s *Sym, e *Eqn) string {
 		b.WriteString(e.Comment)
 		b.WriteByte('\n')
 	}
-	b.WriteString(mathPrintLatex(s, eqnEqExpr(e)))
+	b.WriteString(mathPrintLatexEqn(s, eqnEqExpr(e)))
 	return b.String()
 }
 

@@ -401,9 +401,14 @@ not a typed file. A printer puts the document in canonical form first, so
 result is in canonical form.
 
 `print_math(expr, names, format)` prints one expression, or one equation (an
-object with `lhs` and `rhs`, printed as its two sides around `=`), as the math a
-document display holds, without its delimiters: LaTeX for `markdown`, Typst
-math for `typst`. `names` plays the part of the names a component declares
+object with `lhs` and `rhs`), as the math a document display holds, without its
+delimiters: LaTeX for `markdown`, Typst math for `typst`. An equation prints as
+in a document: its two sides around `=`, except that an equation `x = faq`
+whose `faq` has output indices prints in its defining form when that reads back
+as exactly the equation, the output indices on the left side and their ranges
+after the right side (Typst `y_j = sum_(i in S) w_(i, j), j in C`). An
+expression whose top is `==` is a comparison and prints as any expression does,
+never in the defining form. `names` plays the part of the names a component declares
 (its variables, species and parameters, and the document's index sets): a name
 in it prints in its declared shape and the printer avoids spellings that would
 collide with it. No template is in scope. The golden set's `math` field is
@@ -416,8 +421,10 @@ which they read through its serialized form.
 reads one expression, or one equation, with the document readers' math parser
 (`Math.parseLatex` / `Math.parseTypst`) under the same declared names, no
 template in scope, and inside the same reader bounds as a document read. Text
-whose top is `=` reads as an equation (`{lhs, rhs}`), as a display does; any
-other text reads as an expression. It refuses as the document readers do, with
+whose top is `=` reads as an equation (`{lhs, rhs}`), as a display does, and
+so does an equation in its defining form (`y_j = …, j in C`), whose right side
+reads as the `faq` with output indices it writes; any other text reads as an
+expression. It refuses as the document readers do, with
 `removed_op` or `parse_error` (below). `expression_names(expr)` lists the
 names an expression or equation uses (its string leaves under `lhs`, `rhs` and
 `args`), in order of first use: the `names` to show an expression on its own.

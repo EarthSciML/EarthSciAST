@@ -28,7 +28,7 @@ import type { Json } from '../json.js'
 import type { Sym } from './expr.js'
 import { lex as latexLex, render as latexRender } from './latex.js'
 import { parseToks as parseToksImpl } from './parse.js'
-import { print as printImpl } from './print.js'
+import { pa, print as printImpl } from './print.js'
 import type { Sf, Tok } from './token.js'
 import { lex as typstLex, render as typstRender } from './typst.js'
 
@@ -61,8 +61,19 @@ export function parseToks(sf: Sf, s: Sym, toks: readonly Tok[]): Json | undefine
   return parseToksImpl(sf, s, toks)
 }
 
-/** `Math.printLatex` (RoundTripLatex.lean). */
+/**
+ * `Math.printLatex` (RoundTripLatex.lean): an expression (an `==` at its top is a
+ * comparison and prints as any expression does).
+ */
 export function printLatex(s: Sym, e: Json): string {
+  return latexRender(pa({ sf: 'latex', s }, 1, e))
+}
+
+/**
+ * `Math.printLatexEqn` (RoundTripLatex.lean): an equation's expression,
+ * `==(lhs, rhs)`, in its defining form when it has one.
+ */
+export function printLatexEqn(s: Sym, e: Json): string {
   return latexRender(print('latex', s, e))
 }
 
@@ -72,8 +83,19 @@ export function parseLatex(s: Sym, text: string): Json | undefined {
   return toks === undefined ? undefined : parseToks('latex', s, toks)
 }
 
-/** `Math.printTypst` (RoundTripTypst.lean). */
+/**
+ * `Math.printTypst` (RoundTripTypst.lean): an expression (an `==` at its top is a
+ * comparison, as in an event's condition, and prints as any expression does).
+ */
 export function printTypst(s: Sym, e: Json): string {
+  return typstRender(pa({ sf: 'typst', s }, 1, e))
+}
+
+/**
+ * `Math.printTypstEqn` (RoundTripTypst.lean): an equation's expression,
+ * `==(lhs, rhs)`, in its defining form `x_s = …, s in S` when it has one.
+ */
+export function printTypstEqn(s: Sym, e: Json): string {
   return typstRender(print('typst', s, e))
 }
 
