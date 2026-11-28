@@ -253,12 +253,27 @@ function _range_observed_box(spec::_LaneSpec, name, dims)
 end
 
 # A lane-rewritten observed's definition runs over the lane box (its lane
-# axes narrowed to `1..C` and `1`), so its extents are its declared shape's:
-# the box (`_range_observed_box`) is what it stores.
+# axes narrowed to `1..C` and `1`, `_lane_scope_ranges`), which is what it
+# stores (`_range_observed_box`). Its buffer has its declared shape's extents,
+# the first lane axis widened to `C` when that set has fewer cells. `nothing`
+# (inlined) unless the definition, read as `_materialized_obs_dims` reads one
+# (distinct output indices, dense `1..n` ranges), produces exactly the box
+# along each lane axis and the declared extent along each other axis.
 function _range_observed_dims(spec::_LaneSpec, name, def, shape, index_sets, derived_extents)
     name in spec.laned ||
         return _materialized_obs_dims(def, shape, index_sets, derived_extents)
-    return _declared_shape_extents(shape, index_sets, derived_extents)
+    declared = _declared_shape_extents(shape, index_sets, derived_extents)
+    produced = _materialized_obs_dims(def, nothing, index_sets, derived_extents)
+    (declared === nothing || produced === nothing || length(produced) != length(declared)) &&
+        return nothing
+    sh = spec.obs_shapes[name]
+    dims = copy(declared)
+    for d in eachindex(dims)
+        r = _lane_box_dim(spec, sh, d)
+        produced[d] == (r === nothing ? declared[d] : length(r)) || return nothing
+        r === nothing || (dims[d] = max(dims[d], last(r)))
+    end
+    return dims
 end
 
 function _range_fill_equations(spec::_LaneSpec, name, def, dims, box)
@@ -818,6 +833,42 @@ end
     end
 end
 
+# An observed the lane program does not compute per lane (a 0-d observed, an
+# array observed with no lane set or in `spec.whole`) is evaluated once over
+# the whole domain, where a lane array (a state, an observed computed per
+# lane) holds only the chunk's lanes, so it must read none, through any of the
+# observeds it reads. One that reads a state is refused. One that reads an
+# observed computed per lane takes that observed, and every other it reads,
+# over the whole domain with it: the build is retried with them in
+# `spec.whole` (`_lane_instance`). An out-of-place fragment (no time buffer)
+# has no whole-domain evaluation and refuses it.
+function _lane_check_whole_reads(spec::_LaneSpec, defs)
+    for n in sort!(collect(keys(defs)))
+        n in spec.laned && continue
+        reached = String[]
+        stack = String[n]
+        while !isempty(stack)
+            x = pop!(stack)
+            (x in reached || !haskey(defs, x)) && continue
+            push!(reached, x)
+            for r in _referenced_var_names(defs[x])
+                haskey(spec.shapes, r) && _lane_refuse(
+                    n, "the observed '$n' is computed over the whole domain but " *
+                        "reads the lane array '$r'"
+                )
+                push!(stack, r)
+            end
+        end
+        k = findfirst(in(spec.laned), reached)
+        k === nothing && continue
+        why = "the observed '$n' is computed over the whole domain but reads " *
+            "'$(reached[k])', which is computed per lane"
+        spec.tbuf === nothing && _lane_refuse(n, why)
+        throw(_LaneWholeFallback(reached[k], reached, why))
+    end
+    return nothing
+end
+
 function _range_restrict_parts(
         spec::_LaneSpec, model, cls, parts, index_sets,
         const_arrays, param_arrays
@@ -860,20 +911,16 @@ function _range_restrict_parts(
     # expression of the same global indices.
     for (n, _) in defs
         v = get(model.variables, n, nothing)
-        if v !== nothing && _is_array_shape(v.shape) && !(n in spec.whole)
-            sh = String[string(s) for s in v.shape]
-            any(s -> s in sh, spec.sets) || continue
-            spec.obs_shapes[n] = sh
-            push!(spec.laned, n)
-        elseif statedep(n)
-            # A 0-d observed of the state reads cells of other lanes.
-            any(x -> x in spec.laned || x in keys(spec.shapes), _referenced_var_names(defs[n])) &&
-                _lane_refuse(n, "the 0-d observed '$n' reads lane arrays")
-        end
+        (v !== nothing && _is_array_shape(v.shape) && !(n in spec.whole)) || continue
+        sh = String[string(s) for s in v.shape]
+        any(s -> s in sh, spec.sets) || continue
+        spec.obs_shapes[n] = sh
+        push!(spec.laned, n)
     end
     for n in keys(spec.shapes)
         push!(spec.laned, n)
     end
+    _lane_check_whole_reads(spec, defs)
     live = Dict{String, Any}()
     needctx = _NeedCtx(
         :lane, _AxisModel(
@@ -1567,17 +1614,20 @@ _range_promote_model(spec, model, index_sets = nothing) = model
 """
     _range_name_faq_axes(spec::_LaneSpec, model, index_sets) -> model
 
-An observed declared with no shape whose definition is an array `faq` over
+An observed declared with no shape whose one definition is an array `faq` over
 intervals `[1, n]` (the planner's derivative observeds, `_dt_x`) takes, at
 shape promotion, an anonymous interval index set per axis (`x__r`), which no
-lane set is. In a lane build each such axis takes instead the index set the
-`faq` body reads its output index along (as a subscript of a variable whose
-axes are known), of the same extent, else the one program index set of that
-extent; when every axis has one, they become the observed's shape and its
-`faq`'s ranges, so one along a lane set is computed per lane (and, when it
-depends on `t`, at each lane's own time) like a declared array observed. The
-extents are unchanged, so the values are: a lane equals the whole-domain
-program at its cell bit for bit.
+lane set is, so a lane build would evaluate it whole (and refuse it when it
+reads the state). In a lane build each such axis takes instead the one index
+set of the axis's extent the `faq` body reads its output index along as a
+subscript of a variable whose axes are known; when every axis has one, they
+become the observed's shape and its `faq`'s ranges, so one along a lane set
+is computed per lane (and, when it depends on `t`, at each lane's own time)
+like a declared array observed. The extents are unchanged, so the values
+are: a lane equals the whole-domain program at its cell bit for bit.
+An axis the body reads along no such set (an offset subscript alone, a bare
+loop index), or along two, stays anonymous, as in Rust; so does every axis of
+an observed with two definitions, which the validator reports.
 """
 function _range_name_faq_axes(spec::_LaneSpec, model, index_sets)
     named(s) = haskey(spec.ext, s)
@@ -1590,15 +1640,26 @@ function _range_name_faq_axes(spec::_LaneSpec, model, index_sets)
     for (n, v) in model.variables
         _is_array_shape(v.shape) && all(named, v.shape) && (axes[n] = String[v.shape...])
     end
+    # The defining equation of each observed declared with no shape and
+    # defined once.
+    defs = Dict{String, Int}()
+    twice = Set{String}()
+    for (k, eq) in enumerate(model.equations)
+        eq.lhs isa VarExpr || continue
+        n = (eq.lhs::VarExpr).name
+        v = get(model.variables, n, nothing)
+        (v === nothing || !_promoted_shape(n, v.shape)) && continue
+        haskey(defs, n) && push!(twice, n)
+        defs[n] = k
+    end
+    names = sort!([n for n in keys(defs) if !(n in twice)])
     found = Dict{String, Tuple{Vector{String}, OpExpr}}()
     grew = true
     while grew
         grew = false
-        for eq in model.equations
-            eq.lhs isa VarExpr || continue
-            n = (eq.lhs::VarExpr).name
-            (haskey(axes, n) || !haskey(model.variables, n)) && continue
-            r = _range_faq_output_sets(spec, eq.rhs, axes, extent)
+        for n in names
+            haskey(axes, n) && continue
+            r = _range_faq_output_sets(spec, model.equations[defs[n]].rhs, axes, extent)
             r === nothing && continue
             axes[n] = r[1]
             found[n] = r
@@ -1607,25 +1668,31 @@ function _range_name_faq_axes(spec::_LaneSpec, model, index_sets)
     end
     isempty(found) && return model
     vars = copy(model.variables)
-    for (n, (sh, _)) in found
+    eqs = copy(model.equations)
+    for (n, (sh, F)) in found
         vars[n] = reconstruct(model.variables[n]; shape = sh)
+        eq = eqs[defs[n]]
+        eqs[defs[n]] = Equation(eq.lhs, F; _comment = eq._comment)
     end
-    eqs = Equation[
-        (eq.lhs isa VarExpr && haskey(found, (eq.lhs::VarExpr).name)) ?
-            Equation(eq.lhs, found[(eq.lhs::VarExpr).name][2]; _comment = eq._comment) : eq
-            for eq in model.equations
-    ]
     return reconstruct(model; variables = vars, equations = eqs)
 end
 
+# Whether `shape` is no declared shape: none, or the anonymous index sets
+# (`name__r`) shape promotion names an inline-range `faq`'s axes with.
+_promoted_shape(name, shape) =
+    shape === nothing || all(s -> startswith(String(s), name * "__"), shape)
+
 # The index set of each output axis of the array `faq` `body` and the `faq`
-# ranging over them, or `nothing` when `body` is no array `faq` or an axis
-# has no such set (`_range_name_faq_axes`).
+# ranging over them, or `nothing` when `body` is no array `faq`, repeats an
+# output index (a diagonal, not an array of that rank), or an axis has no
+# such set (`_range_name_faq_axes`).
 function _range_faq_output_sets(spec::_LaneSpec, body, axes, extent)
     (body isa OpExpr && _is_faq_op((body::OpExpr).op)) || return nothing
     F = body::OpExpr
     outs = _output_idx_strings(F)
-    (isempty(outs) || length(outs) != length(F.output_idx)) && return nothing
+    (isempty(outs) || length(outs) != length(F.output_idx) || !allunique(outs)) &&
+        return nothing
+    F.expr_body === nothing && return nothing
     rd = _ranges_dict(F)
     sets = String[]
     newr = Dict{String, Any}(rd)
@@ -1642,13 +1709,10 @@ function _range_faq_output_sets(spec::_LaneSpec, body, axes, extent)
             nothing
         end
         hi === nothing && return nothing
-        read = Set{String}()
-        F.expr_body === nothing || _range_subscript_sets!(read, F.expr_body, o, axes)
-        cand = sort!([s for s in read if get(spec.ext, s, -1) == hi])
-        isempty(cand) && (cand = sort!([s for (s, m) in spec.ext if m == hi]))
-        length(cand) == 1 || return nothing
-        push!(sets, cand[1])
-        newr[o] = IndexSetRef(cand[1])
+        read = filter!(s -> extent(s) == hi, _range_subscript_sets!(Set{String}(), F.expr_body, o, axes))
+        length(read) == 1 || return nothing
+        push!(sets, only(read))
+        newr[o] = IndexSetRef(only(read))
     end
     return sets, reconstruct(F; ranges = newr)
 end
@@ -1693,7 +1757,11 @@ end
 """
     _range_promote_model(spec::_LaneSpec, model, index_sets) -> model
 
-Before a lane build classifies its variables: every 0-d observed that depends
+Before a lane build classifies its variables, in every lane build (an
+out-of-place fragment's, and for observeds free of `t`, too, since one that
+reads the state has no whole-domain form), the interval `faq` observeds'
+axes take index-set names ([`_range_name_faq_axes`](@ref)). Then, in a build
+with a time per lane: every 0-d observed that depends
 on `t` (through any observeds) becomes one value per lane, an array observed
 over the first lane set whose definition is an array `faq` over it with the
 0-d body, so a lane program computes it once per lane at the lane's own time.

@@ -1787,12 +1787,110 @@ end
     )
     @test isempty(lanes(rhs_program(prob), :cells, ["x"]; chunk = 4).tshared)
     tsf(l) = (0.25, 3.0, 0.75)[l]
-    for f in (nothing, tsf), gth in (false, true)
+    # A chunk of more lanes than `x` has cells holds the per-lane buffer of
+    # `g` too.
+    for f in (nothing, tsf), gth in (false, true), chunk in (4, 8)
         compared, differ = _rrt_lanes_vs_whole(
-            prob, :cells, ["x"], Dict("M.u" => ["x"]), sets; tsf = f, gathered = gth
+            prob, :cells, ["x"], Dict("M.u" => ["x"]), sets; tsf = f, gathered = gth, chunk
         )
         @test compared == n && differ == 0
     end
+end
+
+# Which observeds `_range_name_faq_axes` names: only a shapeless observed with
+# one definition, an array faq over distinct output indices, each of which its
+# body reads as a plain subscript along exactly one index set of that extent.
+@testset "an interval faq observed's axis is named only from a plain read" begin
+    ix(v, i...) = Dict("op" => "index", "args" => Any[v, i...])
+    op(o, a...) = Dict("op" => o, "args" => Any[a...])
+    faq(outs, ranges, e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any[outs...], "ranges" => ranges, "expr" => e
+    )
+    n = 5
+    r5 = Dict("r" => Any[1, n])
+    s_eq = Dict("lhs" => "s", "rhs" => faq(["i"], Dict("i" => Dict("from" => "x")), op("cos", "t")))
+    function named(eqs; vars = Dict{String, Any}())
+        V = merge(
+            Dict{String, Any}(
+                "s" => Dict("type" => "unknown", "units" => "1", "shape" => ["x"]),
+                "g" => Dict("type" => "unknown", "units" => "1")
+            ), vars
+        )
+        doc = Dict(
+            "esm" => "2.0.0", "metadata" => Dict("name" => "named", "authors" => ["test"]),
+            "index_sets" => Dict(s => Dict("kind" => "interval", "size" => n) for s in ("x", "w", "k")),
+            "models" => Dict("M" => Dict("variables" => V, "equations" => Any[s_eq, eqs...]))
+        )
+        file = RRT.load_string(RRT.JSON3.write(doc))
+        spec = RRT._LaneSpec(
+            :cells, ["x"], 4, Dict{String, Vector{String}}(), Dict("x" => zeros(4)),
+            RRT._LaneGather[], Set{String}(), Dict{String, Vector{String}}(),
+            Dict{String, Int}(), Dict("x" => n, "w" => n), false, nothing, Set{String}(),
+            String[], Set{String}()
+        )
+        return RRT._range_name_faq_axes(spec, file.models["M"], file.index_sets)
+    end
+    g_eq(outs, body) = Dict("lhs" => "g", "rhs" => faq(outs, r5, body))
+    # Read plainly along `x` (`w` has the same extent): named `x`.
+    m = named([g_eq(["r"], op("*", 2.0, ix("s", "r")))])
+    @test m.variables["g"].shape == ["x"]
+    # Read only reversed, or bare: it is read along no set, so the axis stays
+    # anonymous though index sets of its extent exist.
+    for body in (ix("s", op("-", n + 1, "r")), op("*", 2.0, "r"))
+        @test named([g_eq(["r"], body)]).variables["g"].shape === nothing
+    end
+    # A repeated output index is a diagonal, not a rank-2 array.
+    @test named([g_eq(["r", "r"], op("*", 2.0, ix("s", "r")))]).variables["g"].shape === nothing
+    # A declared shape on a set outside the program is kept.
+    q = Dict("q" => Dict("type" => "unknown", "units" => "1", "shape" => ["k"]))
+    m = named(
+        [Dict("lhs" => "q", "rhs" => faq(["r"], r5, ix("s", "r")))]; vars = q
+    )
+    @test m.variables["q"].shape == ["k"]
+    # Two definitions are left for the validator to report.
+    m = named([g_eq(["r"], ix("s", "r")), g_eq(["r"], op("*", 2.0, ix("s", "r")))])
+    @test m.variables["g"].shape === nothing
+    gdefs = [eq.rhs for eq in m.equations if eq.lhs isa RRT.VarExpr && eq.lhs.name == "g"]
+    @test length(gdefs) == 2 && gdefs[1] != gdefs[2]
+end
+
+# An observed with no lane set is computed over the whole domain, where a lane
+# array holds only the chunk's lanes: one reading an observed computed per lane
+# takes it over the whole domain too, and one reading a state is refused.
+@testset "an observed computed over the whole domain reads no lane array" begin
+    ix(v, i...) = Dict("op" => "index", "args" => Any[v, i...])
+    op(o, a...) = Dict("op" => o, "args" => Any[a...])
+    faq(outs, ranges, e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any[outs...], "ranges" => ranges, "expr" => e
+    )
+    n = 5
+    xr = Dict("i" => Dict("from" => "x"))
+    sets = Dict("x" => n, "k" => n)
+    dlhs = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => xr,
+        "expr" => Dict("op" => "D", "args" => Any[ix("u", "i")], "wrt" => "t")
+    )
+    function doc(name, read)
+        vars = Dict(
+            "u" => Dict("type" => "unknown", "units" => "1", "shape" => ["x"], "default" => 1.0),
+            "s" => Dict("type" => "unknown", "units" => "1", "shape" => ["x"]),
+            "q" => Dict("type" => "unknown", "units" => "1", "shape" => ["k"])
+        )
+        return _rrt_doc_of(
+            name, sets, vars, Any[
+                Dict("lhs" => "s", "rhs" => faq(["i"], xr, op("cos", op("+", "t", "i")))),
+                Dict("lhs" => "q", "rhs" => faq(["j"], Dict("j" => Dict("from" => "k")), ix(read, "j"))),
+                Dict("lhs" => dlhs, "rhs" => faq(["i"], xr, op("*", ix("q", "i"), ix("u", "i")))),
+            ]
+        )
+    end
+    prob = doc("wholeobs", "s")
+    @test lanes(rhs_program(prob), :cells, ["x"]; chunk = 4).tshared == ["M.q", "M.s"]
+    compared, differ = _rrt_lanes_vs_whole(prob, :cells, ["x"], Dict("M.u" => ["x"]), sets)
+    @test compared == n && differ == 0
+    @test _rrt_lane_refusal(
+        () -> lanes(rhs_program(doc("wholestate", "u")), :cells, ["x"]; chunk = 4)
+    ) === :refused
 end
 
 _rrt_lane_allocated(du, lp, ws, u, aux, p, t, x, cells, n) =

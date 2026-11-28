@@ -1421,10 +1421,11 @@ fn elementwise_loop(
 }
 
 /// The index set each output axis of the array `faq` `body` runs over: the
-/// set a range is `from`; for a range `[1, n]`, the set of length `n` the
-/// body reads the output index along (as a subscript of a variable whose
-/// axes are known), else the one interval index set of length `n`; `None`
-/// when an axis has no such set.
+/// set a range is `from`; for a range `[1, n]`, the one set of length `n`
+/// the body reads the output index along (as a subscript of a variable
+/// whose axes are known). `None` when an axis has no such set (one read
+/// only at an offset, or bare, or along two sets of that length) or the
+/// output indices repeat (a diagonal, not an array of that rank).
 fn faq_output_sets(
     body: &Expr,
     sizes: &HashMap<String, i64>,
@@ -1435,7 +1436,7 @@ fn faq_output_sets(
     };
     let outs = f.output_idx.as_deref().filter(|o| !o.is_empty())?;
     let ranges = f.ranges.as_ref()?;
-    if f.op != "faq" {
+    if f.op != "faq" || outs.iter().collect::<HashSet<_>>().len() != outs.len() {
         return None;
     }
     outs.iter()
@@ -1447,21 +1448,11 @@ fn faq_output_sets(
                     subscript_sets(e, o, axes, &mut read);
                 }
                 read.retain(|s| sizes.get(s) == Some(n));
-                let only = |mut c: std::vec::IntoIter<String>| match (c.next(), c.next()) {
+                let mut read = read.into_iter();
+                match (read.next(), read.next()) {
                     (Some(k), None) => Some(k),
                     _ => None,
-                };
-                if !read.is_empty() {
-                    return only(read.into_iter().collect::<Vec<_>>().into_iter());
                 }
-                only(
-                    sizes
-                        .iter()
-                        .filter(|(_, m)| **m == *n)
-                        .map(|(k, _)| k.clone())
-                        .collect::<Vec<_>>()
-                        .into_iter(),
-                )
             }
             _ => None,
         })

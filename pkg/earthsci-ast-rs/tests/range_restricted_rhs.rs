@@ -1847,6 +1847,137 @@ fn an_interval_faq_observed_takes_the_set_its_body_reads() {
     assert_lanes_match(&prog, &lanes, &[n], 1.25);
 }
 
+/// The lane build of one model: `s` an observed of `t` on `x`, `g` an
+/// observed declared with no shape defined by `g_rhs`, and `D(u) = g_read *
+/// u` on `x`; `x` and `w` both of length 5.
+fn interval_faq_doc(g_rhs: serde_json::Value, g_read: serde_json::Value) -> serde_json::Value {
+    model(
+        json!({"x": {"kind": "interval", "size": 5}, "w": {"kind": "interval", "size": 5}}),
+        json!({
+            "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+            "s": {"type": "unknown", "units": "1", "shape": ["x"]},
+            "g": {"type": "unknown", "units": "1"}
+        }),
+        json!([
+            {"lhs": "s", "rhs": faq_node(&["i"], json!({"i": {"from": "x"}}),
+                json!({"op": "cos", "args": [{"op": "+", "args": ["t", "i"]}]}))},
+            {"lhs": "g", "rhs": g_rhs},
+            {"lhs": d_of(json!("u")),
+             "rhs": faq_node(&["i"], json!({"i": {"from": "x"}}),
+                 json!({"op": "*", "args": [g_read, ix("u", vec![json!("i")])]}))}
+        ]),
+    )
+}
+
+/// Whether a call of `lanes` at two different times is refused because the
+/// observed `name` is computed over the whole domain once per call.
+fn computed_whole(lanes: &LaneProgram, prog: &RhsProgram, name: &str) -> bool {
+    let p = prog
+        .parameter_vector(&Default::default())
+        .expect("defaults");
+    let fs = prog.default_forcing();
+    let lay = lanes.layout().clone();
+    let u = vec![1.0; lay.u_len];
+    let mut du = vec![f64::NAN; lay.u_len];
+    let mut ws = lanes.new_workspace();
+    match lanes.eval_times_into(&u, &[], &p, &[0.5, 1.0], &fs, &[1, 2], 2, &mut du, &mut ws) {
+        Ok(()) => false,
+        Err(e @ RhsError::MixedTimes { .. }) => e.to_string().contains(name),
+        Err(e) => panic!("expected a mixed-times error or none, got {e:?}"),
+    }
+}
+
+/// An interval `faq` observed's axis takes a set only from the subscript
+/// its body reads the output index along: one read only reversed, or a
+/// diagonal (a repeated output index), keeps its anonymous axis and is
+/// computed over the whole domain, and lanes still equal the whole-domain
+/// program.
+#[test]
+fn an_interval_faq_observed_is_named_only_from_a_plain_read() {
+    let r5 = json!({"r": [1, 5]});
+    let cases = [
+        (
+            faq_node(
+                &["r"],
+                r5.clone(),
+                json!({"op": "*", "args": [2.0,
+                ix("s", vec![json!({"op": "-", "args": [6, "r"]})])]}),
+            ),
+            ix("g", vec![json!("i")]),
+        ),
+        (
+            faq_node(
+                &["r", "r"],
+                r5.clone(),
+                json!({"op": "*", "args": [2.0, ix("s", vec![json!("r")])]}),
+            ),
+            ix("g", vec![json!("i"), json!("i")]),
+        ),
+    ];
+    for (case, (g_rhs, g_read)) in cases.into_iter().enumerate() {
+        let doc = interval_faq_doc(g_rhs, g_read);
+        let prog = program(&doc, Compiler::Native);
+        let lanes = prog
+            .lanes(
+                LaneKind::Cells {
+                    sets: vec!["x".to_string()],
+                },
+                2,
+            )
+            .expect("lanes");
+        assert_lanes_match(&prog, &lanes, &[5], 1.25);
+        assert!(computed_whole(&lanes, &prog, "M.g"), "case {case}");
+    }
+}
+
+/// An observed with no lane set is computed over the whole domain, where a
+/// lane array holds only the batch's lanes: one reading an observed computed
+/// per lane takes it over the whole domain too, and one reading a state is
+/// refused.
+#[test]
+fn an_observed_computed_over_the_whole_domain_reads_no_lane_array() {
+    let doc = |read: &str| {
+        model(
+            json!({"x": {"kind": "interval", "size": 5}, "k": {"kind": "interval", "size": 5}}),
+            json!({
+                "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+                "s": {"type": "unknown", "units": "1", "shape": ["x"]},
+                "q": {"type": "unknown", "units": "1", "shape": ["k"]}
+            }),
+            json!([
+                {"lhs": "s", "rhs": faq_node(&["i"], json!({"i": {"from": "x"}}),
+                    json!({"op": "cos", "args": [{"op": "+", "args": ["t", "i"]}]}))},
+                {"lhs": "q", "rhs": faq_node(&["j"], json!({"j": {"from": "k"}}),
+                    ix(read, vec![json!("j")]))},
+                {"lhs": d_of(json!("u")),
+                 "rhs": faq_node(&["i"], json!({"i": {"from": "x"}}),
+                     json!({"op": "*", "args": [ix("q", vec![json!("i")]), ix("u", vec![json!("i")])]}))}
+            ]),
+        )
+    };
+    let prog = program(&doc("s"), Compiler::Native);
+    let lanes = prog
+        .lanes(
+            LaneKind::Cells {
+                sets: vec!["x".to_string()],
+            },
+            2,
+        )
+        .expect("lanes");
+    assert_lanes_match(&prog, &lanes, &[5], 1.25);
+    assert!(computed_whole(&lanes, &prog, "M.q"));
+    let prog = program(&doc("u"), Compiler::Native);
+    assert!(
+        prog.lanes(
+            LaneKind::Cells {
+                sets: vec!["x".to_string()]
+            },
+            2
+        )
+        .is_err()
+    );
+}
+
 /// Shape-less elementwise observeds align their operands by index-set name
 /// (esm-spec §4.3.4) in the whole-domain program, native and interpreter: a
 /// transposed operand, a shape-less operand over a transposed one, and a
