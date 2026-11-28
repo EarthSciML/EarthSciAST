@@ -133,6 +133,11 @@ end
                     @test isapprox(actual, a.expected; atol = abs_)
                 end
             end
+            # The solution answers by variable name too, with the same element.
+            a = first(t.assertions)
+            key = "Chemistry." * a.variable
+            ti = _time_index(r.t, Float64(a.time))
+            @test r[Symbol(key)][ti] === r.u[ti][prob.var_map[key]]
         end
     end
 end

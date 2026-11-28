@@ -44,6 +44,7 @@ function _bep_compare(path)
             prob_error = prob isa Exception ? _bep_code(prob) : nothing,
             build_error = b isa Exception ? _bep_code(b) : nothing,
             checks = nothing,
+            error = nothing,
         )
     end
     u1 = [x + 0.125 * sin(1.3 * i) for (i, x) in enumerate(prob.u0)]
@@ -55,7 +56,22 @@ function _bep_compare(path)
             _bep_bits(_bep_du(prob.f!, u, prob.p)) == _bep_bits(_bep_du(b.f!, u, b.p))
         end,
     )
-    return (prob_error = nothing, build_error = nothing, checks = checks)
+    return (prob_error = nothing, build_error = nothing, checks = checks, error = nothing)
+end
+
+# The comparison runs on a corpus worker, so an exception it throws is kept,
+# with its backtrace, and raised again in that fixture's own testset: the
+# failure names the fixture and the other fixtures are still compared.
+function _bep_compare_caught(path)
+    try
+        return _bep_compare(path)
+    catch err
+        corpus_is_resource_error(err) && rethrow()
+        return (
+            prob_error = nothing, build_error = nothing, checks = nothing,
+            error = CapturedException(err, catch_backtrace()),
+        )
+    end
 end
 
 @testset "Internal.build builds what esm_problem builds" begin
@@ -76,10 +92,11 @@ end
         )
         push!(paths, joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", rel...))
     end
-    results = map_corpus(_bep_compare, paths)
+    results = map_corpus(_bep_compare_caught, paths)
     for (path, result) in zip(paths, results)
         rel = relpath(path, TESTUTILS_REPO_ROOT)
         @testset "$rel" begin
+            result.error === nothing || throw(result.error)
             checks = result.checks
             if checks === nothing
                 @test result.build_error == result.prob_error
