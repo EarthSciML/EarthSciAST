@@ -1685,6 +1685,73 @@ end
     end
 end
 
+# An observed of `t` on the lane set that reads other cells of it (a
+# contraction over the set, as Rust's lane program handles it): the lane
+# program computes it, and the observed of `t` it reads, over the whole domain
+# once per call. A call at one time equals the whole-domain program; a call at
+# mixed times is refused naming them. An observed of a state that reads other
+# cells is still refused at build.
+@testset "lane observeds of t that read other cells" begin
+    ix(v, i...) = Dict("op" => "index", "args" => Any[v, i...])
+    op(o, a...) = Dict("op" => o, "args" => Any[a...])
+    faq(outs, ranges, e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any[outs...], "ranges" => ranges, "expr" => e
+    )
+    xr = Dict("i" => Dict("from" => "x"))
+    xm = Dict("i" => Dict("from" => "x"), "m" => Dict("from" => "x"))
+    arr = Dict("type" => "unknown", "units" => "1", "shape" => ["x"])
+    vars = Dict(
+        "u" => Dict("type" => "unknown", "units" => "1", "shape" => ["x"], "default" => 1.0),
+        "s" => arr, "q" => arr, "r" => arr
+    )
+    dudt(body) = Dict(
+        "lhs" => Dict(
+            "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => xr,
+            "expr" => Dict("op" => "D", "args" => Any[ix("u", "i")], "wrt" => "t")
+        ),
+        "rhs" => faq(["i"], xr, body)
+    )
+    sets = Dict("x" => 5)
+    prob = _rrt_doc_of(
+        "lanefall", sets, vars, Any[
+            Dict("lhs" => "s", "rhs" => faq(["i"], xr, op("cos", op("+", "t", "i")))),
+            Dict("lhs" => "q", "rhs" => faq(["i"], xm, op("/", ix("s", "m"), op("+", "i", "m")))),
+            Dict("lhs" => "r", "rhs" => faq(["i"], xr, op("sin", op("*", "t", "i")))),
+            dudt(op("*", op("+", ix("q", "i"), ix("r", "i")), ix("u", "i"))),
+        ]
+    )
+    for g in (false, true)
+        @test _rrt_lanes_vs_whole(prob, :cells, ["x"], Dict("M.u" => ["x"]), sets; gathered = g)[2] == 0
+        @test _rrt_lanes_vs_whole(
+            prob, :cells, ["x"], Dict("M.u" => ["x"]), sets; tsf = _ -> 0.75, gathered = g
+        )[2] == 0
+    end
+    lp = lanes(rhs_program(prob), :cells, ["x"]; chunk = 4)
+    ws = rhs_workspace(lp)
+    fs = default_forcing_set(lp)
+    cells = Int32[4 1 3 2]
+    u = [0.7, 1.3, 2.1, 0.0]
+    du = fill(NaN, 4)
+    err = try
+        rhs!(du, lp, ws, u, Float64[], prob.p, [0.3, 2.0, 7.25], fs, cells, 3)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError && occursin("'M.q'", err.msg) && occursin("'M.s'", err.msg) &&
+        !occursin("'M.r'", err.msg)
+    # The same read in an observed of the state has no fallback.
+    sprob = _rrt_doc_of(
+        "lanefall_state", sets, vars, Any[
+            Dict("lhs" => "s", "rhs" => faq(["i"], xr, op("*", "t", ix("u", "i")))),
+            Dict("lhs" => "q", "rhs" => faq(["i"], xm, op("/", ix("s", "m"), op("+", "i", "m")))),
+            Dict("lhs" => "r", "rhs" => faq(["i"], xr, op("sin", op("*", "t", "i")))),
+            dudt(op("*", op("+", ix("q", "i"), ix("r", "i")), ix("u", "i"))),
+        ]
+    )
+    @test _rrt_lane_refusal(() -> lanes(rhs_program(sprob), :cells, ["x"]; chunk = 4)) === :refused
+end
+
 _rrt_lane_allocated(du, lp, ws, u, aux, p, t, x, cells, n) =
     @allocated rhs!(du, lp, ws, u, aux, p, t, x, cells, n)
 _rrt_gather_allocated(li, lp, p, fs, cells, n) =

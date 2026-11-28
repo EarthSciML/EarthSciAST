@@ -1723,7 +1723,11 @@ keep their global 1-based values.
   State-free observeds keep their whole-domain build-time values and are
   gathered per lane, or computed per lane, bitwise equal. A read that leaves
   the cell (pointwise) or the column (column) is refused with
-  `compiler_refused_rule`, naming the rule and saying "lane".
+  `compiler_refused_rule`, naming the rule and saying "lane", except in an
+  observed of `t` (not of a state), which is computed over the whole domain
+  instead (see "A time per lane"). A shape-less elementwise observed reads
+  each operand by index-set name (esm-spec §4.3.4) in a lane as in the
+  whole-domain program, whatever order the operands list their sets in.
 - **Array `faq` reads.** An array `faq` read at loop subscripts (a whole-array
   right-hand side `D(x) = faq{…}`, an observed of a state or of `t` defined
   whole, `x = faq{…}`, or a `makearray` region value) is its body at
@@ -1750,11 +1754,13 @@ keep their global 1-based values.
   0-d observed that depends on `t` is one value per lane, an array observed of
   `t` with a lane form is computed per lane, and a pre-gathered read never
   involves `t`; a batch at mixed times is evaluated in one pass. An observed
-  of `t` the state equations reach that has no lane form (for example one
-  written over a set that is not a lane set) does not stop the build: the
-  one-time call is unchanged, and a call whose lanes `1..n` have different
-  times is an error naming that observed (Rust `RhsError::MixedTimes`, Julia
-  `ArgumentError`).
+  of `t` the state equations reach that has no lane form (one written over a
+  set that is not a lane set, or one that reads other cells of a lane set,
+  such as `q[i] = Σ_m s[m]/(i+m)`) does not stop the build: it, and every
+  observed of `t` it reads, is computed over the whole domain once per call;
+  the one-time call is unchanged, and a call whose lanes `1..n` have different
+  times is an error naming those observeds (Rust `RhsError::MixedTimes`,
+  Julia `ArgumentError`).
 - **Cost.** A call does work proportional to its lanes, never to the domain.
   Each observed of a state or of `t` that has a lane form is computed per
   lane, in a call at one time too; only one with no lane form (and the
