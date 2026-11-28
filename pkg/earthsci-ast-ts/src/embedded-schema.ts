@@ -1929,7 +1929,8 @@ export const schema: AnySchemaObject = {
         },
         "initialization_equations": {
           "type": "array",
-          "description": "Equations that hold only at t=0 (not dynamically). Used by models whose initialization requires solving an auxiliary system before time-stepping begins (e.g. aerosol equilibrium, plume rise). Each entry is a {lhs, rhs} equation evaluated/solved at t=0.",
+          "deprecated": true,
+          "description": "DEPRECATED (esm 2.5.0; esm-spec 11.4.4). Equations that hold only at t0. A loader rewrites each into an `ic` equation in `equations` (every unknown w replaced by ic(w), every D(w) by ic(D(w))), or into a `guesses` entry for a model with no time derivative, and reports the warning `deprecated_field`. Write `ic` equations instead (esm-spec 11.4.3).",
           "items": {
             "$ref": "#/$defs/Equation"
           }

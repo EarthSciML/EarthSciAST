@@ -95,17 +95,17 @@
     }
   },
   "counts": {
-    "symbols": 1014,
+    "symbols": 1016,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 373,
       "typescript": 241,
       "python": 272,
       "rust": 408,
-      "go": 462
+      "go": 464
     },
     "by_tier": {
-      "extension": 702,
+      "extension": 704,
       "stable": 312
     }
   },
@@ -1280,6 +1280,22 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeFAQBareArrayOperand"
+      }
+    },
+    {
+      "name": "code_ic_system_unbalanced",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeICSystemUnbalanced"
+      }
+    },
+    {
+      "name": "code_ic_system_unsolved",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeICSystemUnsolved"
       }
     },
     {

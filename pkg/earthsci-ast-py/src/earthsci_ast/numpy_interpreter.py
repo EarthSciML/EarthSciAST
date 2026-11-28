@@ -5230,9 +5230,7 @@ def _eval_makearray(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         if len(out_syms) == ndim:
             # Codegen is safe here: the box (this node's own output_idx ×
             # its region bounds) is entirely node-derived, hence static.
-            return _materialize_makearray_vectorized(
-                expr, ctx, out_syms, shape, allow_codegen=True
-            )
+            return _materialize_makearray_vectorized(expr, ctx, out_syms, shape, allow_codegen=True)
 
     out = np.zeros(shape, dtype=float)
     for region, value_expr in zip(regions, values):

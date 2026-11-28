@@ -253,6 +253,7 @@ const _DECLINE_REASONS = (
     :malformed_index => "an `index` node with no operand",
     :subscript_rank_mismatch => "a gather whose subscript count is not the array's rank",
     :subscript_not_static => "a subscript that is not an integer function of the loop indices and build-time tables",
+    :positional_gather => "an elementwise combination with an anonymous array operand, which broadcasts positionally (esm-spec §4.3.4)",
     :gathered_reduction_shape => "a gathered reduction whose output indices do not match its subscripts",
     :region_value_shape => "a `makearray` region value whose rank does not match the region",
     :region_multi_index => "a `makearray` region selected by a subscript of several loop indices",

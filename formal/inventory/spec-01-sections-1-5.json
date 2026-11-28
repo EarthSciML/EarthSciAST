@@ -1018,11 +1018,11 @@
     {
       "id": "spec.4.9.4.init-equations-separate-balance",
       "section": "4.9.4",
-      "quote": "`initialization_equations` (§6.2) are a *separate* block with a separate balance and MUST NOT be counted into the main one.",
+      "quote": "MUST NOT be counted into the main balance, whatever form its left-hand side takes",
       "class": "semantic",
       "phase": 5,
       "area": "flatten",
-      "note": "The equation_count_mismatch balance counts unknowns against main equations of every LHS form, excluding initialization_equations."
+      "note": "The equation_count_mismatch balance counts unknowns against main equations of every LHS form, excluding every equation that mentions ic (the initialization equations, including those a loader moved out of the old initialization_equations block)."
     },
     {
       "id": "spec.4.9.5.resolve-every-expression",
