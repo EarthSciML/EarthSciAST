@@ -773,6 +773,46 @@ def operators(g):
         lhs=op("D", "y", wrt="t"),
     )
     E(
+        "faq_bracket_limits_noreduce",
+        "A \\limits faq with output indices that reduces nothing keeps the bracket form: "
+        "y_j = limits(sum) w_j, j in C would read as a sum.",
+        faq(idx("w", "j"), {"j": {"from": "C"}}, output_idx=["j"], args=["w"]),
+        names=("w",),
+        index_sets=SETS,
+    )
+    E(
+        "faq_bracket_reduction_body",
+        "A faq with output indices whose body is itself a reduction and that reduces nothing "
+        "else keeps the bracket form: y_j = sum sum_(i in S) …, j in C would read as two sums.",
+        faq(
+            faq(idx("w", "i", "j"), {"i": {"from": "S"}}),
+            {"j": {"from": "C"}},
+            output_idx=["j"],
+        ),
+        names=("w",),
+        index_sets=SETS,
+    )
+    E(
+        "faq_bracket_output_filter_only",
+        "A filter on a faq that reduces nothing keeps the bracket form: "
+        "y_j = sum_(j > 1) w_j, j in C would read as a sum over j.",
+        faq(idx("w", "j"), {"j": {"from": "C"}}, output_idx=["j"], filter=op(">", "j", 1)),
+        names=("w",),
+        index_sets=SETS,
+    )
+    E(
+        "faq_defining_unranged_output",
+        "An output index with no range stays on the left side with no row: "
+        "y_(i, j) = sum_(k in S) w_(i, j, k), i in S.",
+        faq(
+            idx("w", "i", "j", "k"),
+            {"i": {"from": "S"}, "k": {"from": "S"}},
+            output_idx=["i", "j"],
+        ),
+        names=("w",),
+        index_sets=SETS,
+    )
+    E(
         "faq_set_shapes",
         "A set named by a subscript shape (x_i) or a formula (NO) prints as that name, not "
         "upright text.",
@@ -2058,6 +2098,38 @@ def documents(g):
         ),
     )
     P(
+        "block_math_comparison_faq",
+        "An == in a path block is a comparison, not an equation: a faq with output indices "
+        "on its right side keeps the bracket form, never the defining form y_i = …, i in S.",
+        document(
+            models={
+                "M": box_model(
+                    variables={
+                        "c": {"type": "unknown", "units": "kg/m^3", "default": 0},
+                        "u": {"type": "parameter", "units": "m/s", "default": 1},
+                        "w": {"type": "parameter"},
+                        "y": {"type": "parameter"},
+                    },
+                    discrete_events=[
+                        {
+                            "name": "match",
+                            "trigger": {
+                                "type": "condition",
+                                "expression": op(
+                                    "==",
+                                    "y",
+                                    faq(idx("w", "i"), {"i": {"from": "S"}}, output_idx=["i"]),
+                                ),
+                            },
+                            "affects": [{"lhs": "c", "rhs": 0}],
+                        }
+                    ],
+                )
+            },
+            index_sets=SETS,
+        ),
+    )
+    P(
         "block_math_coupling",
         "A top-level coupling event's expressions are math under the document's table: "
         "scoped names in it print as scoped references.",
@@ -2749,6 +2821,87 @@ def refusals(g):
         typ,
         "parse_error",
         [("limits(sum)_(i in S) w_i", "limits(sum)_(i in S)^({f}) w_i")],
+    )
+    # The defining form of an equation x = faq reads only what the printer writes: each
+    # left-side subscript a name or 1, no name twice, each row the range of one of them,
+    # and a right-side reduction ranging over an index of its own, not an output index.
+    dfn = expr_doc(
+        faq(idx("w", "i", "j"), {"i": {"from": "S"}, "j": {"from": "C"}}, output_idx=["j"]),
+        ("w",),
+        index_sets=SETS,
+    )
+    R(
+        "defining_out_expression",
+        "A left-side subscript that is an expression is no output index.",
+        dfn,
+        typ,
+        "parse_error",
+        [("$ y_j = ", "$ y_(j + 1) = ")],
+    )
+    R(
+        "defining_out_number",
+        "A left-side subscript that is a number other than 1 is no output index.",
+        dfn,
+        md,
+        "parse_error",
+        [("y_{j} = ", "y_{2} = ")],
+    )
+    R(
+        "defining_out_twice",
+        "A name twice among the left side's subscripts is refused.",
+        dfn,
+        typ,
+        "parse_error",
+        [("$ y_j = ", "$ y_(j, j) = ")],
+    )
+    R(
+        "defining_row_not_output",
+        "A range row after the right side for a name not among the left side's subscripts "
+        "is refused (it would be a hidden reduction).",
+        dfn,
+        typ,
+        "parse_error",
+        [(", j in C $", ", k in C $")],
+    )
+    R(
+        "defining_row_twice",
+        "Two range rows for one output index are refused.",
+        dfn,
+        md,
+        "parse_error",
+        [(r", j \in C", r", j \in C, j \in S")],
+    )
+    R(
+        "defining_sum_no_range",
+        "A right-side reduction with no range of its own is refused in the defining form.",
+        dfn,
+        typ,
+        "parse_error",
+        [("sum_(i in S) w_(i, j)", "sum w_(i, j)")],
+    )
+    R(
+        "defining_limits_no_range",
+        "A \\limits reduction with no range of its own is refused in the defining form.",
+        dfn,
+        md,
+        "parse_error",
+        [(r"\sum_{i \in S} w_{i, j}", r"\sum\limits w_{i, j}")],
+    )
+    R(
+        "defining_sum_filter_only",
+        "A right-side reduction with only a filter is refused in the defining form.",
+        dfn,
+        typ,
+        "parse_error",
+        [("sum_(i in S) w_(i, j)", "sum_(j > 1) w_(i, j)")],
+    )
+    R(
+        "defining_sum_over_output",
+        "A right-side reduction ranging over an output index is refused.",
+        dfn,
+        md,
+        "parse_error",
+        [(r"y_{j} = \sum_{i \in S}", r"y_{j, i} = \sum_{i \in S}")],
     )
     bset = expr_doc(
         faq(
