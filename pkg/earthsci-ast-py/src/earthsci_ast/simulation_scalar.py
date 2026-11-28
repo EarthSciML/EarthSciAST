@@ -274,9 +274,15 @@ def _build_scalar_rhs(
     # Each is evaluated once, at the run's start ``t0``, in the start-of-run
     # scope of esm-spec §11.4.2: ``t`` is ``t0``, and an observed it reads is
     # evaluated there too. One that reads a state is refused (`ic_reads_state`).
+    ic_eqs = scalar_ic_equations(flat)
+    for target, _rhs in ic_eqs:
+        if target not in state_names:
+            raise SimulationError(
+                f"ic({target}): the target is not a state variable of the flattened system"
+            )
     eq_ics = start_of_run_scalar_ics(
         flat,
-        scalar_ic_equations(flat),
+        ic_eqs,
         dict(zip(compiled.parameter_names, param_values)),
         float(t0),
     )
@@ -321,7 +327,6 @@ def _build_scalar_rhs(
             state_names,
             eq_ics,
             initial_conditions,
-            ode,
             dict(zip(compiled.parameter_names, param_values)),
             float(t0),
             unset,
@@ -531,21 +536,20 @@ def _apply_scalar_initialization_system(
     state_names: list[str],
     eq_ics: dict[str, float],
     initial_conditions: dict[str, Any],
-    ode: set[str],
     params: dict[str, float],
     t0: float,
     unset: list[str],
 ) -> None:
-    """The initialization system (esm-spec §11.4.3) on the scalar pathway:
-    its triangular part evaluated in dependency order over ``y0``, which holds
-    the defaults, the explicit initial conditions and the supplied values; a
-    truly implicit part is refused (this pathway takes no ``strip``)."""
-    from .init_system import plan_initialization, starting_values_as_states
-    from .simulation_array import _eval_buildtime_field, _ic_observed_definitions
+    """The initialization system (esm-spec §11.4.3) on the scalar pathway, by
+    the array pathway's plan and step evaluation over a layout of one cell per
+    state. ``y0`` holds the defaults, the explicit initial conditions and the
+    supplied values; a state a step sets leaves ``unset``. This pathway takes
+    no ``strip``, so a truly implicit part is refused."""
+    from .simulation_array import _apply_initialization_system, start_of_run_observeds
 
     layout = {n: slice(i, i + 1) for i, n in enumerate(state_names)}
-    known = {layout[n].start for n in eq_ics if n in layout}
-    supplied: dict[str, list[int]] = {}
+    overridden: set[int] = set()
+    defaulted: set[int] = set()
     for name in state_names:
         raw = resolve_override_raw(
             name,
@@ -556,32 +560,31 @@ def _apply_scalar_initialization_system(
             surface="initial_conditions",
             kind="state",
         )
-        if raw is not None and name in ode:
-            supplied[name] = [layout[name].start]
-            known.add(layout[name].start)
-    definitions, _ = _ic_observed_definitions(flat)
-    plan = plan_initialization(
+        if raw is not None:
+            overridden.add(layout[name].start)
+        if flat.state_variables[name].default is not None:
+            defaulted.add(layout[name].start)
+    arrays, scalars = start_of_run_observeds(flat, list(eq_ics.items()), params, t0)
+    # An unset state starts as NaN, so a step that gives it a value is seen.
+    for name in unset:
+        y0[layout[name].start] = np.nan
+    _apply_initialization_system(
         flat,
+        y0,
         shapes={},
         state_layout=layout,
-        known=known,
-        supplied=supplied,
-        observed_defs={n: r[0] for n, r in definitions.items() if len(r) == 1},
+        field_ic_eqs=list(eq_ics.items()),
+        overridden=overridden,
+        defaulted=defaulted,
         var_axes={},
-        strip=False,
+        scope_arrays=arrays,
+        param_values=params,
+        observed_scalars=scalars,
+        t0=t0,
     )
-    for target, rhs, _cells in plan.steps:
-        scope = dict(params)
-        scope.update({n: float(y0[i]) for i, n in enumerate(state_names)})
-        value = np.asarray(
-            _eval_buildtime_field(
-                starting_values_as_states(rhs),
-                index_sets=flat.index_sets,
-                param_values=scope,
-                t=t0,
-            ),
-            dtype=float,
-        )
-        y0[layout[target].start] = float(value.reshape(-1)[0])
-        if target in unset:
-            unset.remove(target)
+    for name in list(unset):
+        i = layout[name].start
+        if np.isnan(y0[i]):
+            y0[i] = 0.0
+        else:
+            unset.remove(name)

@@ -15,7 +15,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from .classification import is_implicit_lhs
+from .classification import _op, _slot, is_implicit_lhs, is_initial_condition
 from .compiler import CompilerUnavailableError
 from .error_handling import STRIPPED_PROBLEM_NOT_SOLVABLE
 from .errors import SimulationError
@@ -242,7 +242,6 @@ def _component_walk(comp: Any, prefix: str, classes, s: StrippedConstructs, coun
     from .serialize import (
         _serialize_continuous_event,
         _serialize_discrete_event,
-        _serialize_expression,
         _serialize_parameter_update_spec,
     )
 
@@ -286,22 +285,24 @@ def _component_walk(comp: Any, prefix: str, classes, s: StrippedConstructs, coun
             )
             var.update = None
     if "algebraic" in classes and isinstance(comp, Model):
-        comp.equations = [
-            eq for eq in comp.equations if not _strippable_implicit(_serialize_expression(eq.lhs))
-        ]
+        comp.equations = [eq for eq in comp.equations if not _strippable_implicit(eq)]
     for key, sub in subs_raw.items():
         if isinstance(sub, (Model, ReactionSystem)):
             _component_walk(sub, f"{prefix}.{key}", classes, s, counters, removed)
 
 
-def _strippable_implicit(lhs: Any) -> bool:
-    if not is_implicit_lhs(lhs):
+def _strippable_implicit(eq: Any) -> bool:
+    """An implicit equation of the main system (API_SPEC §5.8 ``algebraic``):
+    an expression left-hand side that is not ``D`` of one. An initialization
+    equation (one that mentions ``ic``, esm-spec §11.4.3) is never one."""
+    if is_initial_condition(eq):
         return False
-    body = lhs
-    while isinstance(body, dict) and body.get("op") == "faq" and body.get("expr") is not None:
-        body = body["expr"]
-    op = body.get("op") if isinstance(body, dict) else getattr(body, "op", None)
-    return op not in ("ic", "D")
+    if not is_implicit_lhs(eq.lhs):
+        return False
+    body = eq.lhs
+    while _op(body) == "faq" and _slot(body, "expr", "expr") is not None:
+        body = _slot(body, "expr", "expr")
+    return _op(body) != "D"
 
 
 def strip_document(file: Any, classes: list[str]) -> tuple[Any, StrippedConstructs, Any]:
@@ -367,7 +368,7 @@ def collect_algebraic(
     counters: dict[str, int] = {}
     read: set[str] = set()
     for eq in flat.equations:
-        if not _strippable_implicit(_serialize_expression(eq.lhs)):
+        if not _strippable_implicit(eq):
             continue
         origin, prefix = _equation_origin(eq)
         j = counters[prefix] = counters.get(prefix, 0) + 1
@@ -526,20 +527,10 @@ def _z_start(
     build-time evaluators."""
     import numpy as np
 
-    from .serialize import _serialize_expression
     from .simulation_array import _eval_buildtime_field
 
-    rhs = None
-    for eq in flat.equations:
-        lhs = _serialize_expression(eq.lhs)
-        if isinstance(lhs, dict) and lhs.get("op") == "ic" and lhs.get("args") == [name]:
-            rhs = eq.rhs
-            break
-    if rhs is None:
-        for tgt, r in getattr(flat, "field_ics", None) or []:
-            if tgt == name:
-                rhs = r
-                break
+    # Flatten keeps the explicit initial conditions in `field_ics` only.
+    rhs = next((r for tgt, r in getattr(flat, "field_ics", None) or [] if tgt == name), None)
     values = None
     if rhs is not None:
         try:

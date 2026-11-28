@@ -4191,7 +4191,8 @@ def _warn_old_spellings(
             parts.append(
                 "`initialization_equations` is rewritten into `ic` equations in `equations` "
                 "(every unknown w read as ic(w), every D(w) as ic(D(w))), or into `guesses` "
-                "for a model with no time derivative (esm 2.5.0, esm-spec §11.4.4)"
+                "for a model with no time derivative, and an initial condition of a "
+                "parameter into its `default` (esm 2.5.0, esm-spec §11.4.4)"
             )
         warnings.warn(
             f"{DEPRECATED_FIELD}: "

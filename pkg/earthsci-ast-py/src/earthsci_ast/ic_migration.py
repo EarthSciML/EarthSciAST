@@ -11,7 +11,8 @@ old spellings are read:
   time derivative ``D(w)`` becomes ``ic(D(w))`` — or, for a model with no time
   derivative, into ``guesses`` entries. The field does not survive.
 * :func:`check_ic_arguments` refuses an ``ic`` whose argument is neither a
-  variable reference nor ``D`` of one (``ic(index(u, i))``, ``ic(a + b)``).
+  variable reference nor ``D`` of one (``ic(index(u, i))``, ``ic(a + b)``), or
+  names a declared parameter (``ic(k)``).
 
 This module imports nothing from the package beyond the error leaf, so the
 parser can import it at module load.
@@ -27,6 +28,7 @@ __all__ = [
     "DeprecatedFieldError",
     "IcInvalidArgumentError",
     "check_ic_arguments",
+    "declares_below_2_5",
     "migrate_initialization_equations",
 ]
 
@@ -60,18 +62,23 @@ def _is_node(x: Any) -> bool:
     return isinstance(x, dict) and isinstance(x.get("op"), str)
 
 
-def _local_unknowns(model: dict) -> set[str]:
+def _local_of_type(model: dict, kind: str) -> set[str]:
     out: set[str] = set()
     for name, var in (model.get("variables") or {}).items():
-        if isinstance(var, dict) and var.get("type") == "unknown":
+        if isinstance(var, dict) and var.get("type") == kind:
             out.add(name)
     return out
 
 
-def _resolve_scoped(root: dict, model: dict, name: str) -> bool:
-    """Whether the scoped reference ``name`` (``A.B.x``) names an unknown:
-    relative to ``model``'s subsystems first, then from the document root (a
-    model's unknown or a reaction system's species)."""
+def _local_unknowns(model: dict) -> set[str]:
+    return _local_of_type(model, "unknown")
+
+
+def _resolve_scoped(root: dict, model: dict, name: str, kind: str = "unknown") -> bool:
+    """Whether the scoped reference ``name`` (``A.B.x``) names a variable of
+    type ``kind``: relative to ``model``'s subsystems first, then from the
+    document root (a model's variable, or a reaction system's species for an
+    unknown)."""
     parts = name.split(".")
     if len(parts) < 2:
         return False
@@ -82,7 +89,7 @@ def _resolve_scoped(root: dict, model: dict, name: str) -> bool:
             if not isinstance(subs, dict) or not isinstance(subs.get(seg), dict):
                 return False
             m = subs[seg]
-        return isinstance(m, dict) and segs[-1] in _local_unknowns(m)
+        return isinstance(m, dict) and segs[-1] in _local_of_type(m, kind)
 
     if through_subsystems(model, parts):
         return True
@@ -91,6 +98,8 @@ def _resolve_scoped(root: dict, model: dict, name: str) -> bool:
     if isinstance(models, dict) and isinstance(models.get(head), dict):
         if through_subsystems(models[head], rest):
             return True
+    if kind != "unknown":
+        return False
     systems = root.get("reaction_systems") if isinstance(root, dict) else None
     if len(rest) == 1 and isinstance(systems, dict) and isinstance(systems.get(head), dict):
         species = systems[head].get("species")
@@ -124,13 +133,16 @@ def _children(e: dict) -> list[Any]:
 
 
 def _rewrite(e: Any, is_unknown) -> Any:
-    """``e`` with every unknown ``w`` read as ``ic(w)`` and every ``D(w)`` as
-    ``ic(D(w))`` (esm-spec §11.4.4). Every other key is kept verbatim."""
+    """``e`` with every unknown ``w`` read as ``ic(w)`` and every time
+    derivative ``D(w)`` as ``ic(D(w))`` (esm-spec §11.4.4), in every
+    expression-valued field (``args``, ``values``, ``lower``, ``upper``,
+    ``expr``, ``filter``, ``key``, ``bindings``). An ``ic`` node is kept as it
+    is; every other key is kept verbatim."""
     if isinstance(e, str):
         return {"op": "ic", "args": [e]} if is_unknown(e) else e
-    if not _is_node(e):
+    if not _is_node(e) or e["op"] == "ic":
         return e
-    if e["op"] == "D":
+    if e["op"] == "D" and e.get("wrt", "t") == "t":
         args = e.get("args")
         if isinstance(args, list) and len(args) == 1 and isinstance(args[0], str):
             if is_unknown(args[0]):
@@ -149,18 +161,75 @@ def _rewrite(e: Any, is_unknown) -> Any:
     return out
 
 
-def _migrate_model(root: dict, model: dict, at: str, sites: list[str]) -> None:
+def declares_below_2_5(doc: Any) -> bool:
+    """Whether ``doc`` declares an esm version below 2.5.0, where ``ic(k)`` of a
+    parameter was how a document set it (esm-spec §11.4.4)."""
+    version = doc.get("esm") if isinstance(doc, dict) else None
+    if not isinstance(version, str):
+        return False
+    try:
+        parts = tuple(int(x) for x in version.split(".")[:2])
+    except ValueError:
+        return False
+    return parts < (2, 5)
+
+
+def _parameter_target(lhs: Any, params: set[str]) -> str | None:
+    """``k`` when ``lhs`` is a declared parameter ``k`` of the model, bare or
+    as ``ic(k)``."""
+    if _is_node(lhs) and lhs["op"] == "ic" and isinstance(lhs.get("args"), list):
+        lhs = lhs["args"][0] if len(lhs["args"]) == 1 else None
+    return lhs if isinstance(lhs, str) and lhs in params else None
+
+
+def _parameter_default(model: dict, k: str, rhs: Any, at: str) -> None:
+    """An old initial condition of the parameter ``k`` becomes its
+    ``default`` (esm-spec §11.4.4 "An initial condition of a parameter")."""
+    if not isinstance(rhs, (int, float)) or isinstance(rhs, bool):
+        raise IcInvalidArgumentError(
+            f"ic_invalid_argument: {at}: an initial condition of the parameter `{k}` is "
+            "migrated into its `default`, so its right-hand side must be a number "
+            "(esm-spec §11.4.4)."
+        )
+    model["variables"][k]["default"] = rhs
+
+
+def _migrate_model(root: dict, model: dict, at: str, sites: list[str], old: bool) -> None:
     subs = model.get("subsystems")
     if isinstance(subs, dict):
         for name, sub in subs.items():
             if isinstance(sub, dict) and "ref" not in sub:
-                _migrate_model(root, sub, f"{at}/subsystems/{_token(name)}", sites)
+                _migrate_model(root, sub, f"{at}/subsystems/{_token(name)}", sites, old)
+    params = _local_of_type(model, "parameter")
+    equations = model.get("equations")
+    if old and params and isinstance(equations, list):
+        kept = []
+        for i, eq in enumerate(equations):
+            lhs = eq.get("lhs") if isinstance(eq, dict) else None
+            k = _parameter_target(lhs, params) if _is_node(lhs) else None
+            if k is None:
+                kept.append(eq)
+                continue
+            _parameter_default(model, k, eq.get("rhs"), f"{at}/equations/{i}")
+            sites.append(f"{at}/equations/{i} (ic({k}))")
+        if len(kept) != len(equations):
+            model["equations"] = kept
     if _FIELD not in model:
         return
     block = model.pop(_FIELD)
     if not isinstance(block, list) or not block:
         return
     sites.append(f"{at}/{_FIELD} ({_FIELD})")
+    rest = []
+    for i, eq in enumerate(block):
+        k = _parameter_target(eq.get("lhs"), params) if isinstance(eq, dict) else None
+        if k is None:
+            rest.append((i, eq))
+        else:
+            _parameter_default(model, k, eq.get("rhs"), f"{at}/{_FIELD}/{i}")
+    block = rest
+    if not block:
+        return
     equations = model.get("equations")
     if not isinstance(equations, list):
         equations = []
@@ -170,7 +239,7 @@ def _migrate_model(root: dict, model: dict, at: str, sites: list[str]) -> None:
         def is_unknown(name: str) -> bool:
             return name in local or ("." in name and _resolve_scoped(root, model, name))
 
-        for eq in block:
+        for _i, eq in block:
             if not isinstance(eq, dict):
                 continue
             new = dict(eq)
@@ -184,7 +253,7 @@ def _migrate_model(root: dict, model: dict, at: str, sites: list[str]) -> None:
     guesses = model.get("guesses")
     if not isinstance(guesses, dict):
         guesses = {}
-    for k, eq in enumerate(block):
+    for k, eq in block:
         lhs = eq.get("lhs") if isinstance(eq, dict) else None
         if not (isinstance(lhs, str) and lhs in local):
             raise DeprecatedFieldError(
@@ -202,17 +271,21 @@ def migrate_initialization_equations(doc: Any) -> list[str]:
     """Rewrite every model's deprecated ``initialization_equations`` IN PLACE
     (esm-spec §11.4.4) and return one site per model that carried a non-empty
     block, as ``<pointer> (initialization_equations)``, for the document's
-    ``deprecated_field`` warning. Raises :class:`DeprecatedFieldError` for an
+    ``deprecated_field`` warning. An old initial condition of a parameter (an
+    entry of the block whose left-hand side is a declared parameter, or below
+    esm 2.5.0 an ``ic(k) ~ number`` equation) becomes ``k``'s ``default``
+    first, with a site of its own. Raises :class:`DeprecatedFieldError` for an
     equation of a model with no time derivative that is not ``v ~ e``.
     Idempotent: a second pass finds nothing."""
     sites: list[str] = []
     if not isinstance(doc, dict):
         return sites
+    old = declares_below_2_5(doc)
     models = doc.get("models")
     if isinstance(models, dict):
         for name, model in models.items():
             if isinstance(model, dict) and "ref" not in model:
-                _migrate_model(doc, model, f"/models/{_token(name)}", sites)
+                _migrate_model(doc, model, f"/models/{_token(name)}", sites, old)
     return sites
 
 
@@ -246,7 +319,50 @@ def _check(e: Any, at: str) -> None:
                 _check(v, f"{at}/{i}")
 
 
+def _ic_parameters(root: dict, model: dict, e: Any, at: str) -> None:
+    """Refuse an ``ic`` in ``model`` (its subsystems excluded) whose argument
+    names a declared parameter, bare or scoped (esm-spec §4.2 ``ic``)."""
+    if isinstance(e, dict):
+        if e.get("op") == "ic" and isinstance(e.get("args"), list) and len(e["args"]) == 1:
+            a = e["args"][0]
+            if _is_node(a) and a["op"] == "D" and isinstance(a.get("args"), list) and a["args"]:
+                a = a["args"][0]
+            if isinstance(a, str) and (
+                a in _local_of_type(model, "parameter")
+                or ("." in a and _resolve_scoped(root, model, a, "parameter"))
+            ):
+                raise IcInvalidArgumentError(
+                    f"ic_invalid_argument: {at}: `ic({a})` names a declared parameter. A "
+                    "parameter has no starting value of its own; its value is read as "
+                    f"`{a}` (esm-spec §4.2 `ic`)."
+                )
+        for k, v in e.items():
+            if isinstance(v, (dict, list)):
+                _ic_parameters(root, model, v, f"{at}/{_token(str(k))}")
+    elif isinstance(e, list):
+        for i, v in enumerate(e):
+            if isinstance(v, (dict, list)):
+                _ic_parameters(root, model, v, f"{at}/{i}")
+
+
+def _check_model_parameters(root: dict, model: dict, at: str) -> None:
+    for k, v in model.items():
+        if k == "subsystems" and isinstance(v, dict):
+            for name, sub in v.items():
+                if isinstance(sub, dict) and "ref" not in sub:
+                    _check_model_parameters(root, sub, f"{at}/subsystems/{_token(name)}")
+        elif isinstance(v, (dict, list)):
+            _ic_parameters(root, model, v, f"{at}/{_token(str(k))}")
+
+
 def check_ic_arguments(doc: Any) -> None:
-    """Refuse at load an ``ic`` whose argument is not a variable reference or
-    ``D`` of one (esm-spec §4.2) with ``ic_invalid_argument``."""
+    """Refuse at load, with ``ic_invalid_argument`` naming the node's location
+    (esm-spec §4.2 ``ic``), an ``ic`` whose argument is not a variable
+    reference or ``D`` of one, and one whose argument names a declared
+    parameter of the model it is written in (``ic(k)``, ``ic(D(k))``)."""
     _check(doc, "")
+    models = doc.get("models") if isinstance(doc, dict) else None
+    if isinstance(models, dict):
+        for name, model in models.items():
+            if isinstance(model, dict) and "ref" not in model:
+                _check_model_parameters(doc, model, f"/models/{_token(name)}")
