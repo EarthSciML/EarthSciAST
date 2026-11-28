@@ -540,6 +540,17 @@ RANGE_BOX_INVALID = "range_box_invalid"
 #: (API_SPEC §5.8, "Strip and expose"). Names the removed classes.
 STRIPPED_PROBLEM_NOT_SOLVABLE = "stripped_problem_not_solvable"
 
+#: The initialization system (esm-spec §11.4.3, esm 2.5.0) has more scalar
+#: equations than unknowns, or fewer, or no assignment of one equation to each
+#: unknown. Registered with the spec; not raised until the initialization
+#: system is implemented.
+IC_SYSTEM_UNBALANCED = "ic_system_unbalanced"
+
+#: The solve of the initialization system did not converge (esm-spec §11.4.3).
+#: This binding has no nonlinear initialization solve; registered for the
+#: uniform vocabulary.
+IC_SYSTEM_UNSOLVED = "ic_system_unsolved"
+
 #: A kernel spec's output, ``dt_params`` entry or map target does not resolve.
 #: Python does not compile kernels; registered for the uniform vocabulary.
 KERNEL_OUTPUT_UNRESOLVED = "kernel_output_unresolved"

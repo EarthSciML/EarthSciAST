@@ -189,7 +189,9 @@ _LaneSpec(args::Vararg{Any, 15}) = _LaneSpec(args..., Set{String}())
 
 # Thrown by the lane rewrite of the observed `name` of `t`, which has no lane
 # form: `names` is it and every observed of `t` it reads, which the build
-# retries computing over the whole domain.
+# retries computing over the whole domain. Not an `EarthSciASTError`, so no
+# recovery from a document error inside the build can swallow it before
+# `_lane_instance` catches it.
 struct _LaneWholeFallback <: Exception
     name::String
     names::Vector{String}

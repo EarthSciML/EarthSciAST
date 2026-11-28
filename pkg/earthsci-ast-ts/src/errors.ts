@@ -447,6 +447,11 @@ export const ERROR_CODES = {
   OPERATOR_DEFINES_CORE_OP: 'operator_defines_core_op',
   DEFINITION_UNIT_MISMATCH: 'definition_unit_mismatch',
   DEPRECATED_FIELD: 'deprecated_field',
+  // esm 2.5.0 (esm-spec §11.4.3): the initialization system does not balance,
+  //   or its solve did not converge. Build-time codes of the simulating
+  //   bindings; registered here because every registry lists the vocabulary.
+  IC_SYSTEM_UNBALANCED: 'ic_system_unbalanced',
+  IC_SYSTEM_UNSOLVED: 'ic_system_unsolved',
   OPERATOR_BODY_EXPANSION_TOO_DEEP: 'operator_body_expansion_too_deep',
   // A SURVIVING registry body that names a variable a COUPLING rule rewrote out
   //   of the flattened equations -- a `variable_map` substitution target, or a

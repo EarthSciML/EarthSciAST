@@ -113,6 +113,12 @@ const ERROR_CODES = (
     # esm-spec §11.4.2: an `ic` right-hand side reads a state, directly or
     # through observeds. A construction error, not a `validate` finding.
     IC_READS_STATE = "ic_reads_state",
+    # esm-spec §11.4.3 (esm 2.5.0): the initialization system has more scalar
+    # equations than unknowns, or fewer, or no assignment of one equation to
+    # each unknown; and a solve of it that did not converge. Registered with
+    # the spec; not raised until the initialization system is implemented.
+    IC_SYSTEM_UNBALANCED = "ic_system_unbalanced",
+    IC_SYSTEM_UNSOLVED = "ic_system_unsolved",
     EVENT_VAR_UNDECLARED = "event_var_undeclared",
     INVALID_BROADCAST_FN = "invalid_broadcast_fn",
     INVALID_REFERENCE_SYNTAX = "invalid_reference_syntax",
