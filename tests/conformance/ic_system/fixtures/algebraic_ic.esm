@@ -1,0 +1,222 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_algebraic_faq_and_broadcast",
+    "description": "esm-spec 11.4.3: explicit initial conditions of ALGEBRAIC unknowns over [lev, bin] (MOSAIC Kelvin's aw). aw is started by an ic with a faq right-hand side, aw[k, b] = aw0[k]; bw by the bare lower-rank aw0, aligned by index-set name and repeated along bin. Built with strip `algebraic`, the explicit ic value is each element's warm start z0 (API_SPEC 5.8), and the build must evaluate both forms under the native compiler.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 2
+    },
+    "bin": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "A": {
+      "variables": {
+        "aw0": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "default": [
+            0.9,
+            0.8
+          ],
+          "description": "per-level starting water activity"
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "ODE state, decays at rate 1"
+        },
+        "aw": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev",
+            "bin"
+          ],
+          "description": "algebraic: 2*aw[k, b] ~ x; ic(aw) ~ faq(aw0[k])"
+        },
+        "bw": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev",
+            "bin"
+          ],
+          "description": "algebraic: 4*bw[k, b] ~ x; ic(bw) ~ aw0"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "bin"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                2.0,
+                {
+                  "op": "index",
+                  "args": [
+                    "aw",
+                    "i",
+                    "j"
+                  ]
+                }
+              ]
+            },
+            "output_idx": [
+              "i",
+              "j"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "bin"
+              }
+            },
+            "expr": "x",
+            "output_idx": [
+              "i",
+              "j"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "bin"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                4.0,
+                {
+                  "op": "index",
+                  "args": [
+                    "bw",
+                    "i",
+                    "j"
+                  ]
+                }
+              ]
+            },
+            "output_idx": [
+              "i",
+              "j"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "bin"
+              }
+            },
+            "expr": "x",
+            "output_idx": [
+              "i",
+              "j"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "aw"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "bin"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "aw0",
+                "i"
+              ]
+            },
+            "output_idx": [
+              "i",
+              "j"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "bw"
+            ]
+          },
+          "rhs": "aw0"
+        }
+      ]
+    }
+  }
+}

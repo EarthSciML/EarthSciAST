@@ -21,7 +21,13 @@ from .error_handling import STRIPPED_PROBLEM_NOT_SOLVABLE
 from .errors import SimulationError
 from .serialize import canonical_json_value
 
-STRIP_CLASSES = ("algebraic", "continuous_events", "discrete_events", "parameter_updates")
+STRIP_CLASSES = (
+    "algebraic",
+    "continuous_events",
+    "discrete_events",
+    "initialization",
+    "parameter_updates",
+)
 
 #: The classes the build in progress stripped, so the coupling-level event gate
 #: lets through the events it took over.
@@ -47,9 +53,21 @@ class StrippedConstructs:
     z_layout: dict[str, dict[str, Any]] = field(default_factory=dict)
     z0: list[float | None] = field(default_factory=list)
     residuals: list[dict[str, Any]] = field(default_factory=list)
+    #: The truly implicit part of the initialization system handed to the
+    #: caller (``strip`` class ``initialization``, esm 2.5.0): the member
+    #: ``{"residuals", "unknowns", "x0"}`` (see
+    #: :func:`earthsci_ast.init_system.initialization_member`).
+    initialization: dict[str, list] = field(
+        default_factory=lambda: {"residuals": [], "unknowns": [], "x0": []}
+    )
 
     def is_empty(self) -> bool:
-        return not (self.events or self.parameter_updates or self.residuals)
+        return not (
+            self.events
+            or self.parameter_updates
+            or self.residuals
+            or self.initialization.get("residuals")
+        )
 
     def removed_classes(self) -> list[str]:
         out = set()
@@ -59,6 +77,8 @@ class StrippedConstructs:
             out.add("parameter_updates")
         if self.residuals:
             out.add("algebraic")
+        if self.initialization.get("residuals"):
+            out.add("initialization")
         return sorted(out)
 
     def to_json(self) -> dict[str, Any]:
@@ -66,6 +86,11 @@ class StrippedConstructs:
             "strip": list(self.strip),
             "events": self.events,
             "parameter_updates": self.parameter_updates,
+            "initialization": {
+                "residuals": list(self.initialization.get("residuals", [])),
+                "unknowns": list(self.initialization.get("unknowns", [])),
+                "x0": list(self.initialization.get("x0", [])),
+            },
             "algebraic": {
                 "unknowns": list(self.unknowns),
                 "z_layout": self.z_layout,
@@ -86,7 +111,8 @@ def strip_classes(strip: Any) -> list[str]:
         if c not in STRIP_CLASSES:
             raise ValueError(
                 f"`strip` names {c!r}, which is not a strippable class; the classes are "
-                "algebraic, continuous_events, discrete_events and parameter_updates "
+                "algebraic, continuous_events, discrete_events, initialization and "
+                "parameter_updates "
                 "(Wiener noise is never strippable)"
             )
         if c not in out:
@@ -330,7 +356,9 @@ def strip_document(file: Any, classes: list[str]) -> tuple[Any, StrippedConstruc
     return doc, s, flat
 
 
-def collect_algebraic(flat: Any, s: StrippedConstructs, t0: float, params: dict) -> None:
+def collect_algebraic(
+    flat: Any, s: StrippedConstructs, t0: float, params: dict, u0: dict | None = None
+) -> None:
     """The residuals of the flattened original's implicit equations, and the
     ``z`` layout of the algebraic unknowns they read."""
     from .expression import free_variables
@@ -341,16 +369,7 @@ def collect_algebraic(flat: Any, s: StrippedConstructs, t0: float, params: dict)
     for eq in flat.equations:
         if not _strippable_implicit(_serialize_expression(eq.lhs)):
             continue
-        contribs = getattr(eq, "contributions", None) or []
-        origin_obj = contribs[0].origins[0] if contribs and contribs[0].origins else None
-        if origin_obj is not None and getattr(origin_obj, "component", None) is not None:
-            origin = {"component": origin_obj.component}
-            prefix = origin_obj.component
-        elif origin_obj is not None:
-            origin = {"coupling": origin_obj.coupling}
-            prefix = f"coupling[{origin_obj.coupling}]"
-        else:
-            origin, prefix = {"component": ""}, ""
+        origin, prefix = _equation_origin(eq)
         j = counters[prefix] = counters.get(prefix, 0) + 1
         expr = {"op": "-", "args": [_serialize_expression(eq.lhs), _serialize_expression(eq.rhs)]}
         sets = _expr_sets(expr, flat)
@@ -377,8 +396,24 @@ def collect_algebraic(flat: Any, s: StrippedConstructs, t0: float, params: dict)
         s.unknowns.append(n)
         s.z_layout[n] = {"base": base, "shape": shape}
         length = max(math.prod(shape), 1) if shape else 1
-        s.z0.extend(_z_start(flat, n, length, params, t0))
+        s.z0.extend(_z_start(flat, n, length, params, t0, u0 or {}))
         base += length
+
+
+def _equation_origin(eq: Any) -> tuple[dict[str, Any], str]:
+    """A flattened equation's origin (esm-libraries-spec §4.7.5: its first
+    contribution's) and the id prefix it gives: the component path, or
+    ``coupling[k]``."""
+    contribs = getattr(eq, "contributions", None) or []
+    origin_obj = contribs[0].origins[0] if contribs and contribs[0].origins else None
+    if origin_obj is not None and getattr(origin_obj, "component", None) is not None:
+        return {"component": origin_obj.component}, origin_obj.component
+    if origin_obj is not None:
+        return {"coupling": origin_obj.coupling}, f"coupling[{origin_obj.coupling}]"
+    src = getattr(eq, "source_system", None)
+    if src:
+        return {"component": src}, src
+    return {"component": ""}, ""
 
 
 def _set_sizes(sets: list[str], flat: Any) -> list[int]:
@@ -425,11 +460,35 @@ def _expr_sets(e: Any, flat: Any) -> list[str]:
     return out
 
 
-def _z_start(flat: Any, name: str, length: int, params: dict, t0: float) -> list[float | None]:
-    """``name``'s starting values, column-major: its ``ic`` right-hand side
-    evaluated at ``t0`` with the build's parameter values, else its declared
-    default; ``None`` where neither gives a finite number. Julia and Rust read
-    the same values with their own build-time evaluators."""
+def _supplied_z(name: str, length: int, u0: dict) -> list[float] | None:
+    """The caller's ``u0`` entry for the algebraic unknown ``name`` (a whole
+    key, or every element key ``name[i…]``), column-major, or ``None``. A ``u0``
+    entry of an algebraic unknown is a starting guess, never refused (esm-spec
+    §11.4.3, "Precedence")."""
+    import numpy as np
+
+    def key_for(k: str) -> bool:
+        return k == name or (("." not in k) and name.endswith("." + k))
+
+    for k, v in u0.items():
+        base = str(k).split("[", 1)[0]
+        if "[" not in str(k) and key_for(base):
+            arr = np.asarray(v, dtype=float)
+            if arr.size == 1:
+                return [float(arr.reshape(-1)[0])] * length
+            return arr.ravel(order="F").tolist() if arr.size == length else None
+    return None
+
+
+def _z_start(
+    flat: Any, name: str, length: int, params: dict, t0: float, u0: dict | None = None
+) -> list[float | None]:
+    """``name``'s warm start, column-major, in the order PR #820 drafted
+    (API_SPEC §5.8 ``z0``): its explicit ``ic`` right-hand side evaluated at
+    ``t0`` with the build's parameter values, else the caller's ``u0`` entry,
+    else its ``guesses`` entry, else its declared default; ``None`` where none
+    gives a finite number. Julia and Rust read the same values with their own
+    build-time evaluators."""
     import numpy as np
 
     from .serialize import _serialize_expression
@@ -452,6 +511,16 @@ def _z_start(flat: Any, name: str, length: int, params: dict, t0: float) -> list
             v = _eval_buildtime_field(rhs, index_sets=flat.index_sets, param_values=params, t=t0)
             values = np.asarray(v, dtype=float).ravel(order="F").tolist()
         except Exception:  # noqa: BLE001 — an unevaluable ic falls back to the default
+            values = None
+    if values is None:
+        values = _supplied_z(name, length, u0 or {})
+    if values is None and name in (getattr(flat, "guesses", None) or {}):
+        try:
+            v = _eval_buildtime_field(
+                flat.guesses[name], index_sets=flat.index_sets, param_values=params, t=t0
+            )
+            values = np.asarray(v, dtype=float).ravel(order="F").tolist()
+        except Exception:  # noqa: BLE001 — an unevaluable guess falls back to the default
             values = None
     if values is None:
         d = getattr(flat.state_variables.get(name), "default", None)

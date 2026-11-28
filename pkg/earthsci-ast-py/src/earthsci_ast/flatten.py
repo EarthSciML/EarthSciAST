@@ -650,6 +650,9 @@ class FlattenedSystem:
     # Empty ⇒ the system has no data-loader subsystems, so solve() behaves
     # exactly as before (no injection path).
     loader_fields: list[LoaderField] = field(default_factory=list)
+    # Every component's `guesses` (esm-spec §6.2), namespaced: the starting
+    # point of an unknown of the initialization system (esm-spec §11.4.3).
+    guesses: dict[str, Expr] = field(default_factory=dict)
     # Concrete integer grid shapes assigned by the pointwise spatial lift
     # (esm-spec §10.5) to each lifted state variable, e.g.
     # ``{"Chemistry.O3": (4, 2)}``. The state's ``shape`` names the index sets
@@ -706,11 +709,12 @@ class FlattenedSystem:
     # `equations` is then directly usable as a right-hand side without filtering,
     # and its length is comparable across bindings.
     field_ics: list[tuple[str, Expr]] = field(default_factory=list)
-    # The `faq`-valued initialization equations (esm-spec §6.2, equations that
-    # hold at t = 0) as ordered, namespaced `(target_state, faq)` pairs: each
-    # assigns the cells of its ranges when the initial state is built. The other
-    # spellings of an initialization equation name no cells and are not carried.
-    initialization_faqs: list[tuple[str, Expr]] = field(default_factory=list)
+    # Every initialization equation (esm-spec §11.4.3: an equation that
+    # mentions `ic`) that is NOT an explicit initial condition, in document
+    # order, namespaced and rewritten as `equations` are (esm-libraries-spec
+    # §4.7.5 step 4, esm 2.5.0). These are the equations of the initialization
+    # system; like `field_ics` they are classified OUT of `equations`.
+    initialization_equations: list[FlattenedEquation] = field(default_factory=list)
 
     @property
     def system_kind(self) -> str:
@@ -1182,7 +1186,7 @@ class _ComponentSystem:
     observed: OrderedDict[str, FlattenedVariable] = field(default_factory=OrderedDict)
     equations: list[FlattenedEquation] = field(default_factory=list)
     loader_fields: list[LoaderField] = field(default_factory=list)
-    initialization_faqs: list[tuple[str, Expr]] = field(default_factory=list)
+    guesses: dict[str, Expr] = field(default_factory=dict)
 
     def merge(self, other: _ComponentSystem) -> None:
         """Fold ``other``'s tables into this component (last-writer-wins for the
@@ -1198,7 +1202,7 @@ class _ComponentSystem:
         self.observed.update(other.observed)
         self.equations.extend(other.equations)
         self.loader_fields.extend(other.loader_fields)
-        self.initialization_faqs.extend(other.initialization_faqs)
+        self.guesses.update(other.guesses)
 
 
 def _namespace_variable_update(
@@ -1565,34 +1569,34 @@ def _collect_model(
         locals_=locals_,
     )
 
-    # The `faq`-valued initialization equations (esm-spec §6.2), namespaced in
-    # the same scope as the equations.
-    for eq in model.initialization_equations:
-        rhs = eq.rhs
-        if (
-            isinstance(eq.lhs, str)
-            and isinstance(rhs, ExprNode)
-            and is_aggregate_op(rhs.op)
-            and rhs.output_idx
-        ):
-            component.initialization_faqs.append(
-                (
-                    _namespace_expr(
-                        eq.lhs,
-                        full_prefix,
-                        leave_alone=leave_alone,
-                        subsystem_keys=sub_keys,
-                        locals_=locals_,
-                    ),
-                    _namespace_expr(
-                        rhs,
-                        full_prefix,
-                        leave_alone=leave_alone,
-                        subsystem_keys=sub_keys,
-                        locals_=locals_,
-                    ),
-                )
+    # A deprecated `initialization_equations` block on a model built in code
+    # (a loaded document's was rewritten at the wire boundary, esm-spec
+    # §11.4.4): read as the loader reads it, every unknown `w` as `ic(w)`.
+    # The model's `guesses` (esm-spec §6.2), namespaced: starting points of
+    # the initialization system's unknowns (§11.4.3).
+    for gname, gexpr in (getattr(model, "guesses", None) or {}).items():
+        component.guesses[
+            _namespace_expr(
+                gname,
+                full_prefix,
+                leave_alone=leave_alone,
+                subsystem_keys=sub_keys,
+                locals_=locals_,
             )
+        ] = _namespace_expr(
+            gexpr, full_prefix, leave_alone=leave_alone, subsystem_keys=sub_keys, locals_=locals_
+        )
+
+    legacy = _legacy_initialization_equations(model)
+    if legacy:
+        _namespace_equations(
+            legacy,
+            component,
+            full_prefix,
+            leave_alone,
+            subsystem_keys=sub_keys,
+            locals_=locals_,
+        )
 
     # Data-fed parameters (esm-spec §8.5): the simulator executes each source at
     # its cadence and binds the array under the parameter's namespaced name.
@@ -3001,7 +3005,7 @@ def _assemble_system(
     for name, var in combined.observed.items():
         flat.observed_variables[name] = var
     flat.loader_fields.extend(combined.loader_fields)
-    flat.initialization_faqs.extend(combined.initialization_faqs)
+    flat.guesses.update(combined.guesses)
 
     seen_lhs: dict[str, FlattenedEquation] = {}
     for eq in combined.equations:
@@ -3263,18 +3267,25 @@ def _collect_field_ics(flat: FlattenedSystem) -> None:
     and only the FINAL, observable ``equations`` differs.
     """
     ics: list[tuple[str, Expr]] = []
+    system: list[FlattenedEquation] = []
     remaining: list[FlattenedEquation] = []
     for eq in flat.equations:
         lhs = eq.lhs
+        if not (_mentions_ic(lhs) or _mentions_ic(eq.rhs)):
+            remaining.append(eq)
+            continue
         target = (
             lhs.args[0]
             if isinstance(lhs, ExprNode) and lhs.op == "ic" and len(lhs.args) == 1
             else None
         )
-        if isinstance(target, str):
+        # An EXPLICIT initial condition (esm-spec §11.4.3): `ic(u) ~ e`, `e`
+        # mentioning no `ic`. Every other initialization equation is an
+        # equation of the initialization system.
+        if isinstance(target, str) and not _mentions_ic(eq.rhs):
             ics.append((target, eq.rhs))
         else:
-            remaining.append(eq)
+            system.append(eq)
     # One initial condition per state (esm-libraries-spec §4.7.5 step 4
     # `field_ics`). Two -- an authored `ic(x)` and an operator's `ic(_var)`
     # expanded onto `x`, or two such templates -- leave nothing to say which
@@ -3292,7 +3303,37 @@ def _collect_field_ics(flat: FlattenedSystem) -> None:
             f"or two such templates): {', '.join(duplicated)}"
         )
     flat.field_ics = ics
+    flat.initialization_equations = system
     flat.equations = remaining
+
+
+def _mentions_ic(expr: Expr) -> bool:
+    return any(isinstance(n, ExprNode) and n.op == "ic" for n in walk(expr))
+
+
+def _legacy_initialization_equations(model: Model) -> list[Equation]:
+    """A code-built model's deprecated ``initialization_equations`` read as the
+    loader reads them (esm-spec §11.4.4): for a model with a time derivative,
+    each with every local unknown ``w`` as ``ic(w)`` and every ``D(w)`` as
+    ``ic(D(w))``. A model with no time derivative reads them as ``guesses``,
+    which no evaluator here uses, so it contributes none."""
+    eqs = list(getattr(model, "initialization_equations", None) or [])
+    if not eqs:
+        return []
+    if not any(_has_time_derivative(eq.lhs) for eq in model.equations):
+        return []
+    unknown = {n for n, v in model.variables.items() if v.type == "unknown"}
+
+    def rw(e: Expr) -> Expr:
+        if isinstance(e, str):
+            return ExprNode(op="ic", args=[e]) if e in unknown else e
+        if not isinstance(e, ExprNode):
+            return e
+        if e.op == "D" and len(e.args) == 1 and isinstance(e.args[0], str):
+            return ExprNode(op="ic", args=[e]) if e.args[0] in unknown else e
+        return map_children(e, rw)
+
+    return [replace(eq, lhs=rw(eq.lhs), rhs=rw(eq.rhs)) for eq in eqs]
 
 
 def _merged_template_registry(esm_file: EsmFile) -> dict[str, Any]:
@@ -3607,6 +3648,10 @@ def _normalize_angle_arguments(flat: FlattenedSystem) -> None:
 
     flat.equations = [_map_contributions(eq, rewrite) for eq in flat.equations]
     flat.field_ics = [(name, rewrite(expr)) for name, expr in flat.field_ics]
+    flat.initialization_equations = [
+        replace(eq, lhs=rewrite(eq.lhs), rhs=rewrite(eq.rhs))
+        for eq in flat.initialization_equations
+    ]
     # Events are rewritten too, although no evaluator in THIS binding runs one
     # (`unsupported_construct`, esm-spec §9.6.6). The flattened form is a
     # cross-binding artefact — the Julia binding exports it to
@@ -3755,6 +3800,11 @@ def _substitute_time_derivatives(
     """Rewrite every structural ``D`` inside ``expr``, leaving the ones
     :func:`_deriv` cannot answer exactly as authored, for the gate to report."""
     if not isinstance(expr, ExprNode):
+        return expr
+    if expr.op == "ic":
+        # `ic(D(x))` is x's tendency at the STARTING values (esm-spec §11.4.2
+        # item 8), not its trajectory tendency: the initialization system reads
+        # it there, so it is kept as written.
         return expr
     if _is_structural_time_derivative(expr):
         arg = expr.args[0] if expr.args else None

@@ -384,60 +384,162 @@ def _faq_output_ranges(node: ExprNode, index_sets: dict[str, Any]) -> list[tuple
     return out
 
 
-def _seed_initialization_faqs(
+def _aligned_ic_rhs(
+    target: str, rhs: Expr, var_axes: dict[str, tuple[str, ...]], index_sets: Any
+) -> Expr:
+    """An array target's whole-array initialization right-hand side put in the
+    target's index-set frame (esm-spec §4.3.4 rule 1, §11.4.3 "Arrays"): a
+    lower-rank operand repeats along the axes it does not carry, aligned by
+    NAME, so ``ic(aw) ~ aw0`` with ``aw`` over ``[lev, bin]`` and ``aw0`` over
+    ``[lev]`` gives ``aw[k, b] = aw0[k]``. A ``faq`` with output indices states
+    its own frame and is left alone."""
+    axes = var_axes.get(target)
+    if not axes or (isinstance(rhs, ExprNode) and is_aggregate_op(rhs.op) and rhs.output_idx):
+        return rhs
+    _refuse_unalignable_operand(target, rhs, var_axes)
+    return align_expression(rhs, axes, var_axes, axis_sizes(index_sets or {}))
+
+
+def _apply_initialization_system(
+    flat: FlattenedSystem,
     y0: np.ndarray,
-    init_faqs: list[tuple[str, Expr]],
+    *,
     shapes: dict[str, tuple[int, ...]],
     state_layout: dict[str, slice],
+    field_ic_eqs: list[tuple[str, Expr]],
+    overridden: set[int],
+    var_axes: dict[str, tuple[str, ...]],
     scope_arrays: dict[str, np.ndarray],
-    *,
-    keep: set[int],
-    index_sets: dict[str, Any] | None = None,
-    param_values: dict[str, float] | None = None,
-) -> None:
-    """Evaluate the ``faq``-valued initialization equations (esm-spec §6.2:
-    equations that hold at t = 0) into ``y0``, in document order.
+    param_values: dict[str, float],
+    observed_scalars: dict[str, float],
+    t0: float,
+) -> dict[str, Any] | None:
+    """Plan and apply the initialization system (esm-spec §11.4.3) on the
+    initial state ``y0``, which already holds the defaults, the explicit
+    initial conditions and the supplied values (``overridden``).
 
-    Each assigns every cell of its ranges the value its body takes there, read
-    against the initial state seeded so far (defaults, field ``ic``s, the
-    caller's overrides and the equations before it), the parameters and the
-    loaded fields, at t = 0. A cell in ``keep`` — one the caller's initial
-    conditions name — keeps its value. Mirrors the Julia reference's
-    ``_seed_faq_init_u0!`` and Rust's ``seed_initialization_faqs``.
-    """
-    for target, rhs in init_faqs:
-        rule = f"init({target})"
-        if target not in state_layout:
-            raise SimulationError(
-                f"{rule}: the left-hand side of a faq initialization equation is not a "
-                f"state variable of the flattened system"
+    The knowns are the cells the explicit initial conditions set and the
+    supplied values of ODE states; a supplied value of an algebraic unknown is
+    only its starting point. Each triangular step is evaluated in the
+    start-of-run scope with every state's name bound to its starting value so
+    far (``ic(w)`` read as ``w``), and written over its target's cells. Returns
+    the stripped ``initialization`` member when ``strip`` took the implicit
+    part, else ``None``."""
+    from . import init_system as _init
+    from .strip import STRIP_TAKEN
+
+    if not flat.initialization_equations:
+        return None
+    ode = set().union(*(_derivative_targets(eq.lhs) for eq in flat.equations))
+    known: set[int] = set()
+    for target, rhs in field_ic_eqs:
+        if target in state_layout:
+            known.update(
+                _init._faq_cells(
+                    target,
+                    rhs,
+                    tuple(shapes.get(target, ())),
+                    state_layout[target].start,
+                    flat.index_sets,
+                )
             )
-        shape = tuple(shapes.get(target, ()))
-        ranges = _faq_output_ranges(rhs, index_sets or {})
-        if len(ranges) != len(shape):
-            raise SimulationError(
-                f"{rule}: {len(ranges)} output indices for a {len(shape)}-D state"
-            )
+    supplied: dict[str, list[int]] = {}
+    supplied_algebraic: set[int] = set()
+    for name, sl in state_layout.items():
+        mine = [p for p in range(sl.start, sl.stop) if p in overridden]
+        if not mine:
+            continue
+        if name in ode:
+            supplied[name] = mine
+            known.update(mine)
+        else:
+            supplied_algebraic.update(mine)
+    definitions, _states = _ic_observed_definitions(flat)
+    observed_defs = {n: rhss[0] for n, rhss in definitions.items() if len(rhss) == 1}
+    plan = _init.plan_initialization(
+        flat,
+        shapes=shapes,
+        state_layout=state_layout,
+        known=known,
+        supplied=supplied,
+        observed_defs=observed_defs,
+        var_axes=var_axes,
+        strip="initialization" in STRIP_TAKEN.get(),
+    )
+
+    def evaluate(expr: Expr, frame: tuple[str, ...] | None = None) -> np.ndarray:
+        params = dict(param_values)
         arrays = dict(scope_arrays)
         for name, sl in state_layout.items():
-            arrays[name] = y0[sl].reshape(shapes.get(name, ()))
-        value = np.asarray(
+            shape = shapes.get(name, ())
+            if shape:
+                arrays[name] = y0[sl].reshape(shape).copy()
+            else:
+                params[name] = float(y0[sl.start])
+        body = _init.starting_values_as_states(expr)
+        if frame:
+            body = align_expression(body, frame, var_axes, axis_sizes(flat.index_sets or {}))
+        return np.asarray(
             _eval_buildtime_field(
-                rhs, index_sets=index_sets, param_values=param_values, input_arrays=arrays
+                body,
+                index_sets=flat.index_sets,
+                param_values=params,
+                input_arrays=arrays,
+                t=t0,
+                observed_values=observed_scalars,
             ),
             dtype=float,
         )
-        extents = tuple(max(hi - lo + 1, 0) for lo, hi in ranges)
-        if value.shape != extents:
-            raise SimulationError(
-                f"{rule}: the faq evaluated to shape {value.shape}, not its box {extents}"
-            )
+
+    for target, rhs, _cells in plan.steps:
+        rule = f"ic({target})"
+        shape = tuple(shapes.get(target, ()))
         start = state_layout[target].start
-        for multi in np.ndindex(*extents):
-            cell = [lo + int(k) for k, (lo, _) in zip(multi, ranges)]
-            pos = start + _linear_pos(shape, cell)
-            if pos not in keep:
-                y0[pos] = float(value[multi])
+        if not shape:
+            value = evaluate(rhs)
+            if value.size != 1:
+                raise SimulationError(
+                    f"{rule}: the right-hand side of a 0-D unknown's initialization equation "
+                    f"evaluated to shape {value.shape}, not a scalar (esm-spec §11.4)"
+                )
+            y0[start] = float(value.reshape(-1)[0])
+            continue
+        if isinstance(rhs, ExprNode) and is_aggregate_op(rhs.op) and rhs.output_idx:
+            ranges = _faq_output_ranges(rhs, flat.index_sets or {})
+            value = evaluate(rhs)
+            extents = tuple(max(hi - lo + 1, 0) for lo, hi in ranges)
+            if value.shape != extents:
+                raise SimulationError(
+                    f"{rule}: the faq evaluated to shape {value.shape}, not its box {extents}"
+                )
+            for multi in np.ndindex(*extents):
+                cell = [lo + int(k) for k, (lo, _) in zip(multi, ranges)]
+                y0[start + _linear_pos(shape, cell)] = float(value[multi])
+            continue
+        _refuse_unalignable_operand(target, _init.starting_values_as_states(rhs), var_axes)
+        value = evaluate(rhs, var_axes.get(target) or None)
+        try:
+            value = np.broadcast_to(value, shape)
+        except ValueError as err:
+            raise SimulationError(
+                f"{rule}: the right-hand side has shape {value.shape}, which does not "
+                f"broadcast over the target's {shape}"
+            ) from err
+        y0[state_layout[target]] = np.ascontiguousarray(value, dtype=float).reshape(-1)
+    if not plan.removed:
+        return None
+    _init.starting_points(
+        plan,
+        flat=flat,
+        shapes=shapes,
+        state_layout=state_layout,
+        y0=y0,
+        supplied_algebraic=supplied_algebraic,
+        evaluate=evaluate,
+    )
+    return _init.initialization_member(
+        plan, flat=flat, shapes=shapes, state_layout=state_layout, y0=y0
+    )
 
 
 def _collect_algebraic_substitutions(
@@ -1330,6 +1432,10 @@ class _NumpyRhsBuild:
     # pushdown hooks: the member_factor feedback source and the contract-record
     # support set a `prepare` caller reports). Empty without a producer.
     vi_members: dict[str, list] = field(default_factory=dict)
+    # The stripped object's `initialization` member (API_SPEC §5.8): the truly
+    # implicit part of the initialization system this build handed to the
+    # caller under `strip` class `initialization`, or ``None``.
+    init_stripped: dict[str, Any] | None = None
 
 
 def _resolve_field_ic(
@@ -1418,6 +1524,10 @@ def _fit_ic_field(
     always allowed), broadcast when it holds a single element."""
     if arr.ndim == len(shape) and all(a >= n for a, n in zip(arr.shape, shape)):
         return arr[tuple(slice(0, n) for n in shape)]
+    if arr.ndim == len(shape) and all(a == 1 or a == n for a, n in zip(arr.shape, shape)):
+        # A lower-rank operand aligned by index-set name (esm-spec §4.3.4) has
+        # a unit axis where it repeats.
+        return np.broadcast_to(arr, shape).copy()
     if arr.size == 1:
         return np.full(shape, float(arr.reshape(-1)[0]), dtype=float)
     what = f"loaded field {name!r}" if name is not None else "its right-hand side"
@@ -1558,10 +1668,18 @@ def refuse_ic_reads_state(
     whichever engine then builds the Problem. ``bound`` says which names data
     supplies (see :func:`_ic_state_read`).
     """
-    if not flat.field_ics:
+    if not flat.field_ics and not flat.initialization_equations:
         return
     definitions, states = _ic_observed_definitions(flat)
     _refuse_ic_state_reads(flat.field_ics, definitions, states, bound)
+    # Every other initialization equation holds at `t0` only too: one that
+    # reads a state's trajectory value outside `ic` — `D(x) ~ -(x - ic(x))/tau`
+    # — is refused the same way (esm-spec §11.4.2). A state here is every
+    # unknown that is not an observed, an ODE state or not.
+    from .init_system import refuse_trajectory_reads
+
+    unknowns = (set(flat.state_variables) | states) - set(definitions)
+    refuse_trajectory_reads(flat.initialization_equations, definitions, unknowns, bound)
 
 
 def ic_start_reads(flat: FlattenedSystem) -> set[str]:
@@ -1728,6 +1846,37 @@ def _fold_field_ics(
                 f"ic({target}): scoped-reference target resolves to no array cells; "
                 f"the target must name a lifted/array state variable"
             )
+        if isinstance(rhs, ExprNode) and is_aggregate_op(rhs.op) and rhs.output_idx:
+            # A `faq` with output indices sets the cells of its ranges only
+            # (esm-spec §11.4.3, "Explicit initial conditions"); a pointwise
+            # filter's excluded cell takes the semiring's 0. The other cells
+            # keep what the defaults gave them.
+            ranges = _faq_output_ranges(rhs, index_sets or {})
+            if len(ranges) == len(shape) and any(
+                (lo, hi) != (1, n) for (lo, hi), n in zip(ranges, shape)
+            ):
+                box = np.asarray(
+                    _eval_buildtime_field(
+                        rhs,
+                        index_sets=index_sets,
+                        param_values=param_values,
+                        input_arrays=loader_arrays,
+                        t=t0,
+                        observed_values=observed_values,
+                    ),
+                    dtype=float,
+                )
+                extents = tuple(max(hi - lo + 1, 0) for lo, hi in ranges)
+                if box.shape != extents:
+                    raise SimulationError(
+                        f"ic({target}): the faq evaluated to shape {box.shape}, not its box "
+                        f"{extents}"
+                    )
+                start = state_layout[target].start
+                for multi in np.ndindex(*extents):
+                    cell = [lo + int(k) for k, (lo, _) in zip(multi, ranges)]
+                    y0[start + _linear_pos(shape, cell)] = float(box[multi])
+                continue
         field_value = _resolve_field_ic(
             target,
             rhs,
@@ -3002,7 +3151,9 @@ def _build_numpy_rhs(
     scalar_ic_eqs: list[tuple[str, Expr]] = []
     for _target, _rhs in flat.field_ics:
         if shapes.get(_target):
-            field_ic_eqs.append((_target, _rhs))
+            field_ic_eqs.append(
+                (_target, _aligned_ic_rhs(_target, _rhs, var_axes, flat.index_sets))
+            )
         else:
             scalar_ic_eqs.append((_target, _rhs))
     for eq in flat.equations:
@@ -3327,18 +3478,22 @@ def _build_numpy_rhs(
     overridden = _apply_initial_conditions(
         y0, state_layout, shapes, state_names, initial_conditions
     )
-    # The faq-valued initialization equations (esm-spec §6.2): after the
-    # overrides, so a body reading a state reads the caller's value, and
-    # around them, so the caller's value stands.
-    _seed_initialization_faqs(
+    # The initialization system (esm-spec §11.4.3): after the explicit initial
+    # conditions, the defaults and the supplied values, its triangular part by
+    # substitution in dependency order; its truly implicit part refused, or
+    # handed to the caller under `strip` class `initialization`.
+    init_stripped = _apply_initialization_system(
+        flat,
         y0,
-        flat.initialization_faqs,
-        shapes,
-        state_layout,
-        ic_scope_arrays,
-        keep=overridden,
-        index_sets=flat.index_sets,
+        shapes=shapes,
+        state_layout=state_layout,
+        field_ic_eqs=[*field_ic_eqs, *scalar_ic_eqs],
+        overridden=overridden,
+        var_axes=var_axes,
+        scope_arrays=ic_scope_arrays,
         param_values=param_values,
+        observed_scalars=ic_observed_scalars,
+        t0=ic_t0,
     )
     # Only an ODE state needs a starting value; an unknown the build solves for
     # or eliminates takes it from its definition.
@@ -3461,6 +3616,7 @@ def _build_numpy_rhs(
 
     elem_names = _element_names(state_names, shapes)
     return _NumpyRhsBuild(
+        init_stripped=init_stripped,
         rhs_function=rhs_function,
         y0=y0,
         total_size=total_size,
