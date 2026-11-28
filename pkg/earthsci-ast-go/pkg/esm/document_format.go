@@ -89,8 +89,14 @@ func PrintDocument(doc any, format DocumentFormat) string {
 //
 // expr is a decoded ESM expression (a number, a name or an operator node) or an
 // equation, an object with `lhs` and `rhs` (other fields, such as `_comment`,
-// are not printed), which prints as its two sides around `=` as in a document
-// (`Source.eqExpr`). names plays the part of the variables a component
+// are not printed). An equation prints as in a document (`Source.eqExpr`,
+// `Math.printLatexEqn` / `Math.printTypstEqn`): its two sides around `=`,
+// except that an equation `x = faq` whose `faq` has output indices prints in
+// its defining form when that reads back as exactly the equation, the output
+// indices on the left and their ranges after the right side (Typst
+// `y_j = sum_(i in S) w_(i, j), j in C`). An expression whose top is `==` is a
+// comparison and prints as any expression does, never in the defining form.
+// names plays the part of the variables a component
 // declares: a name in it prints in its declared shape, and the printer avoids
 // spellings that would collide with it. The result is what a document display
 // holds, without its delimiters; it is meant for showing one expression outside
@@ -144,7 +150,9 @@ func ExpressionNames(expr any) []string {
 //
 // text is what a document display holds, without its delimiters. Text whose
 // top is `=` reads as an equation, a map with `lhs` and `rhs`, as a display
-// does (`Source.eqSides`); any other text reads as an expression. names plays
+// does (`Source.eqSides`), and so does an equation in its defining form,
+// `y_j = …, j in C`, whose right side reads as the `faq` with output indices it
+// writes (`Math.unlift`); any other text reads as an expression. names plays
 // the part of the variables a component declares: it decides how a run of
 // letters reads (in LaTeX, `RT` is the name `RT` when it is declared, the
 // product of `R` and `T` when they are). No template is in scope.

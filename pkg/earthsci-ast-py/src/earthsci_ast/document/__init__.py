@@ -137,8 +137,14 @@ def print_math(expr: Any, names: Iterable[str], format: DocumentFormat | str) ->
 
     ``expr`` is an ESM expression (a number, a name or an operator node) or an
     equation, a dict with ``lhs`` and ``rhs`` (other fields, such as
-    ``_comment``, are not printed), which prints as its two sides around ``=``
-    as in a document (``Source.eqExpr``). ``names`` plays the part of the
+    ``_comment``, are not printed). An equation prints as in a document
+    (``Source.eqExpr``, ``Math.printLatexEqn`` / ``Math.printTypstEqn``): its two
+    sides around ``=``, except that an equation ``x = faq`` whose ``faq`` has
+    output indices prints in its defining form when that reads back as exactly
+    the equation, the output indices on the left and their ranges after the right
+    side (Typst ``y_j = sum_(i in S) w_(i, j), j in C``). An expression whose top
+    is ``==`` is a comparison and prints as any expression does, never in the
+    defining form. ``names`` plays the part of the
     variables a component declares: a name in it prints in its declared shape,
     and the printer avoids spellings that would collide with it. The result is
     what a document display holds, without its delimiters; it is meant for
@@ -148,14 +154,16 @@ def print_math(expr: Any, names: Iterable[str], format: DocumentFormat | str) ->
 
     fmt = _format(format)
     e = sort_obj(from_plain(canonicalize_document(expr)))
+    eqn = False
     if type(e) is Obj:
         lhs, rhs = look("lhs", e), look("rhs", e)
         if lhs is not MISSING and rhs is not MISSING:
             e = Obj([("args", [lhs, rhs]), ("op", "==")])
+            eqn = True
     sym = Sym(frozenset(names), ())
     if fmt is DocumentFormat.MARKDOWN:
-        return _math.print_latex(sym, e)
-    return _math.print_typst(sym, e)
+        return (_math.print_latex_eqn if eqn else _math.print_latex)(sym, e)
+    return (_math.print_typst_eqn if eqn else _math.print_typst)(sym, e)
 
 
 def expression_names(expr: Any) -> list[str]:
@@ -255,7 +263,9 @@ def parse_math(text: str, names: Iterable[str], format: DocumentFormat | str) ->
 
     ``text`` is what a document display holds, without its delimiters. Text whose
     top is ``=`` reads as an equation, a dict with ``lhs`` and ``rhs``, as a
-    display does (``Source.eqSides``); any other text reads as an expression (a
+    display does (``Source.eqSides``), and so does an equation in its defining
+    form, ``y_j = … , j in C``, whose right side reads as the ``faq`` with output
+    indices it writes (``Math.unlift``); any other text reads as an expression (a
     number, a name or an operator node, in canonical form). ``names`` plays the
     part of the variables a component declares: it decides how a run of letters
     reads (in LaTeX, ``RT`` is the name ``RT`` when it is declared, the product

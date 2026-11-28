@@ -27,19 +27,29 @@ func ParseTyp(lim *Lim, text string) (Json, bool) { return typDocParseTyp(lim, t
 
 // PrintMath prints one expression or equation (canonical form, keys sorted) as
 // LaTeX (latex true) or Typst math under the declared names, with no template
-// in scope. An object with `lhs` and `rhs` prints as its two sides around `=`
-// (`Source.eqExpr`).
+// in scope. An object with `lhs` and `rhs` is an equation and prints as in a
+// document (`Source.eqExpr`, `Math.printLatexEqn` / `Math.printTypstEqn`): its
+// two sides around `=`, or its defining form when it has one. Anything else is
+// an expression (`Math.printLatex` / `Math.printTypst`): an `==` at its top is
+// a comparison and never prints in the defining form.
 func PrintMath(e Json, names []string, latex bool) string {
+	eqn := false
 	if kvs, ok := e.(Obj); ok {
 		lhs, okL := exprLook("lhs", kvs)
 		rhs, okR := exprLook("rhs", kvs)
 		if okL && okR {
 			e = Obj{{"args", []Json{lhs, rhs}}, {"op", "=="}}
+			eqn = true
 		}
 	}
 	s := &Sym{Names: append([]string(nil), names...)}
-	if latex {
+	switch {
+	case latex && eqn:
+		return mathPrintLatexEqn(s, e)
+	case latex:
 		return mathPrintLatex(s, e)
+	case eqn:
+		return mathPrintTypstEqn(s, e)
 	}
 	return mathPrintTypst(s, e)
 }
@@ -47,7 +57,9 @@ func PrintMath(e Json, names []string, latex bool) string {
 // ParseMath reads one expression or equation written as LaTeX (latex true) or
 // Typst math under the declared names, with no template in scope: the inverse
 // of PrintMath. A parsed `==` node at the top is an equation, an object with
-// `lhs` and `rhs` (`Source.eqSides`). See ParseMd for lim.
+// `lhs` and `rhs` (`Source.eqSides`), and so is an equation in its defining
+// form, `y_j = …, j in C`, whose right side reads as the `faq` with output
+// indices it writes (`Math.unlift`). See ParseMd for lim.
 func ParseMath(lim *Lim, text string, names []string, latex bool) (Json, bool) {
 	s := &Sym{Names: append([]string(nil), names...)}
 	var (

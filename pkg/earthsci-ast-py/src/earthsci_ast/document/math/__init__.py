@@ -30,13 +30,28 @@ from . import latex, typst
 from . import token as K
 from .expr import EMPTY_SYM, Sym
 from .parser import parse_toks
-from .printer import print_toks
+from .printer import Ctx, pa, print_toks
 
-__all__ = ["EMPTY_SYM", "Sym", "parse_latex", "parse_typst", "print_latex", "print_typst"]
+__all__ = [
+    "EMPTY_SYM",
+    "Sym",
+    "parse_latex",
+    "parse_typst",
+    "print_latex",
+    "print_latex_eqn",
+    "print_typst",
+    "print_typst_eqn",
+]
 
 
 def print_latex(s: Sym, e: Any) -> str:
-    """``Math.printLatex``."""
+    """``Math.printLatex``: an expression (an ``==`` at its top is a comparison)."""
+    return latex.render(pa(Ctx(K.LATEX, s), 1, e))
+
+
+def print_latex_eqn(s: Sym, e: Any) -> str:
+    """``Math.printLatexEqn``: an equation's expression, ``==(lhs, rhs)``, in its
+    defining form when it has one."""
     return latex.render(print_toks(K.LATEX, s, e))
 
 
@@ -50,7 +65,13 @@ def parse_latex(s: Sym, text: str) -> Any:
 
 
 def print_typst(s: Sym, e: Any) -> str:
-    """``Math.printTypst``."""
+    """``Math.printTypst``: an expression (an ``==`` at its top is a comparison)."""
+    return typst.render(pa(Ctx(K.TYPST, s), 1, e))
+
+
+def print_typst_eqn(s: Sym, e: Any) -> str:
+    """``Math.printTypstEqn``: an equation's expression, ``==(lhs, rhs)``, in its
+    defining form when it has one."""
     return typst.render(print_toks(K.TYPST, s, e))
 
 

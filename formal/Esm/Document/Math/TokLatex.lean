@@ -798,4 +798,9 @@ theorem print_allOK (S : Sym) (e : Json) (he : isE e = true) : AllOK (print .lat
 theorem print_tokL (S : Sym) (e : Json) (he : isE e = true) : TokL (print .latex S e) :=
   ⟨(print_allOK S e he).1, TL_TN _ (print_allOK S e he).2⟩
 
+/-- The same for an expression printed whole as an expression (`pa`), an `==` at its top
+included. -/
+theorem pa_tokL (S : Sym) (e : Json) (he : isE e = true) : TokL (pa ⟨.latex, S⟩ 1 e) :=
+  ⟨(allOK_pa S e he 1).1, TL_TN _ (allOK_pa S e he 1).2⟩
+
 end Esm.Document.Math.Latex

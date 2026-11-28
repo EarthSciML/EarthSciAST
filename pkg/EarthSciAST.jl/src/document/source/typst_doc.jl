@@ -29,11 +29,11 @@ using ..STypst: HEADER, arg_ok, args_first_t, item_ok, lex,
     line_end, name_typ, p_args_first, render, rxn_ok, tm_lex_t
 
 """`Typ.typOf`: an equation's Typst math under the symbol table `s`."""
-typ_of(s::Sym, e::Eqn) = collect(Char, DMath.print_typst(s, eq_expr(e)))
+typ_of(s::Sym, e::Eqn) = collect(Char, DMath.print_typst_eqn(s, eq_expr(e)))
 
 """`Typ.prT`: its `_comment` as a `//` comment line, then the equation."""
 function pr_t(s::Sym, e::Eqn)
-    t = DMath.print_typst(s, eq_expr(e))
+    t = DMath.print_typst_eqn(s, eq_expr(e))
     return e.comment === nothing ? t : string("// ", e.comment, "\n", t)
 end
 

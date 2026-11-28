@@ -24,7 +24,7 @@ open Esm.Document Esm.Document.Math Esm.Document.Source Esm.Document.Strings
 /-! ## Equations in LaTeX -/
 
 /-- An equation's LaTeX under the symbol table `S`. -/
-def latexOf (S : Sym) (e : Eqn) : List Char := (printLatex S (eqExpr e)).toList
+def latexOf (S : Sym) (e : Eqn) : List Char := (printLatexEqn S (eqExpr e)).toList
 
 /-- An equation's math text: its `_comment` as a LaTeX comment line, then the equation. -/
 def prMd (S : Sym) (e : Eqn) : String :=
@@ -135,7 +135,7 @@ theorem ckMd_prMd (S : Sym) (e : Eqn) (hc : capsMd.eqn S e = true) (hl : isE e.l
   simp only [capsMd, Bool.and_eq_true, Bool.not_eq_true', bne_iff_ne, ne_eq] at hc
   obtain ⟨⟨⟨⟨⟨hcm, hd⟩, hn⟩, hp⟩, henv⟩, -⟩ := hc
   have hparse : (parseLatex S (String.ofList (latexOf S e))).bind eqSides = some (e.lhs, e.rhs) := by
-    simp only [latexOf, String.ofList_toList, parseLatex_printLatex S _ (isE_eqExpr e hl hr),
+    simp only [latexOf, String.ofList_toList, parseLatex_printLatexEqn S _ (isE_eqExpr e hl hr),
       Option.bind_some, eqSides_eqExpr]
   obtain ⟨cm, l, r⟩ := e
   unfold ckMd prMd
