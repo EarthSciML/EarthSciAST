@@ -477,12 +477,11 @@ impl InputPrecisions {
 enum WsExec {
     Tape(Box<TapeCtx>),
     Interp(Box<InterpWs>),
+    /// A lane program's context over its gathered inputs, and the buffers
+    /// a call that gathers for itself fills (see [`lanes`]).
     Lanes {
-        main: Box<TapeCtx>,
-        pre: Box<TapeCtx>,
-        /// The per-lane-times programs' contexts, when the lane program
-        /// has its own (U19).
-        timed: Option<(Box<TapeCtx>, Box<TapeCtx>)>,
+        ctx: Box<TapeCtx>,
+        gather: lanes::GatherBufs,
     },
 }
 
