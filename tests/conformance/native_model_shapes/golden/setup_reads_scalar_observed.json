@@ -1,0 +1,31 @@
+{
+  "fixture": "setup_reads_scalar_observed",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "C",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "C",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "w",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "s",
+      "actual": 1.0
+    }
+  ]
+}
