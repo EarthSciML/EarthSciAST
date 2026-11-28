@@ -153,6 +153,13 @@ const (
 	// fields `expression_templates` / `expression_template_imports`, read as
 	// `operators` / `operator_imports` (esm-spec §9.6.12 "Old names").
 	codeDeprecatedField = "deprecated_field"
+	// codeIcSystemUnbalanced / codeIcSystemUnsolved: esm 2.5.0 (esm-spec
+	// §11.4.3) build-time codes of the simulating bindings for an
+	// initialization system that does not balance or whose solve does not
+	// converge. Go does not simulate; registered so the registry lists the
+	// whole vocabulary.
+	codeIcSystemUnbalanced = "ic_system_unbalanced"
+	codeIcSystemUnsolved   = "ic_system_unsolved"
 	// codeOperatorInjectTargetIsLoader: registered for the uniform code
 	// vocabulary; this binding folds the case into
 	// CodeTemplateInjectTargetNotComponent.

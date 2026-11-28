@@ -144,6 +144,10 @@ func decodeJSONNumbers(t *testing.T, label string, text []byte) any {
 // the transform. This list is an admission of designed behaviour, not of
 // unfixed drops — do not add a fixture here to silence a real one.
 var transformingFixtures = map[string]string{
+	// esm 2.5.0 (esm-spec §11.4.4): the deprecated `initialization_equations`
+	// block of a model with no time derivative is read into `guesses`; both
+	// unknowns already have one, so the block is dropped.
+	"nonlinear_isorropia_shape.esm": "initialization_equations migration",
 	// Eager `apply_operator` expansion (esm-spec §9.6, Option A):
 	// call sites are expanded at load and the component's own
 	// `operators` / `operator_imports` blocks are

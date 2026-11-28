@@ -93,8 +93,8 @@ func TestDefinitionUnitsAtEverySite(t *testing.T) {
 	src := `{"esm": "2.4.0", "metadata": {"name": "x"},
  "models": {"m": {
   "variables": {` + udVars + `, "s": {"type": "unknown", "units": "m/s"}},
-  "equations": [{"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": 0}],
-  "initialization_equations": [{"lhs": "s", "rhs": ` + call + `}],
+  "equations": [{"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": 0},
+                {"lhs": {"op": "ic", "args": ["s"]}, "rhs": ` + call + `}],
   "subsystems": {"Sub": {
     "variables": {"x": {"type": "parameter", "units": "m", "default": 1.0},
                   "tau": {"type": "parameter", "units": "s", "default": 2.0},
@@ -107,7 +107,7 @@ func TestDefinitionUnitsAtEverySite(t *testing.T) {
   "constraint_equations": [{"lhs": "x", "rhs": ` + call + `}], ` + udOps + `}}}`
 	got := udCodes(Validate(udLoad(t, src)))
 	for _, at := range []string{
-		"/models/m/initialization_equations/0",
+		"/models/m/equations/1",
 		"/models/m/subsystems/Sub/variables/v",
 		"/reaction_systems/r/reactions/0",
 		"/reaction_systems/r/constraint_equations/0",
