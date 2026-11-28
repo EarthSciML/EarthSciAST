@@ -805,11 +805,15 @@ The state a Problem integrates from at `tspan[0]`, one value per state element,
 aligned with the Problem's state names (Rust: `prob.state_variable_names()`, the
 flattened element names a `Solution`'s state rows carry). It is built exactly as
 a solve builds it, without integrating: per element, the first of the Problem's
-`u0` entry (then a run-time override), an initialization equation — an
-explicit `ic` equation or field initial condition, or the solve of the
-initialization system (esm-spec §11.4, §11.4.1, §11.4.3) — and the declared
-`default`, with the
-Problem's `p` (else the parameter defaults) bound in every initial condition's
+`u0` entry (then a run-time override) for an ODE state, an initialization
+equation — an explicit `ic` equation or field initial condition, or the solve
+of the initialization system (esm-spec §11.4, §11.4.1, §11.4.3) — the `u0`
+entry of an algebraic unknown no initialization equation reaches, and the
+declared `default`. A `u0` entry of an algebraic unknown is otherwise a
+starting guess for the initialization solve, never a constraint, so a full
+`u0` is never refused for naming algebraic unknowns (esm-spec §11.4.3,
+"Precedence"). The Problem's
+`p` (else the parameter defaults) is bound in every initial condition's
 scope (§6.6.5). So it depends on neither `tspan` nor any solver option, and a
 field `ic` reads the forcing as construction bound it, without the
 discrete-cadence fields a solve refreshes, so it gives the same state before and
@@ -1833,9 +1837,9 @@ offset of its first element (0-based in Rust, 1-based in Julia) and its shape
 root). `KernelSet`, `Kernel` and `KernelSpec` are `Send + Sync + Clone` in Rust;
 `KernelWorkspace` is `Send` and not `Sync`, as `RhsWorkspace` is.
 
-##### The four classes (normative)
+##### The five classes (normative)
 
-`strip` is a set drawn from four classes. Empty is the default and changes
+`strip` is a set drawn from five classes. Empty is the default and changes
 nothing; an unknown class name, and `wiener`, are an argument error. The build
 removes, for each requested class, every construct of that class from what it
 lowers. It removes them from the same flattened system the right-hand side is
@@ -1864,6 +1868,14 @@ build would otherwise refuse is either removed or still refused.
   the unknowns a stripped equation reads) leave the state layout `u` and form
   the layout `z`. An observed that reads a `z` unknown stays an observed and
   reads it as an input.
+- **`initialization`** *(esm 2.5.0)* — the truly implicit part of the
+  initialization system (esm-spec §11.4.3): the equations that must be solved
+  simultaneously, or that are not explicit in their unknown. The explicit
+  initial conditions and the triangular part are still evaluated by the
+  build. Each starting value of the removed part is left at its starting point
+  (the supplied value of an algebraic unknown, else its `guesses` entry, else
+  its declared default) in the Problem's initial state, for the caller to
+  solve from.
 
 Classification is unchanged: `ode_states`, `observed_unknowns` and
 `algebraic_unknowns` are properties of the model, not of the build. Wiener noise
@@ -1883,7 +1895,8 @@ byte for byte. It has exactly these keys:
 
 ```json
 {"algebraic":{"residuals":[…],"unknowns":[…],"z0":[…],"z_layout":{…}},
- "events":[…],"parameter_updates":[…],"strip":[…]}
+ "events":[…],"initialization":{"residuals":[…],"unknowns":[…],"x0":[…]},
+ "parameter_updates":[…],"strip":[…]}
 ```
 
 - **`strip`** — the requested classes, ascending.
@@ -1915,12 +1928,12 @@ byte for byte. It has exactly these keys:
 - **`algebraic`** — `unknowns`: the `z` unknowns in `z` layout order;
   `z_layout`: name → `{"base", "shape"}`, `base` the 1-based offset of the
   block's first element in `z` and `shape` its extents (`[]` for a scalar);
-  `z0`: the Problem's starting value of every `z` element, in `z` order: the
-  caller's `u0` entry, else the value an initialization equation gives it —
-  an explicit `ic` equation, or the initialization system of esm-spec §11.4.3,
-  which for a DAE includes the stripped algebraic equations at `t0` — else
-  its `guesses` entry, else the declared default. It is the warm start for the
-  caller's consistent initialization; `residuals`: one
+  `z0`: the warm start of every `z` element for the caller's consistent
+  initialization, in `z` order. The build does not solve the stripped
+  algebraic equations at `t0`, so `z0` is the element's explicit `ic` value,
+  else the caller's `u0` entry, else its `guesses` entry, else its declared
+  default (a `u0` entry of an algebraic unknown is a starting guess, esm-spec
+  §11.4.3); `residuals`: one
   `{"id", "origin", "shape", "expr"}` per stripped implicit equation, `expr`
   the residual `{"op": "-", "args": [lhs, rhs]}` of the flattened equation
   exactly (`g = lhs − rhs`, never simplified), `shape` its extents, `origin`
@@ -1928,6 +1941,15 @@ byte for byte. It has exactly these keys:
   `<prefix>.residual[j]`, `j` 1-based over that origin's implicit equations in
   flattened order. An `algebraic` that was not requested, or removed nothing,
   is `{"residuals":[],"unknowns":[],"z0":[],"z_layout":{}}`.
+- **`initialization`** *(esm 2.5.0)* — the removed implicit part of the
+  initialization system: `unknowns`, its starting values as element names
+  (`M.x`, `F.u[2]`) in flattened order; `x0`, the starting point of each
+  (supplied value of an algebraic unknown, else `guesses` entry, else
+  default), in the same order; `residuals`, one `{"id", "origin", "shape",
+  "expr"}` per removed equation, `expr` the residual
+  `{"op": "-", "args": [lhs, rhs]}` with its `ic` terms kept, and `id`
+  `<prefix>.initialization[j]`. Not requested, or nothing removed, it is
+  `{"residuals":[],"unknowns":[],"x0":[]}`.
 
 **Order is deterministic.** Events are listed by origin — the models in
 document order, each followed by its inline subsystems in declaration order,

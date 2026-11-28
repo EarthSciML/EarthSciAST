@@ -7521,16 +7521,18 @@ vocabulary.
 
 **Decision pinned.** `initial_state(prob)` (API_SPEC §5.8) returns the state a
 solve of `prob` starts from, one value per state element, without integrating:
-per element the first of the Problem's `u0` entry, an initialization equation
-(esm-spec §6.2), an `ic` equation or field initial condition (§11.4, §11.4.1),
-and the declared `default`, with the Problem's `p` (else the parameter defaults)
+per element the first of the Problem's `u0` entry of an ODE state, an
+initialization equation (an explicit `ic` equation or field initial condition,
+or the solve of the initialization system: esm-spec §11.4, §11.4.1, §11.4.3),
+the `u0` entry of an algebraic unknown no initialization equation reaches, and
+the declared `default`, with the Problem's `p` (else the parameter defaults)
 bound in every initial condition's scope (§6.6.5). It MUST equal, bit for bit,
 the state at `tspan[0]` of a solve of the same Problem.
 
 **Reason.** A host that drives its own integrator (an operator-splitting
 planner, a restart writer) needs the initial state as the binding builds it, and
-the declared defaults are not it: an `ic` equation, a field `ic` or an
-initialization equation overrides them, and only the build knows which applies.
+the declared defaults are not it: an initialization equation (an `ic`
+equation, a field `ic` or the initialization system) overrides them, and only the build knows which applies.
 Before the accessor a Rust caller recovered it by solving over a zero-length
 span, which is what each case is checked against.
 
