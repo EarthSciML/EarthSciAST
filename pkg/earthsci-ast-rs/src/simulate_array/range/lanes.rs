@@ -1146,25 +1146,15 @@ impl Rewriter<'_> {
     /// contraction) stays a scalar `faq` over it, with the `faq`'s filter;
     /// with no contraction, a filter selects the body where it holds and
     /// the reduction's identity elsewhere, as the array `faq`'s element is.
-    /// An `args` list that names only operand variables is the list of
-    /// arrays the body reads (esm-spec §4.3.1) and changes nothing; any
-    /// other `args`, a `key`, a `join` or `distinct` is refused: those name
-    /// the output indices too, and are not rewritten here.
+    /// The node's scoped fields must pass [`lane_faq_fields_ok`].
     fn faq_at(
         &mut self,
         f: &ExpressionNode,
         binds: Vec<(String, OutBind)>,
         sc: &LScope,
     ) -> RResult<Expr> {
-        if f.key.is_some()
-            || !f.args.iter().all(|a| matches!(a, Expr::Variable(_)))
-            || f.join.as_ref().is_some_and(|j| !j.is_empty())
-            || f.distinct == Some(true)
-        {
-            return self.refuse(
-                "reads an array faq that carries a `key`, a `join`, `distinct`, or `args` that \
-                 are not only operand variables, which a lane does not rewrite",
-            );
+        if !lane_faq_fields_ok(f) {
+            return self.refuse(format!("reads an array faq that {LANE_FAQ_FIELDS_REFUSAL}"));
         }
         let Some(body) = f.expr.as_deref() else {
             return self.refuse("reads an array faq with no body");
@@ -2177,6 +2167,31 @@ fn op_node(op: &str, args: Vec<Expr>) -> Expr {
         ..Default::default()
     })
 }
+/// Whether a lane may read the array `faq` `f` by its body alone: no `key`,
+/// `join` or `distinct` (those are scoped to the node and name its output
+/// indices), and an `args` list, if any, that names only operand arrays —
+/// variables, none of them an index the node binds. Such a list is the
+/// arrays the body reads (esm-spec §4.3.1) and changes nothing. One rule for
+/// every array `faq` a lane reads: a whole-array right-hand side, an observed
+/// defined whole, and a `makearray` region value.
+fn lane_faq_fields_ok(f: &ExpressionNode) -> bool {
+    let bound = |n: &str| {
+        f.ranges.as_ref().is_some_and(|r| r.contains_key(n))
+            || f.output_idx
+                .as_ref()
+                .is_some_and(|o| o.iter().any(|x| x == n))
+    };
+    f.key.is_none()
+        && f.join.as_ref().is_none_or(|j| j.is_empty())
+        && f.distinct != Some(true)
+        && f.args
+            .iter()
+            .all(|a| matches!(a, Expr::Variable(v) if !bound(v)))
+}
+
+/// What a lane says when [`lane_faq_fields_ok`] fails.
+const LANE_FAQ_FIELDS_REFUSAL: &str = "carries a `key`, a `join`, `distinct`, or `args` that are \
+     not only the names of its operand arrays, which a lane does not rewrite";
 
 /// `index(makearray(regions, values), subs…)` as region membership:
 /// `ifelse(in_k, value_k at subs, …ifelse(in_1, value_1 at subs, 0))`, the
@@ -2186,8 +2201,8 @@ fn op_node(op: &str, args: Vec<Expr>) -> Expr {
 /// element) or an array `faq` whose output indices span either every
 /// dimension of its region or only its non-singleton ones, each over a unit
 /// stride range exactly as long as its region dimension; it is read at
-/// `sub − lo + start` on each dimension it spans. A `faq` value carrying a
-/// `key`, `args`, `join` or `distinct`, one whose contraction runs over a set
+/// `sub − lo + start` on each dimension it spans. A `faq` value whose
+/// fields fail [`lane_faq_fields_ok`], one whose contraction runs over a set
 /// of an output index, and one whose contraction (or any nested binder)
 /// would capture a subscript are refused too. Anything else is an error,
 /// which the caller refuses.
@@ -2257,14 +2272,10 @@ fn membership_read(
             Expr::Operator(f)
                 if f.op == "faq" && f.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
             {
-                if f.key.is_some()
-                    || !f.args.is_empty()
-                    || f.join.as_ref().is_some_and(|j| !j.is_empty())
-                    || f.distinct == Some(true)
-                {
-                    return Err("holds a faq region value that carries a `key`, `args`, \
-                                `join` or `distinct`, which a lane does not rewrite"
-                        .into());
+                if !lane_faq_fields_ok(f) {
+                    return Err(format!(
+                        "holds a faq region value that {LANE_FAQ_FIELDS_REFUSAL}"
+                    ));
                 }
                 let outs = f.output_idx.as_deref().unwrap_or_default();
                 let dims: Vec<usize> = if outs.len() == bounds.len() {
@@ -2696,6 +2707,33 @@ mod membership_tests {
         v["distinct"] = json!(true);
         let err = lower(json!([[[1, 4]]]), vec![v]).unwrap_err();
         assert!(err.contains("distinct"), "{err}");
+    }
+
+    #[test]
+    fn faq_value_with_an_operand_args_list_lowers() {
+        // The same rule as a whole-array right-hand side: an `args` list of
+        // operand names changes nothing; one naming a bound index is refused.
+        let mut v = faq(
+            &["a"],
+            json!({"a": [1, 4]}),
+            json!({"op": "index", "args": ["B", "a"]}),
+        );
+        v["args"] = json!(["B"]);
+        let plain = faq(
+            &["a"],
+            json!({"a": [1, 4]}),
+            json!({"op": "index", "args": ["B", "a"]}),
+        );
+        assert_eq!(
+            lower(json!([[[1, 4]]]), vec![v.clone()]).expect("lowers"),
+            lower(json!([[[1, 4]]]), vec![plain]).expect("lowers")
+        );
+        v["args"] = json!(["B", "a"]);
+        let err = lower(json!([[[1, 4]]]), vec![v.clone()]).unwrap_err();
+        assert!(err.contains("operand arrays"), "{err}");
+        v["args"] = json!([{"op": "+", "args": ["B", 1]}]);
+        let err = lower(json!([[[1, 4]]]), vec![v]).unwrap_err();
+        assert!(err.contains("operand arrays"), "{err}");
     }
 
     #[test]

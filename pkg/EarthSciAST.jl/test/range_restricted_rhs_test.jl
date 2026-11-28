@@ -1220,36 +1220,53 @@ end
             )
         )
     )
-    path = joinpath(mktempdir(), "wholefaq.esm")
-    write(path, EarthSciAST.JSON3.write(doc))
-    prob = esm_problem(path, (0.0, 1.0))
-    prog = rhs_program(prob)
-    lp = lanes(prog, :cells, ["x", "y"]; chunk = 4)
-    LL = lane_layout(lp)
-    n = 12
-    gu = [0.5 + ((k * 7919) % 101) / 37 for k in 1:(2n)]
-    fs = default_forcing_set(prog)
-    want = fill(NaN, 2n)
-    rhs!(want, prog, rhs_workspace(prog), gu, Float64[], prob.p, 0.75, fs)
-    offs = Dict(b.name => b.offset for b in LL.u)
-    ws = rhs_workspace(lp)
-    for batch in Iterators.partition(1:n, 4)
-        L = 4
-        u = zeros(LL.n_u * L)
-        cells = ones(Int32, 2, L)
-        for (l, c) in enumerate(batch)
-            u[offs["M.u"] * L + l] = gu[c]
-            u[offs["M.v"] * L + l] = gu[n + c]
-            cells[1, l] = Int32((c - 1) % 3 + 1)
-            cells[2, l] = Int32((c - 1) ÷ 3 + 1)
-        end
-        du = fill(NaN, LL.n_u * L)
-        rhs!(du, lp, ws, u, Float64[], prob.p, 0.75, default_forcing_set(lp), cells, length(batch))
-        for (l, c) in enumerate(batch)
-            @test reinterpret(UInt64, du[offs["M.u"] * L + l]) == reinterpret(UInt64, want[c])
-            @test reinterpret(UInt64, du[offs["M.v"] * L + l]) == reinterpret(UInt64, want[n + c])
+    # The region value with no `args`, and with an `args` list of its
+    # operand names (the same rule as a whole-array right-hand side's): both
+    # lower to the same lane form. One naming a bound index is refused.
+    region_value = doc["models"]["M"]["equations"][2]["rhs"]["values"][1]
+    for rargs in (Any[], Any["u", "v"])
+        region_value["args"] = rargs
+        path = joinpath(mktempdir(), "wholefaq.esm")
+        write(path, EarthSciAST.JSON3.write(doc))
+        prob = esm_problem(path, (0.0, 1.0))
+        prog = rhs_program(prob)
+        lp = lanes(prog, :cells, ["x", "y"]; chunk = 4)
+        LL = lane_layout(lp)
+        n = 12
+        gu = [0.5 + ((k * 7919) % 101) / 37 for k in 1:(2n)]
+        fs = default_forcing_set(prog)
+        want = fill(NaN, 2n)
+        rhs!(want, prog, rhs_workspace(prog), gu, Float64[], prob.p, 0.75, fs)
+        offs = Dict(b.name => b.offset for b in LL.u)
+        ws = rhs_workspace(lp)
+        for batch in Iterators.partition(1:n, 4)
+            L = 4
+            u = zeros(LL.n_u * L)
+            cells = ones(Int32, 2, L)
+            for (l, c) in enumerate(batch)
+                u[offs["M.u"] * L + l] = gu[c]
+                u[offs["M.v"] * L + l] = gu[n + c]
+                cells[1, l] = Int32((c - 1) % 3 + 1)
+                cells[2, l] = Int32((c - 1) ÷ 3 + 1)
+            end
+            du = fill(NaN, LL.n_u * L)
+            rhs!(du, lp, ws, u, Float64[], prob.p, 0.75, default_forcing_set(lp), cells, length(batch))
+            for (l, c) in enumerate(batch)
+                @test reinterpret(UInt64, du[offs["M.u"] * L + l]) == reinterpret(UInt64, want[c])
+                @test reinterpret(UInt64, du[offs["M.v"] * L + l]) == reinterpret(UInt64, want[n + c])
+            end
         end
     end
+    region_value["args"] = Any["u", "i"]
+    path = joinpath(mktempdir(), "wholefaq_bad_args.esm")
+    write(path, EarthSciAST.JSON3.write(doc))
+    err = try
+        lanes(rhs_program(esm_problem(path, (0.0, 1.0))), :cells, ["x", "y"]; chunk = 4)
+        nothing
+    catch e
+        e
+    end
+    @test err !== nothing && occursin("operand arrays", sprint(showerror, err))
 end
 
 # Every lane of `lanes(prob's program, kind, sets)` against the whole-domain

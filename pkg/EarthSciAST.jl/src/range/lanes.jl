@@ -505,6 +505,23 @@ function _lane_range_set(r)
     return nothing
 end
 
+# Whether a lane may read the array `faq` `F` by its body alone: no `key`,
+# `join` or `distinct` (those are scoped to the node and name its output
+# indices), and an `args` list, if any, that names only operand arrays —
+# variables, none of them an index the node binds. Such a list is the arrays
+# the body reads (esm-spec §4.3.1) and changes nothing. One rule for every
+# array `faq` a lane reads: a whole-array right-hand side, an observed defined
+# whole, and a `makearray` region value.
+function _lane_faq_fields_ok(F::OpExpr)
+    bound(n) = (F.ranges !== nothing && haskey(F.ranges, n)) ||
+        (F.output_idx !== nothing && n in _output_idx_strings(F))
+    return F.key === nothing && (F.join === nothing || isempty(F.join)) &&
+        F.distinct !== true && all(a -> a isa VarExpr && !bound(a.name), F.args)
+end
+
+const _LANE_FAQ_FIELDS_REFUSAL = "carries `key`, `join`, `distinct`, or `args` that are not " *
+    "only the names of its operand arrays"
+
 # `index(faq{output_idx o, ranges, body}, s…)`: the array `faq` read at the
 # subscripts `s`, each a loop variable. That is the body with each `o_d`
 # renamed `s_d` (capture-avoiding); any other range of the `faq` (a
@@ -523,18 +540,8 @@ function _lane_faq_read(
     )
     outs = _output_idx_strings(F)
     length(outs) == length(subs) || _lane_refuse(rule, "an array faq is read at the wrong rank")
-    # `key`, `join` and `distinct` are scoped to the node itself (they name
-    # its output indices); the body alone moves. An `args` list that names
-    # only operand variables is the list of arrays the body reads (esm-spec
-    # §4.3.1) and changes nothing; any other `args` is refused.
-    (
-        all(a -> a isa VarExpr, F.args) && F.key === nothing &&
-            (F.join === nothing || isempty(F.join)) && F.distinct !== true
-    ) || _lane_refuse(
-        rule,
-        "an array faq read inside the lane scope carries `key`, `join`, `distinct`, or `args` " *
-            "that are not only operand variables"
-    )
+    _lane_faq_fields_ok(F) ||
+        _lane_refuse(rule, "an array faq read inside the lane scope " * _LANE_FAQ_FIELDS_REFUSAL)
     renames = Dict{String, ASTExpr}()
     names = Set{String}()
     for (d, (o, s)) in enumerate(zip(outs, subs))
@@ -1646,12 +1653,8 @@ function _lane_membership_read(spec::_LaneSpec, ctx, ma::OpExpr, subs, sc, rule:
         end
         v = value
         read = if v isa OpExpr && _is_faq_op((v::OpExpr).op) && _lane_array_faq(v::OpExpr)
-            (
-                isempty(v.args) && v.key === nothing &&
-                    (v.join === nothing || isempty(v.join)) && v.distinct !== true
-            ) || _lane_refuse(
-                rule, "a faq region value carries `args`, `key`, `join` or `distinct`"
-            )
+            _lane_faq_fields_ok(v::OpExpr) ||
+                _lane_refuse(rule, "a faq region value " * _LANE_FAQ_FIELDS_REFUSAL)
             outs = _output_idx_strings(v)
             dims = length(outs) == length(bounds) ? collect(eachindex(bounds)) :
                 [d for d in eachindex(bounds) if bounds[d][1] != bounds[d][2]]
