@@ -156,6 +156,8 @@ include("migration.jl")
 # Ahead of resolve.jl, which calls it.
 include("data_source_urls.jl")
 include("resolve.jl")
+include("ic_migration.jl")
+include("initialization_system.jl")
 # Coupling-library files + `coupling_import` role binding (esm-spec §10.9–§10.11)
 include("coupling_imports.jl")
 # Expression operations, rendering, and tooling

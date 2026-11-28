@@ -889,12 +889,31 @@ function _rewrite_old_spellings!(doc)::Vector{String}
     task_local_storage(:esm_doc_independent_variable, _document_iv_rename(doc)) do
         _old_spellings_walk!(doc, "", false, nothing, fsites, osites, seen)
     end
-    isempty(fsites) || @warn string(
-        "deprecated_field: the fields `expression_templates` and ",
-        "`expression_template_imports` are read as `operators` and ",
-        "`operator_imports` (esm 2.4.0, esm-spec §9.6.12). Read at: ",
-        join(fsites, ", "), "."
-    )
+    # esm 2.5.0 (esm-spec §11.4.4): `initialization_equations` read as `ic`
+    # equations (or `guesses`); then every `ic` node's argument checked (§4.2).
+    isites = _migrate_initialization_equations!(doc)
+    _check_ic_arguments(doc)
+    if !isempty(fsites) || !isempty(isites)
+        parts = String[]
+        isempty(fsites) || push!(
+            parts, string(
+                "the fields `expression_templates` and `expression_template_imports` are ",
+                "read as `operators` and `operator_imports` (esm 2.4.0, esm-spec §9.6.12)"
+            )
+        )
+        isempty(isites) || push!(
+            parts, string(
+                "a model's `initialization_equations` is read as `ic` equations in its ",
+                "`equations`, or as `guesses` for a model with no time derivative ",
+                "(esm 2.5.0, esm-spec §11.4.4)"
+            )
+        )
+        @warn string(
+            "deprecated_field: ", join(parts, "; "), ". Read at: ",
+            join(vcat(fsites, isites), ", "), "."
+        )
+        append!(fsites, isites)
+    end
     isempty(osites) || @warn string(
         "deprecated_op: `apply_expression_template` is read as `apply_operator`, ",
         "and a spatial `D` (and `δ`, `∂`) as `partial` (esm 2.4.0, esm-spec §4.2, ",
@@ -924,7 +943,8 @@ function _has_old_spellings(x)::Bool
         _is_object(n) || return true
         for (k, _) in pairs(n)
             ks = string(k)
-            (ks == "expression_templates" || ks == "expression_template_imports") && return _JSON_STOP
+            (ks == "expression_templates" || ks == "expression_template_imports" ||
+                ks == "initialization_equations") && return _JSON_STOP
         end
         op = _raw_get(n, "op")
         if op isa AbstractString
