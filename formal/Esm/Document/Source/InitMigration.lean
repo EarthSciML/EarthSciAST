@@ -98,7 +98,7 @@ def icOf (a : Json) : Json := .obj [("args", .arr [a]), ("op", .str "ic")]
 
 /-- The expression-valued fields of a node the rewrite descends into (besides `bindings`,
 a name-keyed map of expressions). -/
-def exprKeys : List String := ["args", "expr", "filter", "values", "lower", "upper"]
+def exprKeys : List String := ["args", "expr", "filter", "values", "lower", "upper", "key"]
 
 mutual
 /-- `e` with every unknown reference `w` written `ic(w)` and every time derivative `D(w)`
