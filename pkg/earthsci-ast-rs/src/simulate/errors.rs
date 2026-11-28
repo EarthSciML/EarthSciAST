@@ -274,6 +274,16 @@ pub enum SimulateError {
         details: String,
     },
 
+    /// The initialization system (esm-spec §11.4.3) is over- or
+    /// under-determined under the supplied values, or no assignment of a
+    /// distinct equation to every unknown exists.
+    #[error("ic_system_unbalanced: {details}")]
+    IcSystemUnbalanced {
+        /// The direction, the unknowns and equations left over, and the
+        /// supplied values that are knowns.
+        details: String,
+    },
+
     /// A data provider bound in [`crate::problem::ProblemOptions`] failed to
     /// materialize its loader field, or produced the wrong number of fields for
     /// its target forcing variable.
@@ -356,6 +366,9 @@ impl SimulateError {
                 name,
                 details: u(details),
             },
+            SimulateError::IcSystemUnbalanced { details } => SimulateError::IcSystemUnbalanced {
+                details: u(details),
+            },
             other => other,
         }
     }
@@ -374,6 +387,7 @@ impl SimulateError {
             }
             SimulateError::DataSourceUnbound { .. } => Some(codes::DATA_SOURCE_UNBOUND),
             SimulateError::IcReadsState { .. } => Some("ic_reads_state"),
+            SimulateError::IcSystemUnbalanced { .. } => Some(codes::IC_SYSTEM_UNBALANCED),
             SimulateError::ToleranceBelowWorkingPrecision { .. } => {
                 Some(codes::TOLERANCE_BELOW_WORKING_PRECISION)
             }

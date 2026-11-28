@@ -1363,8 +1363,12 @@ fn strip_and_build(
     // The loader closed the metaparameters already.
     opts.metaparameters.clear();
     let p = opts.p.clone();
+    let u0 = opts.u0.clone();
     let mut prob = build_problem(ProblemInput::File(&stripped.file), tspan, opts, set)?;
     let mut constructs = stripped.constructs;
+    if set.contains(crate::strip::StripSet::INITIALIZATION) {
+        constructs.initialization = stripped_initialization(&prob, &stripped.file)?;
+    }
     if !constructs.z_layout.is_empty() {
         let flat = crate::flatten::flatten(&stripped.file)
             .map_err(|e| SimulateError::Compile(e.into()))?;
@@ -1382,11 +1386,68 @@ fn strip_and_build(
             }
         }
         params.insert("t".to_string(), tspan.0);
-        constructs.z0 = crate::strip::z_starting_values(&flat, &constructs.z_layout, &params);
+        constructs.z0 =
+            crate::strip::z_starting_values(&flat, &constructs.z_layout, &params, &u0);
     }
     prob.stripped = Rc::new(constructs);
     prob.strip_source = Some(Rc::new(stripped.file));
     Ok(prob)
+}
+
+/// The removed implicit part of the initialization system of `prob` (`strip`
+/// class `initialization`, API_SPEC §5.8): its residuals, read off the
+/// flattened stripped document, and its unknowns' element names and starting
+/// points, read off the Problem's initial state (which holds them).
+fn stripped_initialization(
+    prob: &EsmProblem,
+    file: &EsmFile,
+) -> Result<crate::strip::StrippedInitialization, SimulateError> {
+    let mut out = crate::strip::StrippedInitialization::default();
+    let Backend::Array(c) = &*prob.backend else {
+        return Ok(out);
+    };
+    let sys = c.init_system.clone();
+    if !sys.has_implicit_part() {
+        return Ok(out);
+    }
+    let flat = crate::flatten::flatten(file).map_err(|e| SimulateError::Compile(e.into()))?;
+    let mut counters: HashMap<String, usize> = HashMap::new();
+    for &k in &sys.removed {
+        let e = &sys.equations[k];
+        let prefix = match &e.origin {
+            crate::flatten::TermOrigin::Component { component } => component.clone(),
+            crate::flatten::TermOrigin::Coupling { coupling } => format!("coupling[{coupling}]"),
+        };
+        let j = counters.entry(prefix.clone()).or_insert(0);
+        *j += 1;
+        let expr = crate::strip::residual_expr(&e.equation.lhs, &e.equation.rhs);
+        let sets = crate::strip::expr_sets(&crate::strip::strip_ic_for_shape(&expr), &flat)
+            .unwrap_or_default();
+        out.residuals.push(crate::strip::StrippedResidual {
+            id: format!("{prefix}.initialization[{j}]"),
+            origin: e.origin.clone(),
+            shape: crate::strip::set_sizes(&sets, &flat),
+            expr,
+            sets,
+        });
+    }
+    let unknowns = sys.implicit_unknowns();
+    let names = prob.state_variable_names();
+    let u = initial_state(prob)?;
+    let base = |n: &str| n.split('[').next().unwrap_or(n).to_string();
+    let mut picked: Vec<(bool, String, usize)> = names
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| unknowns.contains(&base(n)))
+        .map(|(i, n)| (n.contains('['), base(n), i))
+        .collect();
+    // 0-d by sorted name, then arrays by sorted name, each in layout order.
+    picked.sort_by(|a, b| (a.0, &a.1, a.2).cmp(&(b.0, &b.1, b.2)));
+    for (_, _, i) in picked {
+        out.unknowns.push(names[i].clone());
+        out.x0.push(u.get(i).copied());
+    }
+    Ok(out)
 }
 
 /// [`esm_problem`] without `strip`. `taken` is the set the caller stripped
@@ -1816,7 +1877,7 @@ fn build_problem(
         extents: &build.extents,
         members: &build.members,
     });
-    let backend = compile_backend(
+    let mut backend = compile_backend(
         owned_file.as_ref(),
         flat_only,
         pipeline_flat.as_ref(),
@@ -1827,6 +1888,14 @@ fn build_problem(
         opts.rewrites,
         opts.runtime_array_parameters,
     )?;
+    // `strip` class `initialization` (API_SPEC §5.8): the caller takes the
+    // implicit part of the initialization system.
+    if taken.contains(crate::strip::StripSet::INITIALIZATION)
+        && let Backend::Array(c) = &mut backend
+        && let Some(c) = Rc::get_mut(c)
+    {
+        c.init_stripped = true;
+    }
 
     // ---- (4a) The missing-data gate (esm-spec §10.10). ---------------------
     // A shaped parameter with neither a default nor a supplied value is a
@@ -1968,6 +2037,10 @@ fn build_problem(
     // After (5b), which resolved the field `ic`s this reads.
     #[cfg(feature = "solve")]
     if let Backend::Array(c) = &backend {
+        // The initialization system's balance under the caller's `u0`, and
+        // its implicit part (esm-spec §11.4.3), before the starting values.
+        c.check_initialization_raw(&opts.u0)
+            .map_err(|e| c.show_error(e))?;
         refuse_missing_initial_values(c, &opts.u0).map_err(|e| c.show_error(e))?;
     }
 

@@ -75,6 +75,9 @@ pub(crate) struct OldSpellings {
     pub(crate) fields: Vec<String>,
     /// Op renames, in walk order.
     pub(crate) ops: Vec<String>,
+    /// Models whose deprecated `initialization_equations` were rewritten
+    /// (esm 2.5.0, [`crate::ic_migration`]).
+    pub(crate) initialization: Vec<String>,
 }
 
 impl OldSpellings {
@@ -82,13 +85,25 @@ impl OldSpellings {
     /// `deprecated_op`, each only when it has a site.
     pub(crate) fn warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
+        let mut parts = Vec::new();
         if !self.fields.is_empty() {
-            out.push(format!(
-                "deprecated_field: the fields `expression_templates` and \
-                 `expression_template_imports` are read as `operators` and \
-                 `operator_imports` (esm 2.4.0, esm-spec §9.6.12). Read at: {}.",
+            parts.push(format!(
+                "the fields `expression_templates` and `expression_template_imports` are read \
+                 as `operators` and `operator_imports` (esm 2.4.0, esm-spec §9.6.12). Read at: \
+                 {}.",
                 self.fields.join(", ")
             ));
+        }
+        if !self.initialization.is_empty() {
+            parts.push(format!(
+                "`initialization_equations` is rewritten into `ic` equations in `equations`, \
+                 or into `guesses` for a model with no time derivative (esm 2.5.0, esm-spec \
+                 §11.4.4). Read at: {}.",
+                self.initialization.join(", ")
+            ));
+        }
+        if !parts.is_empty() {
+            out.push(format!("deprecated_field: {}", parts.join(" ")));
         }
         if !self.ops.is_empty() {
             out.push(format!(
@@ -164,6 +179,9 @@ fn walk(
                         out.fields
                             .push(format!("{here}/{} ({old})", pointer_token(new)));
                     }
+                }
+                if map.get("op").and_then(Value::as_str) == Some("ic") && params.is_none() {
+                    crate::ic_migration::check_ic_node(map, &at.pointer())?;
                 }
                 let renamed = match map.get("op").and_then(Value::as_str) {
                     Some(OLD_APPLY_OP) => Some((
@@ -267,6 +285,7 @@ pub(crate) fn rewrite_old_spellings(doc: &mut Value) -> Result<OldSpellings, Dia
         iv.as_deref(),
         &mut out,
     )?;
+    out.initialization = crate::ic_migration::migrate_initialization_equations(doc)?;
     Ok(out)
 }
 
@@ -302,9 +321,11 @@ pub(crate) fn read_silently(doc: &Value) -> Option<Value> {
 pub(crate) fn has_old_spellings(doc: &Value) -> bool {
     match doc {
         Value::Object(map) => {
-            if map
-                .keys()
-                .any(|k| k == "expression_templates" || k == "expression_template_imports")
+            if map.keys().any(|k| {
+                k == "expression_templates"
+                    || k == "expression_template_imports"
+                    || k == "initialization_equations"
+            })
             {
                 return true;
             }

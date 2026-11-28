@@ -832,12 +832,25 @@ pub struct ArrayCompiled {
     /// coordinate expression over grid-geometry aggregates — into the flat state
     /// vector cell-by-cell (DESIGN pde_simulation_pipeline §2 R2).
     field_ics: Vec<(String, Expr)>,
-    /// The `faq`-valued initialization equations (esm-spec §6.2), each
-    /// `(target_state, faq)`, in document order. At `u0` build time each
-    /// assigns the cells of its ranges, read against the initial state seeded
-    /// so far, except a cell the caller's `u0` names
-    /// ([`Self::seed_initialization_faqs`]).
+    /// The triangular steps of the initialization system (esm-spec
+    /// §11.4.3), each `(target_state, rhs)` with `ic(w)` read as `w` and an
+    /// array target's right-hand side a `faq` over its cells, in evaluation
+    /// order. At `u0` build time each assigns its target, read against the
+    /// initial state seeded so far ([`Self::seed_initialization_equations`]).
     init_faqs: Vec<(String, Expr)>,
+    /// How many of [`Self::init_faqs`], first, are explicit initial
+    /// conditions over some cells: a supplied value of one of their cells
+    /// stands.
+    n_explicit_faqs: usize,
+    /// The analysed initialization system ([`crate::initialization`]): its
+    /// balance and implicit part are checked against the supplied values.
+    pub(crate) init_system: std::rc::Rc<crate::initialization::InitSystem>,
+    /// The flattened system's `guesses`: the starting point of an unknown of
+    /// a stripped implicit part.
+    pub(crate) init_guesses: indexmap::IndexMap<String, Expr>,
+    /// Whether the caller took the implicit part of the initialization system
+    /// (`strip` class `initialization`, API_SPEC §5.8).
+    pub(crate) init_stripped: bool,
     /// The STATE-FREE observed definitions a field `ic` RHS reads, in
     /// dependency order (esm-spec §6.6.5 "Build-time evaluation scope").
     ///

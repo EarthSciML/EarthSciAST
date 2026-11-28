@@ -605,15 +605,25 @@ pub struct FlattenedSystem {
     /// equations, so the ordinary ODE path is unaffected.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_ics: Vec<(String, Expr)>,
-    /// The `faq`-valued initialization equations (esm-spec §6.2, equations
-    /// that hold at t = 0) of every component and subsystem, as ordered,
-    /// namespaced `(target_state, faq)` pairs ([`initialization_faq`]). Each
-    /// assigns the cells of its ranges when the initial state is built. The
-    /// other spellings of an initialization equation name no cells and are
-    /// not carried. Empty (and omitted when serialized) for a system with
-    /// none.
+    /// *(esm 2.5.0.)* Every initialization equation (esm-spec §11.4.3: an
+    /// equation that mentions `ic`) that is not an explicit initial condition
+    /// (those are [`Self::field_ics`]), in document order, named as
+    /// [`Self::equations`] are (esm-libraries-spec §4.7.5 step 4), and removed
+    /// from them. The build analyses them as one system
+    /// ([`crate::initialization::InitSystem`]). Empty (and omitted when
+    /// serialized) for a system with none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub initialization_faqs: Vec<(String, Expr)>,
+    pub initialization_equations: Vec<Equation>,
+    /// The component (or coupling entry) each of
+    /// [`Self::initialization_equations`] came from, in the same order: the
+    /// origin of its first contribution. Not serialized.
+    #[serde(skip)]
+    pub initialization_origins: Vec<TermOrigin>,
+    /// Every component's `guesses` (esm-spec §6.2), namespaced: the starting
+    /// point of an unknown of a nonlinear solve. Empty (and omitted when
+    /// serialized) for a system with none.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub guesses: IndexMap<String, Expr>,
     /// Flattened equations in processing order. Every variable reference is
     /// dot-namespaced.
     pub equations: Vec<Equation>,
@@ -1100,7 +1110,9 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         parameters,
         observed_variables,
         field_ics,
-        initialization_faqs,
+        initialization_equations,
+        initialization_origins,
+        guesses,
         equations,
         continuous_events,
         discrete_events,
@@ -1139,7 +1151,9 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         brownian_parameters,
         discrete_parameters,
         field_ics,
-        initialization_faqs,
+        initialization_equations,
+        initialization_origins,
+        guesses,
         equations,
         equation_contributions,
         equation_lifted,
@@ -2520,7 +2534,9 @@ struct AssembledParts {
     parameters: IndexMap<String, ModelVariable>,
     observed_variables: IndexMap<String, ModelVariable>,
     field_ics: Vec<(String, Expr)>,
-    initialization_faqs: Vec<(String, Expr)>,
+    initialization_equations: Vec<Equation>,
+    initialization_origins: Vec<TermOrigin>,
+    guesses: IndexMap<String, Expr>,
     equations: Vec<FlatEq>,
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
@@ -2540,12 +2556,15 @@ impl AssembledParts {
                 fe.map_contributions(&mut *f);
             }
         }
-        for (_, e) in self
-            .initialization_faqs
-            .iter_mut()
-            .chain(self.field_ics.iter_mut())
-        {
+        for (_, e) in self.field_ics.iter_mut() {
             *e = f(e);
+        }
+        for (_, e) in self.guesses.iter_mut() {
+            *e = f(e);
+        }
+        for eq in &mut self.initialization_equations {
+            eq.lhs = f(&eq.lhs);
+            eq.rhs = f(&eq.rhs);
         }
         fn affects(a: &mut [AffectEquation], f: &mut dyn FnMut(&Expr) -> Expr) {
             for x in a {
@@ -2592,7 +2611,9 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
         parameters: IndexMap::new(),
         observed_variables: IndexMap::new(),
         field_ics: Vec::new(),
-        initialization_faqs: Vec::new(),
+        initialization_equations: Vec::new(),
+        initialization_origins: Vec::new(),
+        guesses: IndexMap::new(),
         equations: Vec::new(),
         continuous_events: Vec::new(),
         discrete_events: Vec::new(),
@@ -2610,7 +2631,7 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
             parts.observed_variables.insert(name, var);
         }
         parts.equations.extend(block.equations);
-        parts.initialization_faqs.extend(block.initialization_faqs);
+        parts.guesses.extend(block.guesses);
         parts.continuous_events.extend(block.continuous_events);
         parts.discrete_events.extend(block.discrete_events);
     }
@@ -2624,12 +2645,26 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
 fn extract_field_ics(parts: &mut AssembledParts) -> Result<(), FlattenError> {
     // An `ic` equation's contribution list leaves with it: `field_ics` carries
     // none (esm-libraries-spec §4.7.5).
+    // Every other initialization equation (one that mentions `ic` and is not
+    // an explicit initial condition) leaves too, into
+    // `initialization_equations` (esm 2.5.0, esm-libraries-spec §4.7.5).
     let mut kept = Vec::with_capacity(parts.equations.len());
     for fe in std::mem::take(&mut parts.equations) {
-        if let Some(target) = extract_ic_target(&fe.eq.lhs) {
+        if !crate::initialization::is_initialization_equation(&fe.eq) {
+            kept.push(fe);
+        } else if let Some(target) = crate::initialization::explicit_target(&fe.eq) {
             parts.field_ics.push((target, fe.eq.rhs));
         } else {
-            kept.push(fe);
+            let origin = fe
+                .contributions
+                .first()
+                .and_then(|c| c.origins.first())
+                .cloned()
+                .unwrap_or(TermOrigin::Component {
+                    component: String::new(),
+                });
+            parts.initialization_equations.push(fe.eq);
+            parts.initialization_origins.push(origin);
         }
     }
     parts.equations = kept;
@@ -3263,27 +3298,10 @@ struct SystemBlock {
     /// block an equation sits in is its slot owner (§4.7.1 step 4), not its
     /// provenance: a reattributed equation moves here with its list.
     equations: Vec<FlatEq>,
-    /// The component's `faq`-valued initialization equations, namespaced.
-    initialization_faqs: Vec<(String, Expr)>,
+    /// The component's `guesses`, namespaced.
+    guesses: IndexMap<String, Expr>,
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
-}
-
-/// The `faq`-valued initialization equation `eq` as `(target, faq)` (esm-spec
-/// §6.2): `u ~ faq(…)` with a bare-variable left-hand side and an array-valued
-/// right-hand side. Each assigns the cells of its ranges when the initial
-/// state is built; the other spellings name no cells to assign and are not
-/// evaluated, as in the Julia reference's `_seed_faq_init_u0!`.
-pub(crate) fn initialization_faq(eq: &Equation) -> Option<(&str, &Expr)> {
-    match (&eq.lhs, &eq.rhs) {
-        (Expr::Variable(target), Expr::Operator(node))
-            if crate::faq::is_faq_op(&node.op)
-                && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
-        {
-            Some((target.as_str(), &eq.rhs))
-        }
-        _ => None,
-    }
 }
 
 fn build_model_block(
@@ -3382,9 +3400,11 @@ fn build_model_block(
         }
     }
 
+    let typed_init = crate::ic_migration::typed_initialization_equations(model);
     let equations: Vec<FlatEq> = model
         .equations
         .iter()
+        .chain(&typed_init)
         .map(|eq| {
             FlatEq::authored(
                 Equation {
@@ -3414,18 +3434,16 @@ fn build_model_block(
         .map(|e| namespace_discrete_event(e, system_name, &sub_keys, &locals, refs))
         .collect();
 
-    // The `faq`-valued initialization equations, namespaced in the same
-    // scope as the equations.
-    let initialization_faqs = model
-        .initialization_equations
-        .iter()
-        .flatten()
-        .filter(|eq| initialization_faq(eq).is_some())
-        .map(|eq| match ns.expr(&eq.lhs) {
-            Expr::Variable(target) => (target, ns.expr(&eq.rhs)),
-            _ => unreachable!("an initialization faq's left-hand side is a variable"),
-        })
-        .collect();
+    // The component's guesses, namespaced in the same scope as the equations.
+    let mut guesses: IndexMap<String, Expr> = IndexMap::new();
+    let mut guess_names: Vec<&String> = model.guesses.iter().flatten().map(|(k, _)| k).collect();
+    guess_names.sort();
+    for name in guess_names {
+        let raw = &model.guesses.as_ref().expect("a guess")[name];
+        if let Ok(e) = serde_json::from_value::<Expr>(raw.clone()) {
+            guesses.insert(format!("{system_name}.{name}"), ns.expr(&e));
+        }
+    }
 
     let mut block = SystemBlock {
         name: system_name.to_string(),
@@ -3433,7 +3451,7 @@ fn build_model_block(
         parameters,
         observed_vars,
         equations,
-        initialization_faqs,
+        guesses,
         continuous_events,
         discrete_events,
     };
@@ -3464,9 +3482,7 @@ fn build_model_block(
         block.parameters.extend(sub_block.parameters);
         block.observed_vars.extend(sub_block.observed_vars);
         block.equations.extend(sub_block.equations);
-        block
-            .initialization_faqs
-            .extend(sub_block.initialization_faqs);
+        block.guesses.extend(sub_block.guesses);
     }
 
     Ok(block)
@@ -3587,7 +3603,7 @@ fn build_reaction_block(
         parameters,
         observed_vars: IndexMap::new(),
         equations,
-        initialization_faqs: Vec::new(),
+        guesses: IndexMap::new(),
         continuous_events,
         discrete_events,
     })
@@ -5207,7 +5223,7 @@ fn apply_couple(
             parameters: IndexMap::new(),
             observed_vars: IndexMap::new(),
             equations: new_equations,
-            initialization_faqs: Vec::new(),
+            guesses: IndexMap::new(),
             continuous_events: Vec::new(),
             discrete_events: Vec::new(),
         });

@@ -183,19 +183,12 @@ pub(crate) fn model_from_flattened(flat: &FlattenedSystem) -> Model {
     {
         variables.insert(name.clone(), var.clone());
     }
-    // The `faq`-valued initialization equations go back into the model's own
-    // block, so every later stage resolves their ranges and joins as it does
-    // an authored model's.
-    let initialization_equations = (!flat.initialization_faqs.is_empty()).then(|| {
-        flat.initialization_faqs
-            .iter()
-            .map(|(target, rhs)| crate::types::Equation {
-                lhs: Expr::Variable(target.clone()),
-                rhs: rhs.clone(),
-                comment: None,
-            })
-            .collect()
-    });
+    // The triangular steps of the initialization system (esm-spec §11.4.3),
+    // each `u ~ e` with `ic(w)` read as `w`, in evaluation order, go back into
+    // the model's own block, so every later stage resolves their ranges and
+    // joins as it does an authored model's.
+    let steps = crate::initialization::InitSystem::of(flat).step_equations();
+    let initialization_equations = (!steps.is_empty()).then_some(steps);
     Model {
         variables,
         equations: flat.equations.clone(),
@@ -872,9 +865,11 @@ impl ArrayCompiled {
             flat.field_ics.iter().map(|(_, rhs)| rhs),
             &compiled.operators,
         )?;
-        // Carry the classified scoped-reference `ic` equations through so `u0` is
-        // folded from the provider-served loaded initial fields at build time.
-        compiled.field_ics = flat.field_ics.clone();
+        // The initialization system (esm-spec §11.4.3), analysed once; its
+        // triangular steps are the model's initialization equations, and the
+        // checks that depend on supplied values run where they are known.
+        compiled.init_system = std::rc::Rc::new(crate::initialization::InitSystem::of(flat));
+        compiled.init_guesses = flat.guesses.clone();
         // …and the merge's rename map, so an override key naming a state an
         // `operator_compose` renaming match DELETED resolves to the survivor
         // rather than designating nothing (issue #230). The synthetic `Model`
@@ -1034,8 +1029,17 @@ impl ArrayCompiled {
 
         // Classify scoped-reference / array `ic` equations (esm-spec §11.4.1)
         // out of the rule builder into `field_ics` (see [`classify_field_ics`]).
-        let field_ics = classify_field_ics(model);
-        let init_faqs = classify_initialization_faqs(model);
+        let mut field_ics = classify_field_ics(model);
+        field_ics.extend(flat_ics.iter().cloned());
+        let field_ics = align_field_ics(field_ics, &array_axes, &ops);
+        // An explicit initial condition over some of its target's cells (a
+        // `faq` over bounded ranges, or under a filter) assigns exactly those
+        // cells, as the initialization-equation seed does; the field-`ic` path
+        // fills a whole field.
+        let (mut init_faqs, field_ics): (Vec<_>, Vec<_>) =
+            field_ics.into_iter().partition(|(_, rhs)| assigns_some_cells(rhs));
+        let n_explicit_faqs = init_faqs.len();
+        init_faqs.extend(classify_initialization_equations(model, &array_axes, &ops)?);
 
         // (7)+(7b)+(8) Build the RHS rules, cover held-at-ic slots, and
         // validate that every state slot has a defining equation.
@@ -1083,6 +1087,10 @@ impl ArrayCompiled {
             data_fed,
             field_ics,
             init_faqs,
+            n_explicit_faqs,
+            init_system: Default::default(),
+            init_guesses: Default::default(),
+            init_stripped: false,
             ic_scope,
             index_sets: index_sets.clone(),
             namespace: None,
@@ -3381,18 +3389,166 @@ fn classify_field_ics(model: &Model) -> Vec<(String, Expr)> {
     field_ics
 }
 
-/// The `faq`-valued initialization equations (esm-spec §6.2) of an authored
-/// model, in document order ([`crate::flatten::initialization_faq`]); a
-/// flattened system carries its own
-/// ([`FlattenedSystem::initialization_faqs`]).
-fn classify_initialization_faqs(model: &Model) -> Vec<(String, Expr)> {
-    model
-        .initialization_equations
-        .iter()
-        .flatten()
-        .filter_map(crate::flatten::initialization_faq)
-        .map(|(target, rhs)| (target.to_string(), rhs.clone()))
+/// The triangular steps of the initialization system (esm-spec §11.4.3) the
+/// build evaluates, in order, each as `(target, rhs)` in the form
+/// [`ArrayCompiled::seed_initialization_equations`] evaluates: those with a
+/// bare-variable left-hand side.
+///
+/// `u ~ faq(…)` with output indices stays as written. Any other right-hand
+/// side of a target with index-set axes (`array_axes`) denotes the `faq` over
+/// those axes, its array operands each read at the cell by index-set NAME
+/// ([`lift_by_name`]): a lower-rank operand repeats along the axes it does not
+/// carry (esm-spec §4.3.4, §11.4.3 "Arrays"). A scalar target keeps its
+/// right-hand side.
+fn classify_initialization_equations(
+    model: &Model,
+    array_axes: &HashMap<String, Vec<String>>,
+    ops: &Instances,
+) -> Result<Vec<(String, Expr)>, CompileError> {
+    let mut out = Vec::new();
+    for eq in model.initialization_equations.iter().flatten() {
+        let Expr::Variable(target) = &eq.lhs else {
+            continue;
+        };
+        let rhs = match array_axes.get(target) {
+            Some(axes) if !is_cell_assigning_faq(&eq.rhs) => {
+                lift_by_name(target, &eq.rhs, axes, array_axes, ops)?
+            }
+            _ => eq.rhs.clone(),
+        };
+        out.push((target.clone(), rhs));
+    }
+    Ok(out)
+}
+
+/// Whether `rhs` is a `faq` with output indices over bounded ranges or under
+/// a filter: one that assigns some cells of its target, not a whole field.
+fn assigns_some_cells(rhs: &Expr) -> bool {
+    let Expr::Operator(node) = rhs else {
+        return false;
+    };
+    is_cell_assigning_faq(rhs)
+        && (node.filter.is_some()
+            || node.ranges.iter().flatten().any(|(_, r)| {
+                !matches!(r, crate::types::RangeSpec::IndexSetRef { of: None, .. })
+            }))
+}
+
+/// Whether `rhs` is a `faq` with output indices: one that assigns the cells
+/// of its ranges.
+pub(crate) fn is_cell_assigning_faq(rhs: &Expr) -> bool {
+    matches!(rhs, Expr::Operator(node)
+        if crate::faq::is_faq_op(&node.op)
+            && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()))
+}
+
+/// The explicit initial conditions, each array one whose whole-array
+/// right-hand side reads an operand of other axes than its target's —
+/// MOSAIC Kelvin's `ic(aw) ~ aw0`, `aw` over `[lev, bin]` and `aw0` over
+/// `[lev]` — written as the `faq` over the target's axes that aligns the
+/// operands by index-set name (esm-spec §4.3.4 rule 1, §11.4.3 "Arrays").
+/// Every other initial condition is kept as written. One that cannot align
+/// is left for the field-`ic` path to refuse.
+fn align_field_ics(
+    field_ics: Vec<(String, Expr)>,
+    array_axes: &HashMap<String, Vec<String>>,
+    ops: &Instances,
+) -> Vec<(String, Expr)> {
+    field_ics
+        .into_iter()
+        .map(|(target, rhs)| {
+            let Some(axes) = array_axes.get(&target) else {
+                return (target, rhs);
+            };
+            if is_cell_assigning_faq(&rhs) {
+                return (target, rhs);
+            }
+            let mut leaves: Vec<&Vec<String>> = Vec::new();
+            let mut unknown_leaf = false;
+            fn walk<'a>(
+                e: &Expr,
+                array_axes: &'a HashMap<String, Vec<String>>,
+                leaves: &mut Vec<&'a Vec<String>>,
+                unknown: &mut bool,
+            ) {
+                match e {
+                    Expr::Variable(n) => {
+                        if let Some(a) = array_axes.get(n) {
+                            leaves.push(a);
+                        }
+                    }
+                    Expr::Operator(n) if n.op == "faq" || n.op == "index" || n.op == "makearray" => {
+                        *unknown = true;
+                    }
+                    Expr::Operator(n) => n.for_each_child(&mut |c| walk(c, array_axes, leaves, unknown)),
+                    _ => {}
+                }
+            }
+            walk(&rhs, array_axes, &mut leaves, &mut unknown_leaf);
+            let misaligned = leaves.iter().any(|a| *a != axes);
+            let fits = leaves.iter().all(|a| a.iter().all(|s| axes.contains(s)));
+            if unknown_leaf || !misaligned || !fits {
+                return (target, rhs);
+            }
+            match lift_by_name(&target, &rhs, axes, array_axes, ops) {
+                Ok(lifted) => (target, lifted),
+                Err(_) => (target, rhs),
+            }
+        })
         .collect()
+}
+
+/// The whole-array right-hand side `rhs` of the initial value of `target`,
+/// over `axes`, as the `faq` it denotes (esm-spec §4.3.4): one output index
+/// per axis, ranging over that axis's index set, and `rhs` read at the cell,
+/// each array operand gathered by index-set name.
+fn lift_by_name(
+    target: &str,
+    rhs: &Expr,
+    axes: &[String],
+    array_axes: &HashMap<String, Vec<String>>,
+    ops: &Instances,
+) -> Result<Expr, CompileError> {
+    let plan = build_gather_plan(rhs, array_axes, target, Some(axes), false)?;
+    let mut used: HashSet<String> = HashSet::new();
+    match rhs {
+        Expr::Operator(node) => names_bound_or_read(node, &mut used),
+        Expr::Variable(name) => {
+            used.insert(name.clone());
+        }
+        _ => {}
+    }
+    let loops: Vec<String> = (0..axes.len())
+        .map(|d| {
+            let mut sym = format!("_init{d}");
+            while used.contains(&sym) {
+                sym.insert(0, '_');
+            }
+            sym
+        })
+        .collect();
+    let body = index_array_leaves_by_loops(rhs, array_axes, Some(&plan), &loops, ops);
+    let ranges = loops
+        .iter()
+        .zip(axes)
+        .map(|(l, axis)| {
+            (
+                l.clone(),
+                crate::types::RangeSpec::IndexSetRef {
+                    from: axis.clone(),
+                    of: None,
+                },
+            )
+        })
+        .collect();
+    Ok(Expr::operator(ExpressionNode {
+        op: "faq".to_string(),
+        args: Vec::new(),
+        output_idx: Some(loops),
+        ranges: Some(ranges),
+        expr: Some(Box::new(body)),
+        ..Default::default()
+    }))
 }
 
 /// (7) Build the RHS rules. Each equation with a derivative LHS produces

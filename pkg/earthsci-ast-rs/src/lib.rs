@@ -103,6 +103,8 @@ pub(crate) mod elementwise_lift;
 pub(crate) mod error;
 pub(crate) mod faq;
 pub(crate) mod old_spellings;
+pub(crate) mod ic_migration;
+pub(crate) mod initialization;
 // The tier-2 EXTENSION SEAM (API_SPEC.md §3): the one deliberately-named place
 // where a Rust-only internal is handed to a caller. Everything reachable from
 // outside this crate is either a root `pub use` above/below (the stable tier,
@@ -428,7 +430,7 @@ pub use simulate_array::range::{
     Kernel, KernelBlock, KernelOutput, KernelSet, KernelSpec, KernelWorkspace, compile_kernels,
 };
 pub use strip::{
-    EventKind, StripSet, StrippedConstructs, StrippedEvent, StrippedResidual, StrippedUpdate,
+    EventKind, StripSet, StrippedConstructs, StrippedEvent, StrippedInitialization, StrippedResidual, StrippedUpdate,
     ZBlock,
 };
 pub use units::{
