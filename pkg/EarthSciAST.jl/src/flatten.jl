@@ -784,7 +784,7 @@ function _extract_field_ics!(pool::Vector{_FlatEq}, init::Vector{Equation} = Equ
     remaining = _FlatEq[]
     for fe in pool
         eq = fe.eq
-        target = _is_explicit_ic(eq) ? _ic_lhs_variable(eq.lhs) : nothing
+        target = _is_explicit_ic(eq) ? _ic_lhs_variable(_oriented_ic(eq).lhs) : nothing
         if target === nothing
             # Every other initialization equation (esm-spec §11.4.3) leaves
             # `equations` for `initialization_equations` (esm-libraries-spec
@@ -793,7 +793,7 @@ function _extract_field_ics!(pool::Vector{_FlatEq}, init::Vector{Equation} = Equ
         else
             # The entry leaves `equations` and its contributions together;
             # `field_ics` carries none.
-            push!(ics, target => eq.rhs)
+            push!(ics, target => _oriented_ic(eq).rhs)
         end
     end
     # One initial condition per state (esm-libraries-spec §4.7.5 step 4

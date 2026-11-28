@@ -1158,7 +1158,7 @@ end
         # with deprecated `neg` / `pow` (esm-spec §4.2), the canonical unit
         # spelling (§4.8.2) and the Markdown / Typst source formats (§1.2).
         # 2.3.0 -> 2.4.0 with `grad` / `div` / `laplacian` ordinary op names (§4.2).
-        @test E.SCHEMA_VERSION == "2.4.0"
+        @test E.SCHEMA_VERSION == "2.5.0"
     end
 
     # The one placement rule for an equation that joins a component after

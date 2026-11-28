@@ -73,6 +73,10 @@ include("testutils.jl")
         # pinned as repo-relative paths in
         # tests/conformance/data_source_url/manifest.json (CONFORMANCE_SPEC
         # §5.22) rather than as a golden here.
+        # esm 2.5.0 (esm-spec §11.4.4): a model with no time derivative reads
+        # its deprecated `initialization_equations` as `guesses` entries.
+        "tests/valid/nonlinear_isorropia_shape.esm" =>
+            "esm-spec §11.4.4: `initialization_equations` of a model with no time derivative is read as `guesses`",
         "tests/valid/data_source_relative_url.esm" =>
             "esm-spec §8.2.1: a relative `source.url_template` resolves against the declaring file's directory",
         # §9.6.4 rule 3 eager template expansion / rule 5 `match`-only registry drop.

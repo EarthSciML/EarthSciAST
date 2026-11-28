@@ -30,12 +30,29 @@ _mentions_ic(e::ASTExpr) = _any_subexpr(_is_ic_node, e)
 _is_initialization_equation(eq::Equation) = _mentions_ic(eq.lhs) || _mentions_ic(eq.rhs)
 
 """
+    _oriented_ic(eq) -> Equation
+
+`eq` written with its solved starting value on the left: `e ~ ic(u)`, where `e`
+does not read `ic(u)`, is the same equation as `ic(u) ~ e` (esm-spec §11.4.3)
+and is returned as that; every other equation is returned as it is.
+`ic(a) + ic(b) ~ total` stays as written.
+"""
+function _oriented_ic(eq::Equation)
+    _ic_lhs_variable(eq.lhs) !== nothing && return eq
+    t = _ic_lhs_variable(eq.rhs)
+    t === nothing && return eq
+    (t, false) in _ic_reads(eq.lhs) && return eq
+    return Equation(eq.rhs, eq.lhs; _comment = eq._comment)
+end
+
+"""
     _is_explicit_ic(eq) -> Bool
 
-An explicit initial condition (esm-spec §11.4.3): `ic(u) ~ e`, `u` a variable
-reference and `e` mentioning no `ic`.
+An explicit initial condition (esm-spec §11.4.3): `ic(u) ~ e` (or `e ~ ic(u)`),
+`u` a variable reference and `e` mentioning no `ic`.
 """
-_is_explicit_ic(eq::Equation) = _ic_lhs_variable(eq.lhs) !== nothing && !_mentions_ic(eq.rhs)
+_is_explicit_ic(eq::Equation) =
+    (o = _oriented_ic(eq); _ic_lhs_variable(o.lhs) !== nothing && !_mentions_ic(o.rhs))
 
 # The argument of an `ic` node: `(name, false)` for `ic(w)`, `(name, true)` for
 # `ic(D(w))`, `nothing` for a malformed one (the loader refuses those, §4.2).
