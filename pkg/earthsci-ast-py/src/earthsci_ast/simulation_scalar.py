@@ -274,9 +274,15 @@ def _build_scalar_rhs(
     # Each is evaluated once, at the run's start ``t0``, in the start-of-run
     # scope of esm-spec §11.4.2: ``t`` is ``t0``, and an observed it reads is
     # evaluated there too. One that reads a state is refused (`ic_reads_state`).
+    ic_eqs = scalar_ic_equations(flat)
+    for target, _rhs in ic_eqs:
+        if target not in state_names:
+            raise SimulationError(
+                f"ic({target}): the target is not a state variable of the flattened system"
+            )
     eq_ics = start_of_run_scalar_ics(
         flat,
-        scalar_ic_equations(flat),
+        ic_eqs,
         dict(zip(compiled.parameter_names, param_values)),
         float(t0),
     )

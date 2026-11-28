@@ -211,6 +211,9 @@ def test_load(entry: dict) -> None:
             )
         if "equations_count" in entry:
             assert len(model.get("equations", [])) == entry["equations_count"]
+        for name, value in entry.get("parameter_defaults", {}).items():
+            got = model["variables"][name].get("default")
+            assert _same_json(got, value), f"{lid}: {name}'s default {got}, expected {value}"
         if "guesses" in entry:
             assert _same_json(model.get("guesses"), entry["guesses"]), model.get("guesses")
     if "validate_errors" in entry:

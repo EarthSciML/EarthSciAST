@@ -646,24 +646,25 @@ def canonicalize_document(doc: Any) -> Any:
     import copy
 
     from .errors import ParseError
-    from .ic_migration import migrate_initialization_equations
+    from .ic_migration import declares_below_2_5, migrate_initialization_equations
     from .parse import _has_old_spellings, rewrite_old_spellings
     from .units import canonical_unit_spelling
 
-    if _has_old_spellings(doc):
-        read = copy.deepcopy(doc)
+    if _has_old_spellings(doc) or declares_below_2_5(doc):
+        doc = copy.deepcopy(doc)
+        rewrite_old_spellings(doc)
+        # esm 2.5.0 (esm-spec §11.4.4, §9.6.6 `deprecated_field`): the
+        # canonical form, and so every printer, carries no
+        # `initialization_equations`; the loader's rewrite applies here too.
+        # A document the migration refuses (an initialization equation with
+        # no `guesses` reading, a parameter's non-number value) keeps the
+        # field as written.
+        migrated = copy.deepcopy(doc)
         try:
-            rewrite_old_spellings(read)
-            # esm 2.5.0 (esm-spec §11.4.4, §9.6.6 `deprecated_field`): the
-            # canonical form, and so every printer, carries no
-            # `initialization_equations`; the loader's rewrite applies here too.
-            migrate_initialization_equations(read)
+            migrate_initialization_equations(migrated)
+            doc = migrated
         except ParseError:
-            # A document the loader refuses to read (an initialization
-            # equation with no `guesses` reading) is canonicalized as written,
-            # as Rust's `read_silently` leaves it.
-            read = doc
-        doc = read
+            pass
 
     def rewrite_deprecated(node: dict) -> dict:
         op, args = node.get("op"), node.get("args")

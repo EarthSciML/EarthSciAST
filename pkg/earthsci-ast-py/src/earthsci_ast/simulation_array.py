@@ -1964,17 +1964,15 @@ def _fold_scalar_ics(
     observed_values: dict[str, float] | None = None,
 ) -> None:
     """Fold every 0-D ``ic`` equation into its ``y0`` slot (esm-spec §11.4),
-    evaluated in the start-of-run scope (§11.4.2).
-
-    A target that is not a state of this system is SKIPPED rather than rejected:
-    ``ic`` is also written against a discrete parameter that events mutate
-    (``ic(EventSystem.dose_counter)`` in ``tests/simulation/event_chain.esm``),
-    which has no ``y0`` slot to seed. That has always been inert here and in
-    Julia, whose ``_build_u0`` simply never looks such a key up; making it an
-    error would be a separate, structural-validation decision."""
+    evaluated in the start-of-run scope (§11.4.2). A target that is not a state
+    of this system is refused: ``ic`` of a parameter is refused at load
+    (esm-spec §4.2), or migrated into its ``default`` for a document below esm
+    2.5.0 (§11.4.4), so nothing legitimate reaches here without a slot."""
     for target, rhs in scalar_ic_eqs:
         if target not in state_layout:
-            continue
+            raise SimulationError(
+                f"ic({target}): the target is not a state variable of the flattened system"
+            )
         y0[state_layout[target]] = resolve_scalar_ic(
             target,
             rhs,
@@ -1992,10 +1990,9 @@ def scalar_ic_equations(flat: FlattenedSystem) -> list[tuple[str, Expr]]:
 
     Array-shaped / lifted targets (§11.4.1) are excluded — their per-cell field
     RHS is folded by :func:`_fold_field_ics` once the grid shape is known, and so
-    is a target that is not a state of this system at all (``ic`` is also written
-    against a discrete parameter that events mutate — see
-    :func:`_fold_scalar_ics`). Used by the scalar-SymPy pathway, which has no
-    array machinery of its own.
+    is a target that is not a 0-D state variable of this system (refused by
+    :func:`_fold_scalar_ics` and :func:`_fold_field_ics`). Used by the
+    scalar-SymPy pathway, which has no array machinery of its own.
 
     Reads ``flat.field_ics``, not ``flat.equations``: flatten classifies the
     ``ic`` equations OUT of the equation list (esm-libraries-spec §4.7.5 step 4)
@@ -2004,7 +2001,7 @@ def scalar_ic_equations(flat: FlattenedSystem) -> list[tuple[str, Expr]]:
     out: list[tuple[str, Expr]] = []
     for target, rhs in flat.field_ics:
         var = flat.state_variables.get(target)
-        if var is None or getattr(var, "shape", None):
+        if var is not None and getattr(var, "shape", None):
             continue
         out.append((target, rhs))
     return out
