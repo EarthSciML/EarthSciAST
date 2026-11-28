@@ -1015,6 +1015,10 @@ impl ArrayCompiled {
             &eliminated,
         );
 
+        // Every variable's index-set axes as the build has them, which both
+        // rule builders below align operands by.
+        let array_axes = array_axis_names(&model_owned, &shapes, index_sets);
+
         // (6)+(6b) Build the dependency-ordered observed algebraic rules,
         // MOVING each declared observed's body expression out of the model.
         let observed_rules = build_observed_rules(
@@ -1023,6 +1027,7 @@ impl ArrayCompiled {
             &eliminated,
             index_sets,
             &shapes,
+            &array_axes,
         )?;
 
         let model = &model_owned;
@@ -1034,7 +1039,7 @@ impl ArrayCompiled {
 
         // (7)+(7b)+(8) Build the RHS rules, cover held-at-ic slots, and
         // validate that every state slot has a defining equation.
-        let rhs_rules = build_rhs_rules(model, &slots, &held_at_ic, &ops)?;
+        let rhs_rules = build_rhs_rules(model, &slots, &held_at_ic, &ops, &array_axes)?;
         let held_at_ic_names = held_at_ic.clone();
 
         let SlotTables {
@@ -1217,6 +1222,10 @@ fn resolve_for_compile(
     // The next three passes look only at nodes with `ranges` and at `faq`
     // nodes, and shape inference only at `index` nodes; no pass from here
     // to there adds any of them, so one walk says whether there are any.
+    // Range resolution erases the index-set names a producer's output
+    // indices range over, so a producer an equation reads elementwise is put
+    // in its target's frame by those names first.
+    place_named_producers(&mut model, shapes)?;
     let census = OpCensus::of(&model);
     if census.ranges {
         crate::faq::resolve_aggregate_ranges_with_extents(
@@ -3062,9 +3071,9 @@ fn build_observed_rules(
     eliminated: &HashSet<String>,
     index_sets: &HashMap<String, IndexSet>,
     shapes: &ShapeTable,
+    array_axes: &HashMap<String, Vec<String>>,
 ) -> Result<Vec<AlgebraicRule>, CompileError> {
     let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
-    let array_axes = declared_axis_names(model);
     // Read only for a bare-index definition.
     let declared: std::cell::OnceCell<HashSet<String>> = std::cell::OnceCell::new();
 
@@ -3116,7 +3125,7 @@ fn build_observed_rules(
             && lhs.op == "index"
         {
             let declared = declared.get_or_init(|| model.variables.keys().cloned().collect());
-            check_bare_index_definition(name, lhs, &eq.rhs, &array_axes, declared)?;
+            check_bare_index_definition(name, lhs, &eq.rhs, array_axes, declared)?;
         }
         // A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) is recognized before
         // either ordinary lowering, because both of them would compile the
@@ -3147,7 +3156,7 @@ fn build_observed_rules(
             observed_rules.push(lower_algebraic_body(
                 name,
                 eq.rhs.clone(),
-                &array_axes,
+                array_axes,
                 index_sets,
                 data_shaped_of(name),
             )?);
@@ -3194,7 +3203,7 @@ fn build_observed_rules(
             observed_rules.push(lower_algebraic_body(
                 name,
                 eq.rhs.clone(),
-                &array_axes,
+                array_axes,
                 index_sets,
                 data_shaped_of(name),
             )?);
@@ -3398,15 +3407,11 @@ fn build_rhs_rules(
     slots: &SlotTables,
     held_at_ic: &HashSet<String>,
     ops: &Instances,
+    array_axes: &HashMap<String, Vec<String>>,
 ) -> Result<Vec<RhsRule>, CompileError> {
     let var_shapes = &slots.var_shapes;
     let mut rhs_rules: Vec<RhsRule> = Vec::new();
     let mut covered_slots = SlotCoverage::new(slots.n_states);
-
-    // Declared index-set axis NAMES of every array-shaped variable (state /
-    // parameter / observed), used to lower a whole-array `D(state)` RHS into
-    // per-cell gathers that align each operand BY NAME (esm-spec §4.3.4).
-    let array_axes = declared_axis_names(model);
 
     for eq in &model.equations {
         if let Some(d) = extract_derivative_faq(&eq.lhs, &eq.rhs) {
@@ -3428,7 +3433,7 @@ fn build_rhs_rules(
                     var,
                     &eq.rhs,
                     model,
-                    &array_axes,
+                    array_axes,
                     var_shapes,
                     &mut covered_slots,
                     &mut rhs_rules,
@@ -5063,6 +5068,154 @@ pub(super) fn inline_region_aggregates(node: &ExpressionNode, loops: &[String]) 
     out
 }
 
+/// Put each `faq` an equation reads in elementwise position, or that is its
+/// whole right-hand side, over named index sets the target's do not match in
+/// order, in the target's frame: one output index per target index set, in the
+/// target's order, the producer's own where it ranges over that set and a fresh
+/// one otherwise. `k * faq_i(q[i])` with `i` over `lat`, in a `[lat, lon]`
+/// target, becomes `k * faq_{i,j}(q[i])` with `j` over `lon`: the same value
+/// replicated along `lon` (esm-spec §4.3.4, a producer over index sets aligns
+/// by their names), which reads positionally once range resolution has made
+/// every range an interval. A producer that names an index set the target lacks
+/// is [`CompileError::UnalignableArrayShape`], as a declared operand is; one
+/// that names an index set twice keeps its own frame.
+fn place_named_producers(model: &mut Model, shapes: &ShapeTable) -> Result<(), CompileError> {
+    for eq in &mut model.equations {
+        let target = match &eq.lhs {
+            Expr::Variable(name) => name,
+            Expr::Operator(d) if d.op == "D" && d.args.len() == 1 => match &d.args[0] {
+                Expr::Variable(name) => name,
+                _ => continue,
+            },
+            _ => continue,
+        };
+        let Some(axes) = shapes.axes(target).filter(|a| !a.is_empty()) else {
+            continue;
+        };
+        if (1..axes.len()).any(|d| axes[..d].contains(&axes[d])) {
+            continue;
+        }
+        let frame = Frame { target, axes };
+        let placed = match &eq.rhs {
+            Expr::Operator(node) if is_array_producer(node) => {
+                producer_in_frame(node, &frame)?.map(Expr::operator)
+            }
+            rhs => producers_in_frame(rhs, &frame)?,
+        };
+        if let Some(rhs) = placed {
+            eq.rhs = rhs;
+        }
+    }
+    Ok(())
+}
+
+/// The target a producer is placed for: its name, for a refusal, and its
+/// index sets.
+struct Frame<'a> {
+    target: &'a str,
+    axes: &'a [String],
+}
+
+/// `expr` with each producer [`place_named_producers`] places put in the
+/// target's frame, or `None` when none is.
+fn producers_in_frame(expr: &Expr, frame: &Frame) -> Result<Option<Expr>, CompileError> {
+    let Expr::Operator(node) = expr else {
+        return Ok(None);
+    };
+    if !crate::op_registry::is_elementwise_node(node) {
+        return Ok(None);
+    }
+    let mut args: Option<Vec<Expr>> = None;
+    for (k, arg) in node.args.iter().enumerate() {
+        let placed = match arg {
+            Expr::Operator(child) if is_array_producer(child) => {
+                producer_in_frame(child, frame)?.map(Expr::operator)
+            }
+            _ => producers_in_frame(arg, frame)?,
+        };
+        if let Some(placed) = placed {
+            args.get_or_insert_with(|| node.args.clone())[k] = placed;
+        }
+    }
+    let Some(args) = args else {
+        return Ok(None);
+    };
+    let mut out = ExpressionNode::clone(node);
+    out.args = args;
+    Ok(Some(Expr::operator(out)))
+}
+
+/// The `faq` `node` over its target's index sets (see
+/// [`place_named_producers`]), or `None` when it already is, or names no index
+/// sets to place it by.
+fn producer_in_frame(
+    node: &ExpressionNode,
+    frame: &Frame,
+) -> Result<Option<ExpressionNode>, CompileError> {
+    let axes = frame.axes;
+    if !is_faq_op(&node.op) {
+        return Ok(None);
+    }
+    let Some(sets) = crate::structural::producer_index_sets(node) else {
+        return Ok(None);
+    };
+    let Some(syms) = node.output_idx.as_ref() else {
+        return Ok(None);
+    };
+    if sets.as_slice() == axes || (1..sets.len()).any(|d| sets[..d].contains(&sets[d])) {
+        return Ok(None);
+    }
+    if let Some(foreign) = sets.iter().find(|s| !axes.contains(s)) {
+        return Err(CompileError::UnalignableArrayShape {
+            operand: format!("faq over [{}]", sets.join(", ")),
+            axis: foreign.clone(),
+            result: frame.target.to_string(),
+            result_axes: axes.to_vec(),
+        });
+    }
+    let mut used: HashSet<String> = HashSet::new();
+    names_bound_or_read(node, &mut used);
+    let mut out = node.clone();
+    let mut ranges = node.ranges.clone().unwrap_or_default();
+    let mut output_idx = Vec::with_capacity(axes.len());
+    for axis in axes {
+        if let Some(d) = sets.iter().position(|s| s == axis) {
+            output_idx.push(syms[d].clone());
+            continue;
+        }
+        let mut sym = format!("_{axis}");
+        while used.contains(&sym) {
+            sym.insert(0, '_');
+        }
+        used.insert(sym.clone());
+        ranges.insert(
+            sym.clone(),
+            crate::types::RangeSpec::IndexSetRef {
+                from: axis.clone(),
+                of: None,
+            },
+        );
+        output_idx.push(sym);
+    }
+    out.output_idx = Some(output_idx);
+    out.ranges = Some(ranges);
+    Ok(Some(out))
+}
+
+/// Every variable name `node` reads and every symbol a node in it binds
+/// (`output_idx`, `ranges` keys).
+fn names_bound_or_read(node: &ExpressionNode, out: &mut HashSet<String>) {
+    out.extend(node.output_idx.iter().flatten().cloned());
+    out.extend(node.ranges.iter().flat_map(|r| r.keys().cloned()));
+    node.for_each_child(&mut |c| match c {
+        Expr::Variable(name) => {
+            out.insert(name.clone());
+        }
+        Expr::Operator(child) => names_bound_or_read(child, out),
+        _ => {}
+    });
+}
+
 /// Declared index-set axis NAMES of every array-shaped variable — the ordered
 /// `shape` list (esm-spec §6.3), which names the index set each axis ranges
 /// over. [`resolve_declared_shape`] throws these names away in favour of
@@ -5080,6 +5233,31 @@ pub(super) fn declared_axis_names(model: &Model) -> HashMap<String, Vec<String>>
                 .map(|s| (k.clone(), s.clone()))
         })
         .collect()
+}
+
+/// Every variable's index-set axis names as the build has them: declared
+/// ([`declared_axis_names`]), or inferred from its bare definition (esm-spec
+/// §4.3.4, "An undeclared result takes the union"). An operand declared
+/// without a `shape` then aligns by the index sets its definition spans, and a
+/// result declared without one is looped over the union of its operands'. An
+/// inferred shape with an axis that is no index set of the document (a `faq`
+/// over inline intervals has anonymous axes) names nothing to align by, so the
+/// variable is left out and read positionally (esm-spec §4.3.4 rule 2).
+fn array_axis_names(
+    model: &Model,
+    shapes: &ShapeTable,
+    index_sets: &HashMap<String, IndexSet>,
+) -> HashMap<String, Vec<String>> {
+    let mut array_axes = declared_axis_names(model);
+    for name in model.variables.keys() {
+        if !array_axes.contains_key(name)
+            && let Some(axes) = shapes.axes(name)
+            && axes.iter().all(|a| index_sets.contains_key(a))
+        {
+            array_axes.insert(name.clone(), axes.to_vec());
+        }
+    }
+    array_axes
 }
 
 /// Where each array-shaped operand's axes sit in the RESULT's axis list.

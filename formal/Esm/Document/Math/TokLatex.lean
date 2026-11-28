@@ -229,6 +229,14 @@ theorem allOK_nameToks (c : Ctx) (hc : c.sf = .latex) (s : String) : AllOK (name
 
 /-! ## JSON -/
 
+/-- LaTeX sets no set name upright: a set prints as a name. -/
+theorem setToks_latex (c : Ctx) (hc : c.sf = .latex) (s : String) : setToks c s = nameToks c s := by
+  have hg : setSegToks c.sf = segToks c.sf := by funext g; simp [setSegToks, upSet, hc]
+  simp only [setToks, nameToks, hg]
+
+theorem allOK_setToks (c : Ctx) (hc : c.sf = .latex) (s : String) : AllOK (setToks c s) := by
+  rw [setToks_latex c hc s]; exact allOK_nameToks c hc s
+
 mutual
 theorem allOK_json : ∀ v : Json, jwf v = true → AllOK (jsonToks v)
   | .null, _ => by
@@ -369,11 +377,11 @@ theorem allOK_faqOut (c : Ctx) (hc : c.sf = .latex) (F : FaqForm) (P : Json → 
       have hN := allOK_nameToks c hc kv.1
       rw [hc]; aok
     · have hN := allOK_nameToks c hc kv.1
-      have hS := allOK_nameToks c hc ‹String›
+      have hS := allOK_setToks c hc ‹String›
       aok
     · rename_i s ps _
       have hN := allOK_nameToks c hc kv.1
-      have hS := allOK_nameToks c hc s
+      have hS := allOK_setToks c hc s
       have hL := allOK_sepBy [.kw .comma] (allOK_cons2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
         (allOK_map (fun (p : Json) => match p with | .str q => nameToks c q | _ => []) ps (fun p _ => by
           split

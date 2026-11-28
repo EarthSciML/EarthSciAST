@@ -116,8 +116,34 @@ function _def_tier(n::_Node, tier::Vector{Int8}, slot::Int, cache::_CSECache)::I
     k = n.kind
     if k === _NK_STATE
         return _TIER_DYNAMIC
-    elseif k === _NK_TIME || k === _NK_PARAM_GATHER
+    elseif k === _NK_TIME
         return _TIER_TIME
+    elseif k === _NK_PARAM_GATHER
+        # A lane program's lane buffers are per-call inputs, like the state
+        # (range_hooks.jl).
+        return _range_is_lane_buffer(_range_spec_now(), n.payload) ? _TIER_DYNAMIC : _TIER_TIME
+    elseif k === _NK_LIVE_GATHER &&
+            _range_is_lane_buffer(_range_spec_now(), (n.payload::_ConstGatherArray).flat)
+        return _TIER_DYNAMIC
+    elseif k === _NK_CALL
+        # A template call reads its array arguments as well as its children:
+        # a state array or a lane buffer makes it DYNAMIC, a live buffer at
+        # least TIME. A forwarded argument is only known at run time: fail
+        # closed.
+        tr = _TIER_CONST
+        spec = _range_spec_now()
+        for a in (n.payload::_CallSite).arrays
+            a.kind === :const && continue
+            a.kind === :live && a.data isa _ConstGatherArray || return _TIER_DYNAMIC
+            _range_is_lane_buffer(spec, (a.data::_ConstGatherArray).flat) && return _TIER_DYNAMIC
+            tr = _TIER_TIME
+        end
+        for c in n.children
+            tc = _def_tier(c, tier, slot, cache)
+            tc === _TIER_DYNAMIC && return _TIER_DYNAMIC
+            tc > tr && (tr = tc)
+        end
+        return tr
     elseif k === _NK_CACHED
         # THE TRAP (clause 2): a cache ref has no leaves of its own, so its cadence is
         # the cadence of the SLOT it reads — not `const` by default.

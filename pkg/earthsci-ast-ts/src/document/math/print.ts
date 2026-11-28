@@ -1313,6 +1313,26 @@ export function faqOk(f: FaqForm): boolean {
   )
 }
 
+/** `Math.upSet`: a segment of an index set's name prints upright in a Typst range row
+ * when it would otherwise print `italic("…")`. */
+export function upSet(sf: Sf, g: string): boolean {
+  return sf === 'typst' && segOk(g) && !isSingle(g) && subParts(g) === undefined && !isFormula(g)
+}
+
+/** `Math.setSegToks`: one segment of an index set's name. */
+export function setSegToks(sf: Sf, g: string): Tok[] {
+  return upSet(sf, g) ? [tUps([[g, '']])] : segToks(sf, g)
+}
+
+/** `Math.setToks`: the tokens of an index set's name in a range row. */
+export function setToks(c: Ctx, s: string): Tok[] {
+  if (explicitName(c.s, s)) return [tIt(s)]
+  return sepBy(
+    [kw('Sdot')],
+    splitDots(s).map((g) => setSegToks(c.sf, g)),
+  )
+}
+
 /** `Math.rowToks`: a range row: `a \le k \le b`, `k \in S`, `k \in S(i, j)`. */
 export function rowToks(c: Ctx, k: string, v: Json): Tok[] {
   if (v.t === 'arr') {
@@ -1322,7 +1342,7 @@ export function rowToks(c: Ctx, k: string, v: Json): Tok[] {
   if (v.t !== 'obj') return []
   const kvs = v.kvs
   if (kvs.length === 1 && kvs[0][0] === 'from' && kvs[0][1].t === 'str') {
-    return cat(nameToks(c, k), [kw('Inn')], nameToks(c, kvs[0][1].s))
+    return cat(nameToks(c, k), [kw('Inn')], setToks(c, kvs[0][1].s))
   }
   if (kvs.length === 2) {
     const [[f, s], [o, ps]] = kvs
@@ -1330,7 +1350,7 @@ export function rowToks(c: Ctx, k: string, v: Json): Tok[] {
       return cat(
         nameToks(c, k),
         [kw('Inn')],
-        nameToks(c, s.s),
+        setToks(c, s.s),
         [kw('Lp')],
         sepBy(
           COMMA,

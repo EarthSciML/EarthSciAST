@@ -1,0 +1,135 @@
+{
+  "properties": [
+    {
+      "id": "P-shaped-gather-per-axis-bounds-fault",
+      "clauses": ["conf.5.5.5.gather-boundary-agree", "conf.5.5.5.taken-read-faults"],
+      "statement": "With the default error policy, an invalid one-based subscript on any selected axis of a rectangular gather faults, regardless of the storage contents or flattened offset.",
+      "lean_statement": "∀ {α : Type} (dims : List Nat) (cells : List (Esm.Expr.Val α)) (subscripts : List Int), subscripts.length ≤ dims.length → (¬ List.Forall₂ (fun (n : Nat) (i : Int) => 1 ≤ i ∧ i ≤ (n : Int)) (dims.take subscripts.length) subscripts) → Esm.Expr.indexCell (.shaped dims cells) subscripts = .error .outOfRange",
+      "status": "proven",
+      "theorem": "Esm.Expr.indexCell_shaped_outOfRange"
+    },
+    {
+      "id": "P-literal-and-named-constant-gather",
+      "clauses": ["conf.5.5.5.gather-boundary-agree"],
+      "statement": "A gather whose base is a literal constant has the same result or error when the base is spelled as a name resolved to the identical constant value.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (name : String) (constant : Esm.Expr.Const) (args : List Esm.Expr.Ast) (value : Esm.Expr.Val α), Esm.Expr.constVal constant = .ok value → env.lookup name = some value → Esm.Expr.eval (.node \"index\" (.const constant :: args)) env = Esm.Expr.eval (.node \"index\" (.var name :: args)) env",
+      "status": "proven",
+      "theorem": "Esm.Expr.eval_index_constant_spelling"
+    },
+    {
+      "id": "P-literal-vector-gather-bounds-fault",
+      "clauses": ["conf.5.5.5.gather-boundary-agree", "conf.5.5.5.taken-read-faults"],
+      "statement": "A literal vector's one-based gather faults outside its extent.",
+      "lean_statement": "∀ {α : Type} (cells : List α) (i : Int), (¬ (1 ≤ i ∧ i ≤ (cells.length : Int))) → Esm.Expr.indexVal (.arr1 cells) [i] = .error .outOfRange",
+      "status": "proven",
+      "theorem": "Esm.Expr.indexVal_literal_vector_outOfRange"
+    },
+    {
+      "id": "P-literal-matrix-gather-bounds-fault",
+      "clauses": ["conf.5.5.5.gather-boundary-agree", "conf.5.5.5.taken-read-faults"],
+      "statement": "An out-of-range subscript on either axis of a rectangular literal matrix raises the bounds fault.",
+      "lean_statement": "∀ {α : Type} (rows : List (List α)) (width : Nat) (i j : Int), (∀ row ∈ rows, row.length = width) → (¬ ((1 ≤ i ∧ i ≤ (rows.length : Int)) ∧ (1 ≤ j ∧ j ≤ (width : Int)))) → Esm.Expr.indexVal (.arr2 rows) [i, j] = .error .outOfRange",
+      "status": "proven",
+      "theorem": "Esm.Expr.indexVal_literal_matrix_outOfRange"
+    },
+    {
+      "id": "P-literal-tensor-gather-bounds-fault",
+      "clauses": ["conf.5.5.5.gather-boundary-agree", "conf.5.5.5.taken-read-faults"],
+      "statement": "An out-of-range subscript on any axis of a rectangular rank-three literal raises the bounds fault.",
+      "lean_statement": "∀ {α : Type} (planes : List (List (List α))) (height width : Nat) (i j k : Int), (∀ plane ∈ planes, plane.length = height ∧ ∀ row ∈ plane, row.length = width) → (¬ ((1 ≤ i ∧ i ≤ (planes.length : Int)) ∧ ((1 ≤ j ∧ j ≤ (height : Int)) ∧ (1 ≤ k ∧ k ≤ (width : Int))))) → Esm.Expr.indexVal (.arr3 planes) [i, j, k] = .error .outOfRange",
+      "status": "proven",
+      "theorem": "Esm.Expr.indexVal_literal_tensor_outOfRange"
+    },
+    {
+      "id": "P-unbound-name-whole-or-per-cell",
+      "clauses": ["conf.5.23.unbound-name-is-fault"],
+      "statement": "An unresolved variable raises the named fault in both whole-expression and per-cell evaluation.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (name : String) (ix : List Nat), env.lookup name = none → Esm.Expr.eval (.var name) env = .error (.unbound name) ∧ Esm.Expr.evalCell (.var name) env ix = .error (.unbound name)",
+      "status": "proven",
+      "theorem": "Esm.Expr.unbound_var_fault"
+    },
+    {
+      "id": "P-unbound-strict-operand-aborts-evaluation",
+      "clauses": ["conf.5.23.unbound-name-is-fault"],
+      "statement": "If earlier strict operands evaluate successfully, an unbound variable in any remaining operand position aborts the expression with the corresponding named fault.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (op name : String) (strict : Esm.Expr.StrictOp) (before after : List Esm.Expr.Ast) (values : List (Esm.Expr.Val α)), Esm.Expr.Op.ofString op = .strict strict → Esm.Expr.evalList before env = .ok values → env.lookup name = none → Esm.Expr.eval (.node op (before ++ .var name :: after)) env = .error (.unbound name)",
+      "status": "proven",
+      "theorem": "Esm.Expr.eval_strict_unbound_operand"
+    },
+    {
+      "id": "P-unbound-strict-cell-operand-aborts-evaluation",
+      "clauses": ["conf.5.23.unbound-name-is-fault"],
+      "statement": "In a strict elementwise expression at a coordinate, the first unresolved variable after successful earlier operands faults with that name.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (op name : String) (strict : Esm.Expr.StrictOp) (before after : List Esm.Expr.Ast) (values : List (Esm.Expr.Val α)) (ix : List Nat), strict ≠ .index → Esm.Expr.Op.ofString op = .strict strict → Esm.Expr.evalCellList before env ix = .ok values → env.lookup name = none → Esm.Expr.evalCell (.node op (before ++ .var name :: after)) env ix = .error (.unbound name)",
+      "status": "proven",
+      "theorem": "Esm.Expr.evalCell_strict_unbound_operand"
+    },
+    {
+      "id": "P-scalar-value-broadcasts-at-every-coordinate",
+      "clauses": ["conf.5.29.gather-distributes-to-leaves"],
+      "statement": "A resolved scalar operand contributes that scalar at every result coordinate.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (name : String) (value : α) (ix : List Nat), env.lookup name = some (.num value) → Esm.Expr.evalCell (.var name) env ix = .ok (.num value)",
+      "status": "proven",
+      "theorem": "Esm.Expr.evalCell_scalar_variable"
+    },
+    {
+      "id": "P-elementwise-cell-reaches-operands",
+      "clauses": ["conf.5.29.gather-distributes-to-leaves"],
+      "statement": "At a selected coordinate, strict elementwise evaluation applies the primitive to the recursively selected cells of its operands.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (op : String) (args : List Esm.Expr.Ast) (strict : Esm.Expr.StrictOp) (ix : List Nat), strict ≠ .index → Esm.Expr.Op.ofString op = .strict strict → Esm.Expr.evalCell (.node op args) env ix = ((args.mapM (fun arg => Esm.Expr.evalCell arg env ix)) >>= Esm.Expr.applyCell strict)",
+      "status": "proven",
+      "theorem": "Esm.Expr.evalCell_strict_operands"
+    },
+    {
+      "id": "P-gather-materialized-broadcast-cell",
+      "clauses": ["conf.5.29.gather-distributes-to-leaves"],
+      "statement": "The checked gather of a materialized broadcast reads the result of applying the operation to that coordinate's broadcast operands.",
+      "lean_statement": "∀ {α : Type} (apply : List (Esm.Expr.Val α) → Except Esm.Expr.EvalError (Esm.Expr.Val α)) (operands : List (Esm.Expr.ArrayData (Esm.Expr.Val α))) (result : Esm.Expr.ArrayData (Esm.Expr.Val α)) (ix : List Nat), Esm.Expr.ArrayData.broadcast apply .shapeMismatch operands = .ok result → List.Forall₂ (fun n i : Nat => i < n) result.dims ix → Esm.Expr.indexCell (.shaped result.dims result.cells) (Esm.Expr.oneBased ix) = Esm.Expr.ArrayData.broadcastCell apply .shapeMismatch operands ix",
+      "status": "proven",
+      "theorem": "Esm.Expr.indexCell_broadcast"
+    },
+    {
+      "id": "P-full-elementwise-gather-reads-selected-cell",
+      "clauses": ["conf.5.29.gather-distributes-to-leaves", "conf.5.5.5.untaken-read-no-fault"],
+      "statement": "A complete gather of an elementwise expression with inferred extents returns the per-cell evaluator's result at the selected in-range coordinate.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (base : Esm.Expr.Ast) (args : List Esm.Expr.Ast) (dims ix : List Nat) (values : List (Esm.Expr.Val α)), Esm.Expr.isElementwiseGatherBase base = true → Esm.Expr.expressionDims base env (forGather := true) = .ok (some dims) → dims ≠ [] → dims.length = args.length → Esm.Expr.evalList args env = .ok values → Esm.Expr.gatherSubscripts values = .ok (Esm.Expr.oneBased ix) → List.Forall₂ (fun n i : Nat => i < n) dims ix → Esm.Expr.eval (.node \"index\" (base :: args)) env = Esm.Expr.evalCell base env ix",
+      "status": "proven",
+      "theorem": "Esm.Expr.eval_index_elementwise_cell"
+    },
+    {
+      "id": "P-full-elementwise-gather-checks-every-axis",
+      "clauses": ["conf.5.29.gather-distributes-to-leaves", "conf.5.5.5.gather-boundary-agree"],
+      "statement": "A complete gather of an elementwise expression detects an out-of-range subscript on any axis before evaluating the selected cell.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (base : Esm.Expr.Ast) (args : List Esm.Expr.Ast) (dims : List Nat) (values : List (Esm.Expr.Val α)) (indices : List Int), Esm.Expr.isElementwiseGatherBase base = true → Esm.Expr.expressionDims base env (forGather := true) = .ok (some dims) → dims ≠ [] → dims.length = args.length → Esm.Expr.evalList args env = .ok values → Esm.Expr.gatherSubscripts values = .ok indices → dims.length = indices.length → (¬ List.Forall₂ (fun (n : Nat) (i : Int) => 1 ≤ i ∧ i ≤ (n : Int)) dims indices) → Esm.Expr.eval (.node \"index\" (base :: args)) env = .error .outOfRange",
+      "status": "proven",
+      "theorem": "Esm.Expr.eval_index_elementwise_outOfRange"
+    },
+    {
+      "id": "P-scalar-ifelse-evaluates-selected-branch",
+      "clauses": ["conf.5.5.5.untaken-read-no-fault", "conf.5.5.5.taken-read-faults"],
+      "statement": "After resolving a scalar condition, whole-expression ifelse evaluates only its selected branch, returning that branch's result or fault.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (condition yes no : Esm.Expr.Ast) (value : α), Esm.Expr.eval condition env = .ok (.num value) → Esm.Expr.eval (.node \"ifelse\" [condition, yes, no]) env = (if Esm.Expr.truthy value then Esm.Expr.eval yes env else Esm.Expr.eval no env)",
+      "status": "proven",
+      "theorem": "Esm.Expr.eval_ifelse_selected_branch"
+    },
+    {
+      "id": "P-cell-ifelse-evaluates-selected-branch",
+      "clauses": ["conf.5.5.5.untaken-read-no-fault", "conf.5.5.5.taken-read-faults"],
+      "statement": "After resolving the condition at a coordinate, per-cell ifelse evaluates and returns only the selected branch at that coordinate.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (condition yes no : Esm.Expr.Ast) (ix : List Nat) (value : α), Esm.Expr.evalCell condition env ix = .ok (.num value) → Esm.Expr.evalCell (.node \"ifelse\" [condition, yes, no]) env ix = (if Esm.Expr.truthy value then Esm.Expr.evalCell yes env ix else Esm.Expr.evalCell no env ix)",
+      "status": "proven",
+      "theorem": "Esm.Expr.evalCell_ifelse_selected_branch"
+    }
+  ],
+  "superseded_properties": [
+    {
+      "id": "P-gather-after-successful-broadcast",
+      "clauses": ["conf.5.29.gather-distributes-to-leaves"],
+      "statement": "Gathering an in-range coordinate from a successfully evaluated elementwise array gives the primitive applied to that coordinate's broadcast operands.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] [Esm.Expr.Elem α] (env : Esm.Expr.Env α) (base : Esm.Expr.Ast) (args : List Esm.Expr.Ast) (values : List (Esm.Expr.Val α)) (op : Esm.Expr.StrictOp) (operands : List (Esm.Expr.ArrayData (Esm.Expr.Val α))) (result : Esm.Expr.ArrayData (Esm.Expr.Val α)) (ix : List Nat), Esm.Expr.ArrayData.broadcast (Esm.Expr.applyCell op) .shapeMismatch operands = .ok result → Esm.Expr.eval base env = .ok (.shaped result.dims result.cells) → Esm.Expr.evalList args env = .ok values → values.mapM (fun v => do Esm.Expr.asInt (← Esm.Expr.asNum v)) = .ok (Esm.Expr.oneBased ix) → List.Forall₂ (fun n i : Nat => i < n) result.dims ix → Esm.Expr.eval (.node \"index\" (base :: args)) env = Esm.Expr.ArrayData.broadcastCell (Esm.Expr.applyCell op) .shapeMismatch operands ix",
+      "previous_theorem": "Esm.Expr.eval_index_materialized_broadcast",
+      "superseded_by": ["P-gather-materialized-broadcast-cell", "P-full-elementwise-gather-reads-selected-cell", "P-full-elementwise-gather-checks-every-axis"],
+      "reason": "Full elementwise gathers no longer materialize their base. The replacement laws separately cover committed array storage and selection through the elementwise AST, including when a different output cell would fault."
+    }
+  ]
+}

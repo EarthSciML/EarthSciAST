@@ -1,0 +1,16 @@
+{
+  "id": "nested_typed_arithmetic",
+  "description": "Mixed numeric literals in nested sums and products exercise recursive flattening, ordering, identity elimination, and zero annihilation.",
+  "input": {
+    "op": "+",
+    "args": [
+      "y",
+      {"op": "+", "args": [0, -2.5, "x"]},
+      {"op": "*", "args": [{"op": "*", "args": ["u", 3]}, 1, "z"]},
+      {"op": "*", "args": ["w", 0]},
+      {"op": "+", "args": [-0.5, 2.5]}
+    ]
+  },
+  "expected": "{\"args\":[-2.5,-0.5,2.5,\"x\",\"y\",{\"args\":[3,\"u\",\"z\"],\"op\":\"*\"}],\"op\":\"+\"}",
+  "tags": ["flatten", "ordering", "zero_elim", "float", "integer"]
+}

@@ -1,0 +1,18 @@
+{
+  "esm": "2.4.0",
+  "metadata": {"name": "SymbolicGrid"},
+  "metaparameters": {"N": {"type": "integer", "default": 3}},
+  "index_sets": {"cells": {"kind": "interval", "size": "N"}},
+  "operators": {
+    "extent": {
+      "params": [],
+      "body": {"op": "faq", "args": [], "output_idx": [], "ranges": {"i": [1, "N"]}, "expr": 1}
+    },
+    "measure_width": {
+      "params": ["p"],
+      "match": {"op": "measure", "args": ["p"]},
+      "where": {"p": {"shape": ["cells"]}},
+      "body": 17
+    }
+  }
+}

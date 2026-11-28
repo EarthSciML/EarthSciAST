@@ -1006,6 +1006,30 @@ def faq_ok(f: FaqForm) -> bool:
     return True
 
 
+def up_set(sf: str, g: str) -> bool:
+    """``Math.upSet``: a segment of an index set's name prints upright in a Typst
+    range row when it would otherwise print ``italic("…")``."""
+    return (
+        sf == K.TYPST
+        and seg_ok(g)
+        and not is_single(g)
+        and sub_parts(g) is None
+        and not is_formula(g)
+    )
+
+
+def set_seg_toks(sf: str, g: str) -> list:
+    """``Math.setSegToks``: one segment of an index set's name."""
+    return [("ups", ((g, ""),))] if up_set(sf, g) else seg_toks(sf, g)
+
+
+def set_toks(c: Ctx, s: str) -> list:
+    """``Math.setToks``: the tokens of an index set's name in a range row."""
+    if explicit_name(c.s, s):
+        return [("it", s)]
+    return sep_by([K.SDOT], [set_seg_toks(c.sf, g) for g in s.split(".")])
+
+
 def row_toks(c: Ctx, k: str, v: Any) -> list:
     """``Math.rowToks``: ``a \\le k \\le b``, ``k \\in S``, ``k \\in S(i, j)``."""
     t = type(v)
@@ -1013,7 +1037,7 @@ def row_toks(c: Ctx, k: str, v: Any) -> list:
         return [*pa(c, 4, v[0]), K.LE, *name_toks(c, k), K.LE, *pa(c, 4, v[1])]
     if t is Obj:
         if len(v) == 1 and v[0][0] == "from" and type(v[0][1]) is str:
-            return [*name_toks(c, k), K.INN, *name_toks(c, v[0][1])]
+            return [*name_toks(c, k), K.INN, *set_toks(c, v[0][1])]
         if (
             len(v) == 2
             and v[0][0] == "from"
@@ -1025,7 +1049,7 @@ def row_toks(c: Ctx, k: str, v: Any) -> list:
             return [
                 *name_toks(c, k),
                 K.INN,
-                *name_toks(c, v[0][1]),
+                *set_toks(c, v[0][1]),
                 K.LP,
                 *sep_by([K.COMMA], ps),
                 K.RP,

@@ -1058,6 +1058,20 @@ function faq_ok(f::FaqForm)
     end
 end
 
+"""`Math.upSet`: a segment of an index set's name prints upright in a Typst range
+row when it would otherwise print `italic("…")`."""
+up_set(sf::Sf, g) = sf == SF_TYPST && seg_ok(g) && !is_single(g) && sub_parts(g) === nothing &&
+    !is_formula(g)
+
+"""`Math.setSegToks`: one segment of an index set's name."""
+set_seg_toks(sf::Sf, g) = up_set(sf, g) ? Tok[TUps([(s_of(g), "")])] : seg_toks(sf, g)
+
+"""`Math.setToks`: the tokens of an index set's name in a range row."""
+function set_toks(c::Ctx, s::AbstractString)
+    explicit_name(c.s, s) && return Tok[TIt(String(s))]
+    return sep_by((kw(KSdot),), [set_seg_toks(c.sf, g) for g in split_dots(collect(Char, s))])
+end
+
 """`Math.rowToks`: a range row: `a \\le k \\le b`, `k \\in S`, `k \\in S(i, j)`."""
 function row_toks(c::Ctx, k::AbstractString, v)
     if v isa JArr && length(v.xs) == 2
@@ -1065,11 +1079,11 @@ function row_toks(c::Ctx, k::AbstractString, v)
     elseif v isa JObj
         kvs = v.kvs
         if length(kvs) == 1 && kvs[1].first == "from" && kvs[1].second isa String
-            return tc(name_toks(c, k), (kw(KInn),), name_toks(c, kvs[1].second))
+            return tc(name_toks(c, k), (kw(KInn),), set_toks(c, kvs[1].second))
         elseif length(kvs) == 2 && kvs[1].first == "from" && kvs[1].second isa String &&
                 kvs[2].first == "of" && kvs[2].second isa JArr
             return tc(
-                name_toks(c, k), (kw(KInn),), name_toks(c, kvs[1].second), (kw(KLp),),
+                name_toks(c, k), (kw(KInn),), set_toks(c, kvs[1].second), (kw(KLp),),
                 sep_by(
                     (kw(KComma),),
                     [p isa String ? name_toks(c, p) : Tok[] for p in kvs[2].second.xs]

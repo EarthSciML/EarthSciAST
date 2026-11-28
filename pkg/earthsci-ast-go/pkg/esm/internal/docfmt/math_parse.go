@@ -1864,6 +1864,37 @@ func psPEulerExp(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 	return prNode("exp", []Json{y}), r, true
 }
 
+// psPSetSeg is `Math.pSetSeg`: one segment of an index set's name: an upright
+// word `upSet` sets upright, or a name segment.
+func psPSetSeg(sf Sf, ts []Tok) ([]rune, []Tok, bool) {
+	if len(ts) > 0 && ts[0].K == TUps && len(ts[0].Ups) == 1 && ts[0].Ups[0].B == "" {
+		if g := []rune(ts[0].Ups[0].A); prUpSet(sf, g) {
+			return g, ts[1:], true
+		}
+	}
+	return psPSeg(sf, ts)
+}
+
+// psPSet is `Math.pSet`: an index set's name, its segments joined by the scope
+// dot.
+func psPSet(sf Sf, ts []Tok) (string, []Tok, bool) {
+	acc, r, ok := psPSetSeg(sf, ts)
+	if !ok {
+		return "", nil, false
+	}
+	acc = append([]rune(nil), acc...)
+	for len(r) > 0 && r[0].isKw(KwSdot) {
+		g, r2, ok := psPSetSeg(sf, r[1:])
+		if !ok {
+			return "", nil, false
+		}
+		acc = append(acc, '.')
+		acc = append(acc, g...)
+		r = r2
+	}
+	return string(acc), r, true
+}
+
 // psPRange is `Math.pRange`: a range row: `k \in S`, `k \in S(i, j)`,
 // `a \le k \le b`.
 func psPRange(c Ctx, f int, ts []Tok) (Row, []Tok, bool) {
@@ -1876,7 +1907,7 @@ func psPRange(c Ctx, f int, ts []Tok) (Row, []Tok, bool) {
 		return Row{}, nil, false
 	}
 	if k, isStr := x.(string); isStr && at(r, 0, KwInn) {
-		s, r2, ok := psPName(c.sf, r[1:])
+		s, r2, ok := psPSet(c.sf, r[1:])
 		if !ok {
 			return Row{}, nil, false
 		}

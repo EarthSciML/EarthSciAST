@@ -470,10 +470,15 @@ end
 #     replaced by that observed's published body when the build has one, and
 #     otherwise — the same deadness, one level down — by ITS authored body,
 #     resolved recursively. A name the build materialized into a const array is
-#     left alone: the buffer is the cheaper and more faithful answer.
+#     left alone: the buffer is the cheaper and more faithful answer. A name
+#     with index sets is replaced after step 2, so the lift gathers its
+#     producer by them (a published body ranges over resolved extents, which
+#     name none); a name with none is replaced before, so the lift gathers the
+#     producer itself positionally.
 #  2. PER-CELL LIFT. The authored body is a WHOLE-ARRAY expression (`2 * u`),
 #     while `evaluate_cellwise` walks one output cell at a time. Wrapping it in
-#     a `faq` over the declared shape — through the same
+#     a `faq` over the variable's shape — declared, or inferred from its bare
+#     definition (esm-spec §4.3.4) — through the same
 #     `_index_array_leaves` the build's own promotion uses, with §4.3.4 name
 #     alignment — is exactly the form the published map would have carried, and
 #     its ranges are the extents already resolved for the cell enumeration, so
@@ -499,6 +504,7 @@ function _authored_observed_body(
         mname::AbstractString, variable::AbstractString,
         exts::Vector{Int},
         chain::Vector{String} = String[];
+        shape::Union{Nothing, Vector{String}} = nothing,
         state_arrays::AbstractDict = Dict{String, Any}(),
         state_scalars::AbstractDict = Dict{String, Float64}()
     )
@@ -508,15 +514,10 @@ function _authored_observed_body(
     body === nothing && return nothing
 
     observed_here = Set{String}(observed_unknowns(model))
-    var_shapes = Dict{String, Vector{String}}()
-    for (n, mv) in model.variables
-        mv.shape === nothing && continue
-        var_shapes[String(n)] = String[String(x) for x in mv.shape]
-    end
-    arrayvars = Set{String}(
-        String(n) for (n, mv) in model.variables
-            if _is_array_shape(mv.shape)
-    )
+    var_shapes = _model_var_shapes(model)
+    # The shape `exts` was resolved from, when the caller had it from the build.
+    shape === nothing || (var_shapes[String(variable)] = shape)
+    arrayvars = Set{String}(n for (n, sh) in var_shapes if !isempty(sh))
 
     # (1) Resolve the other observeds this body names.
     subs = Dict{String, ASTExpr}()
@@ -527,10 +528,8 @@ function _authored_observed_body(
         _const_array_key(insp, mname, name) === nothing || continue
         producer = get(insp.observed_exprs, qual, get(insp.observed_exprs, name, nothing))
         if producer === nothing
-            nested = get(model.variables, name, nothing)
-            nested === nothing && continue
-            nshape = nested.shape === nothing ? String[] : nested.shape
-            nexts = _shape_extents(insp, file, nshape)
+            haskey(model.variables, name) || continue
+            nexts = _shape_extents(insp, file, get(var_shapes, name, String[]))
             producer = nexts === nothing ? nothing :
                 _authored_observed_body(
                     insp, file, model, mname, name, nexts, chain;
@@ -540,19 +539,29 @@ function _authored_observed_body(
         end
         producer === nothing || (subs[name] = producer)
     end
-    isempty(subs) || (body = substitute(body, subs))
+    # A producer whose name has no index sets (a `makearray`, a shape op, a
+    # `faq` over inline intervals) is not gathered by name, so it goes in
+    # before the lift, which gathers the producer node itself positionally.
+    # One whose name has index sets goes in after, so the lift gathers it by
+    # them (a published body ranges over resolved extents, which name none).
+    early = filter(kv -> !(first(kv) in arrayvars), subs)
+    isempty(early) || (body = substitute(body, early))
+    filter!(kv -> first(kv) in arrayvars, subs)
 
     # (2) Lift the whole-array body to the per-cell `faq` form — through the
     # BUILD'S OWN `_lift_to_faq` (shape_promotion.jl), with the resolved
     # extents as ranges. Sharing it is the point: the `_p<k>` loop convention
     # and the §4.3.4 alignment then cannot drift from the promotion that minted
-    # the published bodies this one stands in for.
+    # the published bodies this one stands in for. The lift reads each named
+    # producer while it is still a name, so it is gathered by the index sets
+    # that name has; the producers resolved above take its place after.
     if !isempty(exts)
         body = _lift_to_faq(
             body, get(var_shapes, String(variable), String[]),
             arrayvars, var_shapes; bounds = exts
         )
     end
+    isempty(subs) || (body = substitute(body, subs))
 
     # (3) Rewrite bare operand names into the build's flattened scope.
     renames = Dict{String, ASTExpr}()
@@ -652,9 +661,10 @@ function _observed_field(
     model isa Model || return nothing
     v = get(model.variables, String(variable), nothing)
     (v !== nothing && String(variable) in observed_unknowns(model)) || return nothing
-    exts = _shape_extents(insp, file, v.shape === nothing ? String[] : v.shape)
+    shape = _observed_shape(model, v, ctx, mname, variable)
+    exts = _shape_extents(insp, file, shape)
     exts === nothing && return nothing
-    r = _ObservedRead(insp, file, model, mname, variable, exts, ctx, u, t, var_map, p)
+    r = _ObservedRead(insp, file, model, mname, variable, shape, exts, ctx, u, t, var_map, p)
     return _with_build_calls(insp) do
         for route in _OBSERVED_ROUTES
             got = route(r)
@@ -662,6 +672,37 @@ function _observed_field(
         end
         nothing
     end
+end
+
+# The index sets of variable `variable` (declared as `v`) of the component
+# `model` at `mname`: those it declares, else those the build gave it, else
+# those its bare definition spans in `model` alone. A variable declared without
+# a `shape` and defined by a bare equation has the shape its defining
+# expression has (esm-spec §4.3.4), which shape promotion wrote onto the
+# build's variable; without a build context the same inference is run here.
+function _observed_shape(
+        model::Model, v::ModelVariable, ctx, mname::AbstractString, variable::AbstractString
+    )::Vector{String}
+    v.shape === nothing || return String[String(x) for x in v.shape]
+    if ctx isa _ObsProgramCtx
+        for n in (String(mname) * "." * String(variable), occursin('.', mname) ? nothing : String(variable))
+            n === nothing && continue
+            bv = get(ctx.model.variables, n, nothing)
+            (bv === nothing || bv.shape === nothing) || return bv.shape
+        end
+    end
+    return get(_model_var_shapes(model), String(variable), String[])
+end
+
+# Every variable of `model` with its index sets: declared, else inferred from
+# its bare definition as shape promotion infers it (esm-spec §4.3.4).
+function _model_var_shapes(model::Model)::Dict{String, Vector{String}}
+    var_shapes = Dict{String, Vector{String}}()
+    for (n, mv) in model.variables
+        mv.shape === nothing && continue
+        var_shapes[String(n)] = String[String(x) for x in mv.shape]
+    end
+    return _infer_shapes!(var_shapes, _bare_definitions(model.equations), nothing)
 end
 
 # One `_observed_field` request, as its routes read it.
@@ -676,6 +717,8 @@ mutable struct _ObservedRead
     # observed; `nothing` under a scoped (dotted) component path, where a hit
     # under the bare name would belong to a different component.
     const bare::Union{Nothing, String}
+    # Its index sets (`_observed_shape`) and their extents.
+    const shape::Vector{String}
     const exts::Vector{Int}
     const ctx::Any
     const u::Union{Nothing, AbstractVector}
@@ -691,11 +734,11 @@ mutable struct _ObservedRead
     scope::Union{Nothing, Tuple{Dict{String, Any}, Dict{String, Float64}}}
 end
 
-function _ObservedRead(insp, file, model, mname, variable, exts, ctx, u, t, var_map, p)
+function _ObservedRead(insp, file, model, mname, variable, shape, exts, ctx, u, t, var_map, p)
     mname, variable = String(mname), String(variable)
     return _ObservedRead(
         insp, file, model, mname, variable, mname * "." * variable,
-        occursin('.', mname) ? nothing : variable, exts, ctx, u,
+        occursin('.', mname) ? nothing : variable, shape, exts, ctx, u,
         t === nothing ? 0.0 : Float64(t), t !== nothing, var_map, p,
         _array_cascade_on(), nothing
     )
@@ -789,7 +832,7 @@ function _route_definition(r::_ObservedRead)
     if expr === nothing
         expr = _authored_observed_body(
             insp, r.file, r.model, r.mname, r.variable, r.exts;
-            state_arrays = arrays, state_scalars = scalars
+            shape = r.shape, state_arrays = arrays, state_scalars = scalars
         )
         expr === nothing && return nothing
     end

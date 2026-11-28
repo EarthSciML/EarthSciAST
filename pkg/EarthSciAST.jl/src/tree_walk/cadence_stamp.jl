@@ -169,9 +169,21 @@ _stamp_eltype(::typeof(_pprimal), ::Type) = nothing
 # leaves every other build's memoized values alone. A program workspace
 # (rhs_program.jl) gets epochs of its own and bumps them when its forcing set
 # changes.
+#
+# `announced` says whether every writer of the build's live buffers announces
+# its writes. Only then may a value that reads forcing but not `t` (the
+# forcing-cadence observeds, rhs_assembly.jl) be kept across a new `t`;
+# otherwise it is refilled whenever `t` moves too, so a write nobody announced
+# (a `build_refresh_callback` with `owner = nothing`) is seen at the next new
+# `t`. It is set for a program workspace (its buffers are loaded from forcing
+# sets, which bump its epochs), for a Problem whose live buffers are all its
+# own providers' (written by its own announcing callback), and for the owner a
+# caller gives `build_refresh_callback` (`_declare_announced!`).
 mutable struct _ForcingEpoch
     n::UInt64
+    announced::Bool
 end
+_ForcingEpoch(n::UInt64) = _ForcingEpoch(n, false)
 _new_forcing_epoch() = _ForcingEpoch(UInt64(0))
 Base.getindex(e::_ForcingEpoch) = e.n
 Base.setindex!(e::_ForcingEpoch, v) = (e.n = UInt64(v); e)

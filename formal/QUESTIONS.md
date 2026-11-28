@@ -133,6 +133,13 @@ with a pending question among its own clauses.
 - Problem: Does not say whether a document that does write an identity is invalid (rejected) or the field is ignored, so the verdict on such a document is unspecified.
 - Ruling: (pending)
 
+## Q-114 CONFORMANCE_SPEC.md §5.6.1: max_product carrier and domain policy
+- Clauses: `conf.5.6.identities-not-in-file`, `conf.5.6.3.empty-reduction-registry-identity`
+- Phase: 2
+- Found by: exact registry model (`Esm/Semiring/Laws.lean`).
+- Problem: The stated domain ℝ≥0 excludes −∞, the required empty reduction. Adjoining −∞ and making it absorb the abstract semiring product gives a closed algebra. The author writes multiplication as an ordinary numeric Expression (§4.8.3), where in binary64 multiplying an empty result of −∞ by zero gives NaN. The table also does not specify a validation or runtime verdict for a negative term. Ordinary multiplication over signed reals fails distributivity over max: with factors −1, 0 and 1, the two sides are −1 and 0.
+- Ruling: The exact carrier is the nonnegative reals with an abstract absorbing bottom. At runtime the semiring selects max with an empty result of −∞, and negative values are permitted. An authored product uses the ordinary numeric multiplication rules, including NaN for binary64 zero times an infinite value. The exact distributive law applies only on the exact carrier.
+
 ## Q-18 CONFORMANCE_SPEC.md §7.1: unresolved order not unbound
 - Clauses: `conf.7.1.unresolved-order-not-unbound`
 - Phase: 2
@@ -161,6 +168,13 @@ with a pending question among its own clauses.
 - Problem: 'parse_expression is the inverse of to_ascii' cannot hold for all trees: §4.1.1 itself says a parser flattens `a + (b + c)` into one n-ary `+` (so a nested `+` tree does not round-trip), and a `-` before a numeric literal is read as part of the literal (so a unary-minus node on a literal does not round-trip); the class of trees on which it is an inverse is not stated.
 - Ruling: moot. The §4.1.1 text surface (`to_ascii` / `parse_expression`) was retired; an expression is written as text only as document math, whose round trip the Lean model proves (`Esm.Document.Math.*`).
 
+## Q-115 Discretization RFC §5.4.4: products with different zero literals
+- Clauses: `docs/content/rfcs/discretization.md` §5.4.4
+- Phase: 2
+- Found by: Lean expression canonicalizer
+- Problem: Zero annihilation preserves the type and sign of the zero. A product such as `{"op":"*","args":[0,-0.0]}` has two zero operands with different type and sign. The rule does not choose which representation to emit.
+- Ruling: Preserve the first literal zero in left-to-right order after recursively canonicalizing and flattening the operands, matching the bindings. When the zeros have different kinds or signs their permutation can change the canonical bytes.
+
 ## Q-24 esm-spec.md §4.2: structural d unary
 - Clauses: `spec.4.2.structural-d-unary`
 - Phase: 2
@@ -180,7 +194,7 @@ with a pending question among its own clauses.
 - Phase: 2
 - Found by: inventory
 - Problem: The same paragraph refers to 'the ten strict transcendentals', but the §4.8.3 table says the strict set is 'EXACTLY ... nine ops, and no others'.
-- Ruling: (pending)
+- Ruling: The nine operators listed in the table define the closed set. Both prose references now use the same count.
 
 ## Q-27 esm-spec.md §4.8.3: sum operands share unit
 - Clauses: `spec.4.8.3.sum-operands-share-unit`
@@ -194,7 +208,7 @@ with a pending question among its own clauses.
 - Phase: 2
 - Found by: inventory
 - Problem: (`spec.4.9.5.evaluator-fail-closed`) The supporting claim that 'IEEE-754 max and min return the non-NaN operand' is not true in general: IEEE 754-2019 `maximum`/`minimum` propagate NaN (only `maximumNumber`/`minimumNumber`, and 2008's maxNum, return the number), and of the binding languages Julia `max`, JS `Math.max`, Go `math.Max` and NumPy `maximum` propagate NaN while Rust `f64::max` and C `fmax` do not. / (`conf.5.23.unbound-name-is-fault`) The supporting sentence that follows ('IEEE-754 `max` and `min` return the non-NaN operand') is not true of IEEE 754 as a whole: 754-2008 maxNum/minNum do, but 754-2019 maximum/minimum propagate NaN, and e.g. Julia's max(NaN, 0.0) returns NaN; the clause stands without it, but the stated fact is a property of particular functions, not of IEEE-754.
-- Ruling: Propagate (2026-10-26): if any operand is NaN the result is NaN, also for the max/min ⊕ of faq; the false sentence is rewritten. Spec fix in the phase-0 PR; the Rust divergence (#568) is held for phase 2 to find.
+- Ruling: Propagate (2026-10-26): if any operand is NaN the result is NaN, also for the max/min ⊕ of faq; the false sentence is rewritten. Phase 0 corrected the spec. Scalar extrema and filtered scalar FAQ are covered by the [NaN extrema fixture](../tests/conformance/scalar_operator_semantics/fixtures/nan_extrema.esm) for issue #568. The equality-scatter tier covers shaped extrema.
 
 ## Q-29 esm-spec.md §6.6.3: nonfinite actual fails
 - Clauses: `spec.6.6.3.nonfinite-actual-fails`

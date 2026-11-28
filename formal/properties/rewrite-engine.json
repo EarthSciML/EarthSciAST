@@ -1,0 +1,44 @@
+{
+  "properties": [
+    {
+      "id": "P-rewrite-ineligible-rules-do-not-shadow",
+      "clauses": ["spec.9.6.3.fixpoint-byte-identical"],
+      "statement": "An earlier sequence of definitions that fail eligibility at a node has no effect on selection from the remaining definitions.",
+      "lean_statement": "∀ (matcher : Esm.Rewrite.MatchRule) (shadowed : List String) (term : Esm.Document.Json) (earlier candidates : List Esm.Rewrite.Rule), (∀ rule ∈ earlier, matcher shadowed rule term = none) → Esm.Rewrite.select (earlier ++ candidates) matcher shadowed term = Esm.Rewrite.select candidates matcher shadowed term",
+      "status": "proven",
+      "theorem": "Esm.Rewrite.select_ignores_ineligible"
+    },
+    {
+      "id": "P-rewrite-declaration-order-tie",
+      "clauses": ["spec.9.6.3.fixpoint-byte-identical"],
+      "statement": "Among two eligible definitions with the same priority and the same presence of a where clause, the first definition wins.",
+      "lean_statement": "∀ (matcher : Esm.Rewrite.MatchRule) (shadowed : List String) (term : Esm.Document.Json) (first second : Esm.Rewrite.Rule) (firstCapture secondCapture : Esm.Rewrite.Bindings), matcher shadowed first term = some firstCapture → matcher shadowed second term = some secondCapture → first.priority = second.priority → first.constraints.isSome = second.constraints.isSome → Esm.Rewrite.select [first, second] matcher shadowed term = some (first, firstCapture)",
+      "status": "proven",
+      "theorem": "Esm.Rewrite.select_declaration_tie"
+    },
+    {
+      "id": "P-rewrite-success-fits-depth-budget",
+      "clauses": ["spec.9.6.3.fixpoint-byte-identical"],
+      "statement": "A successful fixpoint uses at most the number of productive passes remaining at the instance's starting depth.",
+      "lean_statement": "∀ (rules : List Esm.Rewrite.Rule) (matcher : Esm.Rewrite.MatchRule) (term : Esm.Document.Json) (depth : Nat) (result : Esm.Rewrite.RewriteResult), Esm.Rewrite.rewriteTracked rules matcher term depth = .ok result → result.productivePasses ≤ Esm.Rewrite.maxRewritePasses - depth",
+      "status": "proven",
+      "theorem": "Esm.Rewrite.rewriteTracked_bounded"
+    },
+    {
+      "id": "P-rewrite-refusal-at-depth-limit",
+      "clauses": ["spec.9.6.3.fixpoint-byte-identical"],
+      "statement": "For a legal starting depth the fixpoint reports non-convergence at the attempted productive pass immediately beyond the depth limit.",
+      "lean_statement": "∀ (rules : List Esm.Rewrite.Rule) (matcher : Esm.Rewrite.MatchRule) (term : Esm.Document.Json) (depth : Nat) (failure : Esm.Rewrite.Nontermination), depth ≤ Esm.Rewrite.maxRewritePasses → Esm.Rewrite.rewriteTracked rules matcher term depth = .error failure → failure.depth = Esm.Rewrite.maxRewritePasses + 1",
+      "status": "proven",
+      "theorem": "Esm.Rewrite.rewriteTracked_failure_depth"
+    },
+    {
+      "id": "P-rewrite-reference-root-is-opaque",
+      "clauses": ["spec.9.6.7.fixture-opacity-negative"],
+      "statement": "The structural matcher gives no rule eligibility at an apply_operator root, independently of its bindings and the surrounding instance.",
+      "lean_statement": "∀ (independent : String) (shapes : Esm.Rewrite.ShapeEnv) (instanceArgs : Esm.Rewrite.InstanceEnv) (shadowed : List String) (rule : Esm.Rewrite.Rule) (fields : List (String × Esm.Document.Json)), Esm.Rewrite.eligibleWithTime independent shapes instanceArgs shadowed rule (.obj ((\"op\", .str \"apply_operator\") :: fields)) = none",
+      "status": "proven",
+      "theorem": "Esm.Rewrite.eligible_reference_root"
+    }
+  ]
+}

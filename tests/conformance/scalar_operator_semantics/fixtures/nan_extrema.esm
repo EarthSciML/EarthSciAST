@@ -1,0 +1,125 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "NaN extrema",
+    "description": "esm-spec §4.2 NaN propagation. A parameter division supplies NaN to min and max in both operand orders and in the middle of an n-ary fold. A scalar FAQ max checks that an admitted NaN propagates and an excluded one has no effect. IEEE self-inequality exposes each result as a finite Boolean.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "scalar_operator_semantics",
+      "inline-test",
+      "nan"
+    ],
+    "license": "MIT"
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "n": {"type": "parameter", "units": "1", "default": 0.0},
+        "d": {"type": "parameter", "units": "1", "default": 0.0},
+        "a": {"type": "parameter", "units": "1", "default": 2.0},
+        "b": {"type": "parameter", "units": "1", "default": 4.0},
+        "cut": {"type": "parameter", "units": "1", "default": 2.0},
+        "nan_value": {"type": "unknown", "units": "1"},
+        "left_min": {"type": "unknown", "units": "1"},
+        "right_min": {"type": "unknown", "units": "1"},
+        "middle_min": {"type": "unknown", "units": "1"},
+        "left_max": {"type": "unknown", "units": "1"},
+        "right_max": {"type": "unknown", "units": "1"},
+        "middle_max": {"type": "unknown", "units": "1"},
+        "selected_max": {"type": "unknown", "units": "1"},
+        "input_nan": {"type": "unknown", "units": "1"},
+        "left_min_nan": {"type": "unknown", "units": "1"},
+        "right_min_nan": {"type": "unknown", "units": "1"},
+        "middle_min_nan": {"type": "unknown", "units": "1"},
+        "left_max_nan": {"type": "unknown", "units": "1"},
+        "right_max_nan": {"type": "unknown", "units": "1"},
+        "middle_max_nan": {"type": "unknown", "units": "1"},
+        "selected_max_nan": {"type": "unknown", "units": "1"}
+      },
+      "equations": [
+        {"lhs": "nan_value", "rhs": {"op": "/", "args": ["n", "d"]}},
+        {"lhs": "input_nan", "rhs": {"op": "!=", "args": ["nan_value", "nan_value"]}},
+        {"lhs": "left_min", "rhs": {"op": "min", "args": ["nan_value", "a"]}},
+        {"lhs": "left_min_nan", "rhs": {"op": "!=", "args": ["left_min", "left_min"]}},
+        {"lhs": "right_min", "rhs": {"op": "min", "args": ["a", "nan_value"]}},
+        {"lhs": "right_min_nan", "rhs": {"op": "!=", "args": ["right_min", "right_min"]}},
+        {"lhs": "middle_min", "rhs": {"op": "min", "args": ["a", "nan_value", "b"]}},
+        {"lhs": "middle_min_nan", "rhs": {"op": "!=", "args": ["middle_min", "middle_min"]}},
+        {"lhs": "left_max", "rhs": {"op": "max", "args": ["nan_value", "a"]}},
+        {"lhs": "left_max_nan", "rhs": {"op": "!=", "args": ["left_max", "left_max"]}},
+        {"lhs": "right_max", "rhs": {"op": "max", "args": ["a", "nan_value"]}},
+        {"lhs": "right_max_nan", "rhs": {"op": "!=", "args": ["right_max", "right_max"]}},
+        {"lhs": "middle_max", "rhs": {"op": "max", "args": ["a", "nan_value", "b"]}},
+        {"lhs": "middle_max_nan", "rhs": {"op": "!=", "args": ["middle_max", "middle_max"]}},
+        {
+          "lhs": "selected_max",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {"i": [1, 3]},
+            "filter": {"op": "<=", "args": ["i", "cut"]},
+            "reduce": "max",
+            "expr": {"op": "ifelse", "args": [{"op": "==", "args": ["i", 2]}, "nan_value", "a"]}
+          }
+        },
+        {"lhs": "selected_max_nan", "rhs": {"op": "!=", "args": ["selected_max", "selected_max"]}}
+      ],
+      "tests": [
+        {
+          "id": "admitted_nan",
+          "time_span": {"start": 0.0, "end": 0.0},
+          "tolerance": {"rel": 0.0, "abs": 0.0},
+          "description": "The default 0/0 supplies NaN. Each scalar extremum and the selected FAQ result is unordered.",
+          "assertions": [
+            {"variable": "input_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "left_min_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "right_min_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "middle_min_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "left_max_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "right_max_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "middle_max_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "selected_max_nan", "time": 0.0, "expected": 1.0}
+          ]
+        },
+        {
+          "id": "finite_inputs",
+          "time_span": {"start": 0.0, "end": 0.0},
+          "tolerance": {"rel": 0.0, "abs": 0.0},
+          "parameter_overrides": {"d": 1.0},
+          "description": "A nonzero denominator makes the extrema finite.",
+          "assertions": [
+            {"variable": "input_nan", "time": 0.0, "expected": 0.0},
+            {"variable": "left_min_nan", "time": 0.0, "expected": 0.0},
+            {"variable": "right_min_nan", "time": 0.0, "expected": 0.0},
+            {"variable": "middle_min_nan", "time": 0.0, "expected": 0.0},
+            {"variable": "left_max_nan", "time": 0.0, "expected": 0.0},
+            {"variable": "right_max_nan", "time": 0.0, "expected": 0.0},
+            {"variable": "middle_max_nan", "time": 0.0, "expected": 0.0},
+            {"variable": "selected_max_nan", "time": 0.0, "expected": 0.0}
+          ]
+        },
+        {
+          "id": "excluded_nan",
+          "time_span": {"start": 0.0, "end": 0.0},
+          "tolerance": {"rel": 0.0, "abs": 0.0},
+          "parameter_overrides": {"cut": 1.0},
+          "description": "The filter excludes the NaN term from the FAQ while the scalar extrema still propagate it.",
+          "assertions": [
+            {"variable": "input_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "left_min_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "right_min_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "middle_min_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "left_max_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "right_max_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "middle_max_nan", "time": 0.0, "expected": 1.0},
+            {"variable": "selected_max_nan", "time": 0.0, "expected": 0.0}
+          ]
+        }
+      ]
+    }
+  }
+}

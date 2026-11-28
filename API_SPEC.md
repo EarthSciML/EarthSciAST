@@ -575,7 +575,7 @@ Divergences:
 | `substitute(expr, bindings) -> Expr` | capture-free substitution | no, anywhere |
 | `canonicalize(expr) -> Expr` | RFC §5.4 canonical form | yes, `CanonicalizeError` |
 | `canonical_json(expr) -> str` | canonical serialization | yes, `CanonicalizeError` |
-| `canonicalize_document(doc) -> doc` | every units string of a decoded JSON document in the canonical unit spelling (esm-spec §4.8.2), the deprecated `neg`/`pow` rewritten to `-`/`^` (esm-spec §4.2), every number in canonical form (CONFORMANCE_SPEC §5.5.3.1); nothing else changes | no, anywhere |
+| `canonicalize_document(doc) -> doc` | every units string of a decoded JSON document in the canonical unit spelling (esm-spec §4.8.2), the deprecated `neg`/`pow` rewritten to `-`/`^` (esm-spec §4.2), a `faq` node's default `reduce: "+"` / `semiring: "sum_product"` dropped, every number in canonical form (CONFORMANCE_SPEC §5.5.3.1); nothing else changes | no, anywhere |
 
 Divergences:
 
@@ -644,7 +644,10 @@ additionally overload on `Model` / `ReactionSystem` (`flatten_model` in Rust).
 
 Julia's `FlattenedSystem` also carries the optional `initialization_equations`
 field (esm-libraries-spec §4.7.5 step 4), named by flatten; the other bindings
-leave it out. Julia builds a `FlattenedSystem` with one keyword constructor,
+leave it out. From esm 2.5.0 a loader moves a document's
+`initialization_equations` into `equations` as `ic` equations (esm-spec
+§11.4.4), so the field is empty for a document the loader rewrote. Julia
+builds a `FlattenedSystem` with one keyword constructor,
 `FlattenedSystem(; fields...)`, and copies one with `FlattenedSystem(flat;
 fields...)`; its three subset maps are read off their parent maps.
 
@@ -802,8 +805,10 @@ The state a Problem integrates from at `tspan[0]`, one value per state element,
 aligned with the Problem's state names (Rust: `prob.state_variable_names()`, the
 flattened element names a `Solution`'s state rows carry). It is built exactly as
 a solve builds it, without integrating: per element, the first of the Problem's
-`u0` entry, an initialization equation (esm-spec §6.2), an `ic` equation or
-field initial condition (§11.4, §11.4.1), and the declared `default`, with the
+`u0` entry (then a run-time override), an initialization equation — an
+explicit `ic` equation or field initial condition, or the solve of the
+initialization system (esm-spec §11.4, §11.4.1, §11.4.3) — and the declared
+`default`, with the
 Problem's `p` (else the parameter defaults) bound in every initial condition's
 scope (§6.6.5). So it depends on neither `tspan` nor any solver option, and a
 field `ic` reads the forcing as construction bound it, without the
@@ -1926,9 +1931,12 @@ byte for byte. It has exactly these keys:
 - **`algebraic`** — `unknowns`: the `z` unknowns in `z` layout order;
   `z_layout`: name → `{"base", "shape"}`, `base` the 1-based offset of the
   block's first element in `z` and `shape` its extents (`[]` for a scalar);
-  `z0`: the Problem's starting value of every `z` element, in `z` order (the
-  `ic` equation's value, else the declared default — the warm start for
-  consistent initialization); `residuals`: one
+  `z0`: the Problem's starting value of every `z` element, in `z` order: the
+  caller's `u0` entry, else the value an initialization equation gives it —
+  an explicit `ic` equation, or the initialization system of esm-spec §11.4.3,
+  which for a DAE includes the stripped algebraic equations at `t0` — else
+  its `guesses` entry, else the declared default. It is the warm start for the
+  caller's consistent initialization; `residuals`: one
   `{"id", "origin", "shape", "expr"}` per stripped implicit equation, `expr`
   the residual `{"op": "-", "args": [lhs, rhs]}` of the flattened equation
   exactly (`g = lhs − rhs`, never simplified), `shape` its extents, `origin`
@@ -2074,6 +2082,11 @@ Julia's `operator_ir(prob; unspecified_eltype = Float32)` requests binary32
 for the selected StableHLO evaluation group. `emit_fragment` uses the IR's
 resolved element type. A supplied `eltype` must agree with the IR. The native
 `rhs_program` refuses this choice with `float32_unsupported`.
+`emit_fragment(ir; calls = :functions)`, the default, emits the operator once
+per trace as a private function, and each template instance it references
+once per argument shape, with a `func.call` at every use; template references
+stay references in the emitted module. `calls = :inline` places each body at
+its use.
 
 ### 5.9 Reference resolution
 

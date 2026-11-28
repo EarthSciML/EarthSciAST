@@ -162,26 +162,37 @@ end
 # Each materialized array observed owns a block of slots above the state in one
 # extended slot space (obs_buffers.jl). `const_levels` hold the const-cadence
 # observeds, which read no `levels` entry; they run first, and only when the
-# buffer's const stamp says `p` moved or the buffer is new. `time_levels` hold
-# the time-cadence ones, which read only const ones and each other; they run
-# next, and only when `(p, t, the build's forcing epoch)` moved, so the columns
-# of a Jacobian, all at one `t`, fill them once. `levels` run on every call.
-struct _RhsObserved{L, CL, TL}
+# buffer's const stamp says `p` moved or the buffer is new. `forcing_levels`
+# hold the forcing-cadence ones, which read a live buffer but neither `t` nor
+# the state (a regridded emission field); they read only const ones and each
+# other, and run next, only when `p` or the build's forcing epoch moved, so a
+# value derived from forcing data alone is computed once per forcing refresh;
+# when not every writer of the build's buffers announces (`announced`,
+# cadence_stamp.jl) they also run whenever `t` moved, as the time ones do.
+# `time_levels` hold the time-cadence ones, which read only the tiers above and
+# each other; they run next, and only when `(p, t, the build's forcing epoch)`
+# moved, so the columns of a Jacobian, all at one `t`, fill them once. `levels`
+# run on every call.
+struct _RhsObserved{L, CL, FL, TL}
     ext::_ObsExtVec
     n_states::Int
     levels::L
     const_levels::CL
+    forcing_levels::FL
     time_levels::TL
 end
 
 # `nothing` when nothing is materialized.
 function _rhs_observed(
         n_total::Int, n_states::Int, levels::Tuple, const_levels::Tuple = (),
-        time_levels::Tuple = (), epoch::_ForcingEpoch = _new_forcing_epoch()
+        forcing_levels::Tuple = (), time_levels::Tuple = (),
+        epoch::_ForcingEpoch = _new_forcing_epoch()
     )
-    isempty(levels) && isempty(const_levels) && isempty(time_levels) && return nothing
+    isempty(levels) && isempty(const_levels) && isempty(forcing_levels) &&
+        isempty(time_levels) && return nothing
     return _RhsObserved(
-        _ObsExtVec(n_total - n_states, epoch), n_states, levels, const_levels, time_levels
+        _ObsExtVec(n_total - n_states, epoch), n_states, levels, const_levels,
+        forcing_levels, time_levels
     )
 end
 
@@ -210,9 +221,20 @@ function (f::_Rhs)(du, u, p, t)
             _fill_obs_levels!(obs.const_levels, duv, uv, p, t, T)
             _obsext_mark_const!(ext, T, p)
         end
-        if !isempty(obs.time_levels) && _obsext_t_stale(ext, T, p, t)
-            _fill_obs_levels!(obs.time_levels, duv, uv, p, t, T)
-            _obsext_mark_t!(ext, T, p, t)
+        if !isempty(obs.forcing_levels) || !isempty(obs.time_levels)
+            tstale = _obsext_t_stale(ext, T, p, t)
+            # Unless every writer of the build's buffers announces its writes,
+            # a new `t` refills the forcing tier too (cadence_stamp.jl).
+            if !isempty(obs.forcing_levels) && (
+                    _obsext_forcing_stale(ext, T, p) || (tstale && !ext.epoch.announced)
+                )
+                _fill_obs_levels!(obs.forcing_levels, duv, uv, p, t, T)
+                _obsext_mark_forcing!(ext, T, p)
+            end
+            if tstale
+                _fill_obs_levels!(obs.time_levels, duv, uv, p, t, T)
+                _obsext_mark_t!(ext, T, p, t)
+            end
         end
         _fill_obs_levels!(obs.levels, duv, uv, p, t, T)
         _run_stage!(f.state, du, uv, p, t, T)

@@ -1,0 +1,136 @@
+{
+ "esm": "2.4.0",
+ "metadata": {
+  "name": "StaticBareTranspose",
+  "description": "Whole shape-changing transpose on a declared observed, with asymmetric extents."
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": 2
+  },
+  "columns": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "Probe": {
+   "variables": {
+    "source": {
+     "type": "unknown",
+     "units": "1",
+     "description": "source",
+     "shape": [
+      "rows",
+      "columns"
+     ]
+    },
+    "result": {
+     "type": "unknown",
+     "units": "1",
+     "description": "result",
+     "shape": [
+      "columns",
+      "rows"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "source",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       [
+        1,
+        2,
+        3
+       ],
+       [
+        4,
+        5,
+        6
+       ]
+      ]
+     }
+    },
+    {
+     "lhs": "result",
+     "rhs": {
+      "op": "transpose",
+      "args": [
+       "source"
+      ]
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "probe",
+     "time_span": {
+      "start": 0,
+      "end": 1
+     },
+     "assertions": [
+      {
+       "variable": "result",
+       "time": 0,
+       "expected": 1,
+       "coords": {
+        "columns": 1,
+        "rows": 1
+       }
+      },
+      {
+       "variable": "result",
+       "time": 0,
+       "expected": 4,
+       "coords": {
+        "columns": 1,
+        "rows": 2
+       }
+      },
+      {
+       "variable": "result",
+       "time": 0,
+       "expected": 2,
+       "coords": {
+        "columns": 2,
+        "rows": 1
+       }
+      },
+      {
+       "variable": "result",
+       "time": 0,
+       "expected": 5,
+       "coords": {
+        "columns": 2,
+        "rows": 2
+       }
+      },
+      {
+       "variable": "result",
+       "time": 0,
+       "expected": 3,
+       "coords": {
+        "columns": 3,
+        "rows": 1
+       }
+      },
+      {
+       "variable": "result",
+       "time": 0,
+       "expected": 6,
+       "coords": {
+        "columns": 3,
+        "rows": 2
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

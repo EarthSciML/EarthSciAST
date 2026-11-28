@@ -1365,21 +1365,26 @@ def _index_frame_sites(m: dict[str, Any], mname: str, var_axes: dict):
     """Every expression whose RESULT has a declared index-set frame, as
     ``(location, expression, target_name, target_axes)``.
 
-    Two such sites exist, and they are exactly the two places an array-level
-    operand is combined into a declared-shape result:
+    These are exactly the places an array-level operand is combined into a
+    declared-shape result:
 
     * a whole-array state derivative ``D(var) = rhs`` (the frame is ``var``'s
-      declared shape); and
-    * an observed variable's ``expression`` (the frame is its own).
+      declared shape);
+    * a whole-array definition ``var = rhs`` (the frame is ``var``'s); and
+    * an observed variable's legacy ``expression`` (the frame is its own).
 
-    An ``faq``-LHS equation is excluded: it declares its own frame through
-    ``output_idx``/``ranges`` and is the oracle name-alignment reproduces.
+    An ``faq``-LHS or indexed-LHS equation is excluded: it declares its own
+    frame through ``output_idx``/``ranges`` or its subscripts. Rust's
+    ``whole_array_lhs_target`` reads the same two equation forms.
     """
     for i, eq in enumerate(m.get("equations", []) or []):
         lhs = eq.get("lhs")
-        if not (isinstance(lhs, dict) and lhs.get("op") == "D" and lhs.get("args")):
+        if isinstance(lhs, str):
+            target_name = lhs
+        elif isinstance(lhs, dict) and lhs.get("op") == "D" and lhs.get("args"):
+            target_name = lhs["args"][0]
+        else:
             continue
-        target_name = lhs["args"][0]
         if not isinstance(target_name, str):
             continue
         target_axes = var_axes.get(target_name)

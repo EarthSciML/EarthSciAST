@@ -1,0 +1,31 @@
+{
+  "fixture": "static_bool_and_or",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "all_terms_excluded",
+      "assertion_idx": 1,
+      "variable": "has_negative",
+      "actual": 0.0
+    },
+    {
+      "test_id": "default_cutoff",
+      "assertion_idx": 1,
+      "variable": "has_negative",
+      "actual": 1.0
+    },
+    {
+      "test_id": "default_cutoff",
+      "assertion_idx": 2,
+      "variable": "all_zero",
+      "actual": 0.0
+    },
+    {
+      "test_id": "default_cutoff",
+      "assertion_idx": 3,
+      "variable": "empty",
+      "actual": 0.0
+    }
+  ]
+}

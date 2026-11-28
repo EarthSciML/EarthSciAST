@@ -58,6 +58,45 @@ struct _LaneGather
     columns::Vector{Pair{String, UnitRange{Int}}}
 end
 
+# A pre-gathered input's subscripts, compiled once at program build.
+#
+# A subscript of a pre-gathered read is a function of the lane's global indices
+# along the lane sets it reads (and of const arrays). At build it becomes one
+# of two forms, each giving at a call the integer `_eval_const_int` gives:
+#  - affine (`+`, `-`, `*` by a constant, integer literals): `c0 + Σ coef·v`,
+#    then resolved on its axis as `_resolve_const_index` resolves it;
+#  - anything else: a table over every index tuple of the lane sets it reads,
+#    already resolved: the axis position, 0 where the resolution throws (the
+#    read is 0.0), -1 where evaluating the subscript throws (the call raises
+#    that error);
+#  - anything else whose table would exceed `_LANE_SUBSCRIPT_TABLE_MAX`
+#    entries: evaluated per lane at the call (`_eval_const_int`), which
+#    allocates.
+# So a call of the first two forms reads `cells` and integer tables only: no
+# expression walk, no dictionary, no allocation.
+struct _LaneSubscript
+    rows::Vector{Int}       # the `cells` row of each lane set it reads
+    exts::Vector{Int}       # those sets' extents
+    affine::Bool
+    tabled::Bool            # not affine: `table` holds it (else evaluated per lane)
+    c0::Int
+    coef::Vector{Int}       # per row (affine)
+    table::Vector{Int32}    # column-major over `rows` (tabled)
+end
+
+# The largest subscript table built (entries, 4 bytes each). A table covers
+# every index tuple of the lane sets its subscript reads, which at production
+# extents (three full grid axes) is far too large to build or hold; a larger
+# subscript is evaluated at the call instead. A `Ref` so a test can lower it.
+const _LANE_SUBSCRIPT_TABLE_MAX = Ref(1 << 20)
+
+struct _LaneGatherPlan
+    subs::Vector{_LaneSubscript}
+    dims::Vector{Int}
+    strides::Vector{Int}     # column-major over `dims`
+    policy::Vector{Symbol}   # each axis's boundary policy (`_const_dim_boundary`)
+end
+
 # Copy plan of one variable between the lane layout and the internal layout.
 struct _LaneCopy
     offset::Int                      # in units of lanes
@@ -83,6 +122,9 @@ struct LaneProgram{F}
     index_bufs::Vector{Vector{Float64}}   # per lane set, the live lane-index buffer
     gathers::Vector{_LaneGather}
     gather_slots::Vector{Int}        # per gather, its source's forcing slot (0: const)
+    gplans::Vector{_LaneGatherPlan}  # per gather, its compiled subscripts
+    gflat::Vector{Vector{Float64}}   # per gather of const data, that data (else empty)
+    exts::Vector{Int}                # per lane set, its extent
     ucopy::Vector{_LaneCopy}
     acopy::Vector{_LaneCopy}
     params::Dict{String, Int}
@@ -111,7 +153,6 @@ struct LaneInputs
     # forcing reads against the same set.
     fs::Base.RefValue{Union{Nothing, ForcingSet}}
     owner::_RhsShared               # the lane program's
-    env::Dict{String, Int}           # a gather's subscript bindings
 end
 
 mutable struct _LaneSpec <: _RangeSpec
@@ -141,6 +182,28 @@ mutable struct _LaneSpec <: _RangeSpec
 end
 
 _lane_refuse(rule, why) = _refuse_rule(_rule_display(rule), "lane: $why")
+
+# The lane buffers are per-call inputs (tree_walk/range_hooks.jl): a call
+# refills them for every chunk of lanes, so a value that reads one is computed
+# on every call, like a value that reads the state, and no cadence stamp needs
+# to see them change.
+function _lane_buffers(spec::_LaneSpec)
+    bufs = Vector{Float64}[spec.index_bufs[s] for s in spec.sets]
+    append!(bufs, g.buf for g in spec.gathers)
+    spec.tbuf === nothing || push!(bufs, spec.tbuf)
+    return bufs
+end
+function _range_lane_inputs(spec::_LaneSpec)
+    names = String["__lane_" * s for s in spec.sets]
+    append!(names, "__lane_in_$k" for k in eachindex(spec.gathers))
+    spec.tbuf === nothing || push!(names, "__lane_t")
+    return names
+end
+# By address: a gather of a pre-gathered input with columns reads it through a
+# reshape, which shares its memory.
+_range_is_lane_buffer(spec::_LaneSpec, buf) =
+    buf isa Array{Float64} && !isempty(buf) &&
+    _anyof(b -> pointer(b) == pointer(buf), _lane_buffers(spec))
 
 _lane_box_dim(spec::_LaneSpec, shape::Vector{String}, d::Int) =
     shape[d] in spec.sets ?
@@ -533,10 +596,12 @@ function _lane_check_capture(e::ASTExpr, renames::Dict{String, ASTExpr}, rule::S
         isempty(active) && return nothing
         free = nothing
         for (k, v) in active
-            ((v::VarExpr).name in bound) || continue
+            vnames = v isa VarExpr ? (String[(v::VarExpr).name]) : collect(free_variables(v))
+            caught = findfirst(in(bound), vnames)
+            caught === nothing && continue
             free === nothing && (free = free_variables(o))
             k in free && _lane_refuse(
-                rule, "a nested aggregate binds '$((v::VarExpr).name)', which an array " *
+                rule, "a nested aggregate binds '$(vnames[caught])', which an array " *
                     "faq's output index '$k' is renamed to"
             )
         end
@@ -602,6 +667,116 @@ function _compile_lane_subscripts(g::_LaneGather)
     slots = Dict(n => i for (i, n) in enumerate(names))
     rc = _ResolveCtx(Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), slots, copy(g.consts))
     return [_compile(_resolve_indices(e, rc), slots, Set{Symbol}()) for e in g.subs]
+end
+
+# `(c0, coef)` with `e == c0 + Σ coef[v]·v` over the lane variables `vars`
+# (integer arithmetic, as `_subscript_binop`), or `nothing` when `e` is not of
+# that form. `env` binds the build-time integer parameters.
+function _lane_affine(e::ASTExpr, vars::Dict{String, Int}, env::Dict{String, Int})
+    if e isa IntExpr
+        return (Int((e::IntExpr).value), Dict{String, Int}())
+    elseif e isa NumExpr
+        v = (e::NumExpr).value
+        return isinteger(v) ? (Int(v), Dict{String, Int}()) : nothing
+    elseif e isa VarExpr
+        n = (e::VarExpr).name
+        haskey(vars, n) && return (0, Dict{String, Int}(n => 1))
+        haskey(env, n) && return (env[n], Dict{String, Int}())
+        return nothing
+    end
+    e isa OpExpr || return nothing
+    o = e::OpExpr
+    _tpl_is_call(o) && return nothing
+    parts = Any[_lane_affine(a, vars, env) for a in o.args]
+    any(isnothing, parts) && return nothing
+    scale(p, k) = (k * p[1], Dict{String, Int}(v => k * c for (v, c) in p[2]))
+    function add(p, q)
+        c = copy(p[2])
+        for (v, x) in q[2]
+            c[v] = get(c, v, 0) + x
+        end
+        return (p[1] + q[1], c)
+    end
+    if o.op == "+" && !isempty(parts)
+        return foldl(add, parts)
+    elseif (o.op == "-" || o.op == "neg") && length(parts) == 1
+        return scale(parts[1], -1)
+    elseif o.op == "-" && length(parts) == 2
+        return add(parts[1], scale(parts[2], -1))
+    elseif o.op == "*" && !isempty(parts)
+        varying = [p for p in parts if !isempty(p[2])]
+        length(varying) <= 1 || return nothing
+        k = prod(p[1] for p in parts if isempty(p[2]); init = 1)
+        return isempty(varying) ? (k, Dict{String, Int}()) : scale(varying[1], k)
+    end
+    return nothing
+end
+
+# The plan of pre-gathered input `g`: `S` the lane sets in `cells` row order,
+# `ext` their extents, `params` the build-time integer parameters.
+function _lane_gather_plan(g::_LaneGather, S::Vector{String}, ext, params::Dict{String, Int})
+    isempty(g.columns) || error("internal error: lanes: an in-place pre-gather has columns")
+    row = Dict{String, Int}(g.vars)
+    nd = length(g.dims)
+    strides = Vector{Int}(undef, nd)
+    acc = 1
+    for d in 1:nd
+        strides[d] = acc
+        acc *= g.dims[d]
+    end
+    policy = Symbol[_const_dim_boundary(g.src, d) for d in 1:nd]
+    subs = map(enumerate(g.subs)) do (d, e)
+        reads = [v for v in _referenced_var_names(e) if haskey(row, v)]
+        sort!(reads; by = v -> row[v])
+        rows = Int[row[v] for v in reads]
+        exts = Int[ext[S[r]] for r in rows]
+        aff = _lane_affine(e, Dict{String, Int}(v => 1 for v in reads), params)
+        if aff !== nothing
+            c0, coef = aff
+            return _LaneSubscript(
+                rows, exts, true, false, c0, Int[get(coef, v, 0) for v in reads], Int32[]
+            )
+        end
+        ntab = prod(big.(exts); init = big(1))
+        ntab > _LANE_SUBSCRIPT_TABLE_MAX[] &&
+            return _LaneSubscript(rows, exts, false, false, 0, Int[], Int32[])
+        table = Vector{Int32}(undef, Int(ntab))
+        env = copy(params)
+        for (k, c) in enumerate(CartesianIndices(Tuple(1:x for x in exts)))
+            for (j, v) in enumerate(reads)
+                env[v] = c[j]
+            end
+            i = try
+                _eval_const_int(e, env, g.consts)::Int
+            catch
+                nothing
+            end
+            table[k] = i === nothing ? Int32(-1) : Int32(_lane_resolve(g, policy, d, i))
+        end
+        return _LaneSubscript(rows, exts, false, true, 0, Int[], table)
+    end
+    return _LaneGatherPlan(subs, copy(g.dims), strides, policy)
+end
+
+# Const data as the flat `Float64` vector a pre-gather reads by linear
+# position (its own memory when it is one already).
+_lane_flat(a::Array{Float64}) = vec(a)
+_lane_flat(a::AbstractArray) = Float64[Float64(a[i]) for i in 1:length(a)]
+
+# Axis position `i` of axis `d` resolved by its boundary policy, as
+# `_resolve_const_index` resolves it, or 0 where that throws (the read is 0.0).
+@inline function _lane_resolve(g::_LaneGather, policy::Vector{Symbol}, d::Int, i::Int)
+    n = @inbounds g.dims[d]
+    1 <= i <= n && return i
+    return _lane_resolve_oob(g, policy, d, i)
+end
+@noinline function _lane_resolve_oob(g::_LaneGather, policy::Vector{Symbol}, d::Int, i::Int)
+    return try
+        _resolve_const_index_oob(policy[d], g.name, d, i, g.dims[d])
+    catch err
+        err isa TreeWalkError || rethrow()
+        0
+    end
 end
 
 function _range_restrict_parts(
@@ -858,9 +1033,14 @@ function _lanes(
         )
     end
     form === :oop && return (; inst..., layout, uplan, aplan, gslots)
+    ext = _program_sets(op)
+    gplans = _LaneGatherPlan[_lane_gather_plan(g, S, ext, inst.params) for g in inst.gathers]
+    gflat = Vector{Float64}[
+        k == 0 ? _lane_flat(g.src) : Float64[] for (g, k) in zip(inst.gathers, gslots)
+    ]
     return LaneProgram(
         op, S, chunk, inst.f!, internal, layout, inst.index_bufs,
-        inst.gathers, gslots, uplan, aplan, inst.params,
+        inst.gathers, gslots, gplans, gflat, Int[ext[s] for s in S], uplan, aplan, inst.params,
         _derived_shared(
             op.shared, inst.f!, length(internal), inst.cap,
             inst.pa, lane_bufs
@@ -914,11 +1094,7 @@ lane_layout(lp::LaneProgram) = lp.layout
 
 parameters(lp::LaneProgram) = lp.shared.params
 
-function rhs_workspace(lp::LaneProgram)
-    ws = _instantiate(lp.shared)
-    merge!(ws.env, lp.params)
-    return ws
-end
+rhs_workspace(lp::LaneProgram) = _instantiate(lp.shared)
 
 """
     lane_inputs(lanes::LaneProgram, L::Integer) -> LaneInputs
@@ -931,63 +1107,90 @@ lane_inputs(lp::LaneProgram, L::Integer) =
     LaneInputs(
     [zeros(Int(L)) for _ in lp.index_bufs],
     [zeros(Int(L)) for _ in lp.gathers], Int(L),
-    Base.RefValue{Union{Nothing, ForcingSet}}(nothing), lp.shared,
-    Dict{String, Int}(lp.params)
+    Base.RefValue{Union{Nothing, ForcingSet}}(nothing), lp.shared
 )
 
 # Pre-gathered input `k` at the cell of lane `l` of `cells`, stored into
 # `buf[c]`: read from the call's forcing buffer, or from const data.
-function _lane_gather!(
+@inline function _lane_gather!(
         buf::Vector{Float64}, c::Int, lp::LaneProgram, k::Int, fs::ForcingSet,
-        cells::AbstractMatrix, l::Int, env::Dict{String, Int}
+        cells::AbstractMatrix, l::Int
     )
-    g = lp.gathers[k]
-    slot = lp.gather_slots[k]
-    if slot == 0
-        _lane_gather_store!(buf, c, g, g.src, cells, l, env)
-    else
-        _lane_gather_store!(buf, c, g, fs.bufs[slot], cells, l, env)
-    end
+    slot = @inbounds lp.gather_slots[k]
+    src = slot == 0 ? (@inbounds lp.gflat[k]) : (@inbounds fs.bufs[slot])
+    @inbounds buf[c] = _lane_gather_value(lp, k, src, cells, l)
     return nothing
 end
 
-# A barrier: `src`'s concrete type is known inside, so the read does not box.
-function _lane_gather_store!(
-        buf::Vector{Float64}, c::Int, g::_LaneGather, src::A,
-        cells::AbstractMatrix, l::Int, env::Dict{String, Int}
-    ) where {A}
-    @inbounds buf[c] = _lane_gather_value(g, src, cells, l, env)
-    return nothing
-end
-
-# The value of pre-gathered input `g` (read from `src`, linear over `g.src`'s
-# shape) at the cell of lane `l` of `cells`.
+# The value of pre-gathered input `k` (read from `src`, linear over its
+# source's shape) at the cell of lane `l` of `cells`, whose indices are in
+# their sets' ranges (`_lane_check_cells`). The subscripts are evaluated in
+# order: one that throws raises its error, and the first that resolves
+# outside its axis makes the read 0.0.
 function _lane_gather_value(
-        g::_LaneGather, src::AbstractArray, cells::AbstractMatrix, l::Int,
-        env::Dict{String, Int}
+        lp::LaneProgram, k::Int, src::Vector{Float64}, cells::AbstractMatrix, l::Int
     )
+    gp = @inbounds lp.gplans[k]
+    lin = 0
+    @inbounds for d in eachindex(gp.subs)
+        s = gp.subs[d]
+        if s.affine
+            i = s.c0
+            for j in eachindex(s.rows)
+                i += s.coef[j] * Int(cells[s.rows[j], l])
+            end
+            i = _lane_resolve(lp.gathers[k], gp.policy, d, i)
+        elseif !s.tabled
+            i = _lane_resolve(lp.gathers[k], gp.policy, d, _lane_subscript_eval(lp, k, d, cells, l))
+        else
+            e = 0
+            st = 1
+            for j in eachindex(s.rows)
+                e += (Int(cells[s.rows[j], l]) - 1) * st
+                st *= s.exts[j]
+            end
+            i = Int(s.table[e + 1])
+            i < 0 && _lane_subscript_throw(lp, k, d, cells, l)
+        end
+        i == 0 && return 0.0
+        lin += (i - 1) * gp.strides[d]
+    end
+    return @inbounds src[lin + 1]
+end
+
+# Subscript `d` of pre-gathered input `k` at the cell of lane `l`, evaluated
+# (not resolved on its axis): a subscript too large to table, or one whose
+# table says it throws here.
+@noinline function _lane_subscript_eval(lp::LaneProgram, k::Int, d::Int, cells, l::Int)
+    g = lp.gathers[k]
+    env = Dict{String, Int}(lp.params)
     for (v, row) in g.vars
         env[v] = Int(cells[row, l])
     end
-    shp = g.src
-    lin = 0
-    stride = 1
-    for d in eachindex(g.subs)
-        i = _eval_const_int(g.subs[d], env, g.consts)::Int
-        n = g.dims[d]
-        if !(1 <= i <= n)
-            i = try
-                _resolve_const_index(shp, g.name, d, i, n)
-            catch err
-                err isa TreeWalkError || rethrow()
-                return 0.0
-            end
-        end
-        lin += (i - 1) * stride
-        stride *= n
-    end
-    return Float64(src[lin + 1])
+    return _eval_const_int(g.subs[d], env, g.consts)::Int
 end
+
+# A subscript whose evaluation throws at this cell: raise its error.
+@noinline function _lane_subscript_throw(lp::LaneProgram, k::Int, d::Int, cells, l::Int)
+    _lane_subscript_eval(lp, k, d, cells, l)
+    g = lp.gathers[k]
+    return error("internal error: lanes: the subscript $d of the pre-gathered read of '$(g.name)' threw at build but not now")
+end
+
+# Every index of lanes `1..n` of `cells` in its lane set's range.
+function _lane_check_cells(lp::LaneProgram, cells::AbstractMatrix, n::Integer, call::String)
+    @inbounds for l in 1:Int(n), k in eachindex(lp.exts)
+        v = cells[k, l]
+        1 <= v <= lp.exts[k] || _lane_cell_out_of_range(lp, call, k, l, v)
+    end
+    return nothing
+end
+@noinline _lane_cell_out_of_range(lp::LaneProgram, call, k, l, v) = throw(
+    ArgumentError(
+        "$call: cells[$k, $l] = $v is outside the lane set '$(lp.sets[k])' " *
+            "(1..$(lp.exts[k]))"
+    )
+)
 
 """
     gather_lane_inputs!(li::LaneInputs, lanes::LaneProgram, p, t, fs, cells, n) -> li
@@ -1025,15 +1228,15 @@ function gather_lane_inputs!(
             "gather_lane_inputs!: n = $n lanes of an L = $L batch"
         )
     )
+    _lane_check_cells(lp, cells, n, "gather_lane_inputs!")
     li.fs[] = nothing
-    env = li.env
     for l in 1:L
         src = min(l, Int(n))
         for k in eachindex(li.index)
             li.index[k][l] = Float64(cells[k, src])
         end
         for k in eachindex(lp.gathers)
-            _lane_gather!(li.gathered[k], l, lp, k, fs, cells, src, env)
+            _lane_gather!(li.gathered[k], l, lp, k, fs, cells, src)
         end
     end
     li.fs[] = fs
@@ -1051,6 +1254,7 @@ function _lane_check(lp::LaneProgram, ws::RhsWorkspace, du, u, aux, p, cells, n)
     )
     # A lane count out of range is a length, as in `gather_lane_inputs!`.
     (1 <= n <= L) || throw(DimensionMismatch("rhs!: n = $n lanes of an L = $L batch"))
+    _lane_check_cells(lp, cells, n, "rhs!")
     length(u) == lp.layout.n_u * L || throw(
         DimensionMismatch(
             "rhs!: `u` has $(length(u)) elements; the lane layout needs $(lp.layout.n_u * L)"
@@ -1088,8 +1292,8 @@ function _lane_chunk!(
             end
         end
     end
-    # The lane buffers changed under the TIME tier's stamps.
-    _bump_workspace_epochs!(ws)
+    # The lane buffers are per-call inputs: no memoized value reads one
+    # (`_range_lane_inputs`), so a chunk leaves every cadence stamp standing.
     D = ws.du
     _ws_eval!(ws, p, t)
     @inbounds for pl in lp.ucopy
@@ -1129,7 +1333,6 @@ end
 function _lane_rhs!(du, lp::LaneProgram, ws::RhsWorkspace, u, aux, p, tof::F, fs::ForcingSet, cells, n, L) where {F}
     _prime!(ws, fs)
     C = lp.C
-    env = ws.env
     ni = length(lp.index_bufs)
     lb = ws.lbufs
     tb = lp.tbuf === nothing ? nothing : lb[end]
@@ -1141,7 +1344,7 @@ function _lane_rhs!(du, lp::LaneProgram, ws::RhsWorkspace, u, aux, p, tof::F, fs
                 lb[k][c] = Float64(cells[k, l])
             end
             for k in eachindex(lp.gathers)
-                _lane_gather!(lb[ni + k], c, lp, k, fs, cells, l, env)
+                _lane_gather!(lb[ni + k], c, lp, k, fs, cells, l)
             end
             tb === nothing || (tb[c] = c <= m ? tof(l) : tof(1))
         end
@@ -1394,18 +1597,23 @@ _range_hoist_keep(spec::_LaneSpec, free, sets) =
 
 # `index(makearray(regions, values), subs…)` as region membership:
 # `ifelse(in_k, value_k at subs, …ifelse(in_1, value_1 at subs, 0))`, the last
-# region holding the element winning (esm-spec §4.3.2). A region value is a
-# scalar expression (the same at every element) or an array `faq` whose output
-# indices span either every dimension of its region or only its non-singleton
-# ones, starting at its ranges' lower bounds; it is read at `sub − lo + start`
-# on each dimension it spans. Inside a region one cell thick along a lane set
-# (`lo == hi`), the lane's coordinate there is `lo`, so a read of a lane array
-# at the literal `lo` on that axis is written as the read at the lane's own
-# subscript (a lane reads a state only at its own cell). The Rust binding
-# lowers the same way.
+# region holding the element winning (esm-spec §4.3.2). The regions must start
+# at 1 along every axis (the Rust binding reads a makearray relative to where
+# its regions start, this one at the absolute subscript; at 1 both agree). A
+# region value is a scalar expression (the same at every element) or an array
+# `faq` whose output indices span either every dimension of its region or only
+# its non-singleton ones, each over a unit stride range exactly as long as its
+# region dimension; it is read at `sub − lo + start` on each dimension it
+# spans. A `faq` value carrying `args`, `key`, `join` or `distinct`, one whose
+# contraction runs over a set of an output index, and one whose contraction
+# (or any nested binder) would capture a subscript are refused. Inside a
+# region one cell thick along a lane set (`lo == hi`), the lane's coordinate
+# there is `lo`, so a read of a lane array at the literal `lo` on that axis is
+# written as the read at the lane's own subscript (a lane reads a state only
+# at its own cell). The Rust binding lowers the same way.
 function _lane_membership_read(spec::_LaneSpec, ctx, ma::OpExpr, subs, sc, rule::String)
-    out = NumExpr(0.0)
-    for (region, value) in zip(ma.regions, ma.values)
+    all_bounds = Vector{Tuple{Int, Int}}[]
+    for region in ma.regions
         length(region) == length(subs) || _lane_refuse(rule, "a makearray is read at the wrong rank")
         bounds = Tuple{Int, Int}[]
         for r in region
@@ -1413,6 +1621,20 @@ function _lane_membership_read(spec::_LaneSpec, ctx, ma::OpExpr, subs, sc, rule:
             (lo isa Integer && hi isa Integer) || _lane_refuse(rule, "a makearray has a symbolic region bound")
             push!(bounds, (Int(lo), Int(hi)))
         end
+        push!(all_bounds, bounds)
+    end
+    for d in eachindex(subs)
+        isempty(all_bounds) || minimum(b[d][1] for b in all_bounds) == 1 ||
+            _lane_refuse(rule, "a makearray's regions do not start at 1")
+    end
+    # The names the subscripts mention: a binder of one of them in a region
+    # value would capture the subscript once it is substituted in.
+    sub_names = Set{String}()
+    for s in subs
+        union!(sub_names, free_variables(s))
+    end
+    out = NumExpr(0.0)
+    for (bounds, value) in zip(all_bounds, ma.values)
         conds = ASTExpr[]
         for (s, (lo, hi)) in zip(subs, bounds)
             if lo == hi
@@ -1422,31 +1644,47 @@ function _lane_membership_read(spec::_LaneSpec, ctx, ma::OpExpr, subs, sc, rule:
                 push!(conds, OpExpr("<=", ASTExpr[s, IntExpr(hi)]))
             end
         end
-        thin = Tuple{String, Int, ASTExpr}[]
-        for (d, s) in enumerate(subs)
-            set = s isa VarExpr ? get(sc.lanevars, (s::VarExpr).name, nothing) : nothing
-            set !== nothing && bounds[d][1] == bounds[d][2] && push!(thin, (set, bounds[d][1], s))
-        end
-        v = isempty(thin) ? value : _lane_retarget_thin(spec, value, thin)
+        v = value
         read = if v isa OpExpr && _is_faq_op((v::OpExpr).op) && _lane_array_faq(v::OpExpr)
-            outs = String[string(o) for o in v.output_idx]
-            dims = length(outs) == length(region) ? collect(eachindex(region)) :
-                [d for d in eachindex(region) if bounds[d][1] != bounds[d][2]]
+            (
+                isempty(v.args) && v.key === nothing &&
+                    (v.join === nothing || isempty(v.join)) && v.distinct !== true
+            ) || _lane_refuse(
+                rule, "a faq region value carries `args`, `key`, `join` or `distinct`"
+            )
+            outs = _output_idx_strings(v)
+            dims = length(outs) == length(bounds) ? collect(eachindex(bounds)) :
+                [d for d in eachindex(bounds) if bounds[d][1] != bounds[d][2]]
             length(dims) == length(outs) || _lane_refuse(rule, "a faq region value does not fit its region")
             # The value's element at the read: its body with each output
             # index renamed to the subscript, shifted onto the value's own
-            # range (`sub - lo + start`). Inside the region's condition the
-            # subscript lies in the region, so the value's range need not
-            # span the lane set.
+            # range (`sub - lo + start`). Each output range must be exactly as
+            # long as its region dimension, so the shifted subscript stays
+            # inside it.
             renames = Dict{String, ASTExpr}()
             for (o, d) in zip(outs, dims)
+                lo, hi = bounds[d]
                 r = get(v.ranges, o, nothing)
                 b = r === nothing ? nothing : _lane_range_bounds(spec, r)
-                start = b === nothing ? 1 : b[1]
-                shift = start - bounds[d][1]
+                b === nothing && _lane_refuse(
+                    rule, "a faq region value's axis '$o' does not run over a unit stride range"
+                )
+                b[2] - b[1] == hi - lo || _lane_refuse(
+                    rule, "a faq region value's axis '$o' does not run over its region $lo..$hi"
+                )
+                shift = b[1] - lo
                 renames[o] = shift == 0 ? subs[d] : OpExpr("+", ASTExpr[subs[d], IntExpr(shift)])
             end
             contracted = Dict{String, Any}(String(k) => x for (k, x) in v.ranges if !(String(k) in outs))
+            any(k -> k in sub_names, keys(contracted)) &&
+                _lane_refuse(rule, "a faq region value's contraction rebinds a subscript")
+            for r in values(contracted)
+                of = r isa IndexSetRef ? r.of :
+                    (r isa AbstractDict ? something(get(r, "of", nothing), String[]) : String[])
+                any(p -> String(p) in outs, of) && _lane_refuse(
+                    rule, "a faq region value's contraction runs over a set of one of its output indices"
+                )
+            end
             body = _lane_rename(v.expr_body, renames, rule)
             if isempty(contracted) && v.filter === nothing
                 body
@@ -1459,15 +1697,30 @@ function _lane_membership_read(spec::_LaneSpec, ctx, ma::OpExpr, subs, sc, rule:
         else
             v
         end
+        # Retargeted after the rename, so a subscript it writes in is not
+        # renamed again.
+        thin = Tuple{String, Int, ASTExpr}[]
+        for (d, s) in enumerate(subs)
+            set = s isa VarExpr ? get(sc.lanevars, (s::VarExpr).name, nothing) : nothing
+            set !== nothing && bounds[d][1] == bounds[d][2] && push!(thin, (set, bounds[d][1], s))
+        end
+        isempty(thin) || (read = _lane_retarget_thin(spec, read, thin, Set{String}(), rule))
         cond = length(conds) == 1 ? conds[1] : OpExpr("and", conds)
         out = OpExpr("ifelse", ASTExpr[cond, read, out])
     end
     return out
 end
 
-function _lane_retarget_thin(spec::_LaneSpec, e::ASTExpr, thin)
+# `e` with every lane-array read at the literal `lo` of a `thin` entry on an
+# axis of its lane set read at that entry's subscript instead
+# (`_lane_membership_read`). `bound` holds the names the binders enclosing `e`
+# bind; writing a subscript in under a binder of its name would capture it,
+# which is refused.
+function _lane_retarget_thin(spec::_LaneSpec, e::ASTExpr, thin, bound::Set{String}, rule::String)
     e isa OpExpr || return e
-    o = map_children(c -> _lane_retarget_thin(spec, c, thin), e)
+    bs = _bound_symbols(e::OpExpr)
+    inner = isempty(bs) ? bound : union(bound, Set{String}(String(b) for b in bs))
+    o = map_children(c -> _lane_retarget_thin(spec, c, thin, inner, rule), e)
     if o.op == "index" && !isempty(o.args) && o.args[1] isa VarExpr
         n = (o.args[1]::VarExpr).name
         sh = haskey(spec.shapes, n) ? spec.shapes[n] : get(spec.obs_shapes, n, nothing)
@@ -1480,6 +1733,9 @@ function _lane_retarget_thin(spec::_LaneSpec, e::ASTExpr, thin)
                 k === nothing && continue
                 i = findfirst(x -> x[1] == set && x[2] == k, thin)
                 i === nothing && continue
+                any(in(bound), free_variables(thin[i][3])) && _lane_refuse(
+                    rule, "a region value's binder would capture a lane subscript"
+                )
                 args[p + 1] = thin[i][3]
                 changed = true
             end

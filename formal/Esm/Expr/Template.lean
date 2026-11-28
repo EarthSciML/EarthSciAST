@@ -54,6 +54,12 @@ def fieldSub (σ : Bindings) (s : String) : String :=
   | some _ => ""
   | none => s
 
+private def shapeSub (σ : Bindings) : Nat ⊕ String → Nat ⊕ String
+  | .inl n => .inl n
+  | .inr name => match σ.lookup name with
+    | some (.num n 0) => if n < 0 then .inr "" else .inl n.toNat
+    | _ => .inr (fieldSub σ name)
+
 mutual
 
 /-- §9.6.3 constraint 5: substitute every parameter occurrence. -/
@@ -65,12 +71,21 @@ def subst (σ : Bindings) : Ast → Ast
     | none => .var s
   | .const c => .const c
   | .node op args => .node op (substList σ args)
+  | .array op args =>
+    let op := match op with
+      | .reshape dims => ShapeOp.reshape (dims.map (shapeSub σ))
+      | .broadcast fn => ShapeOp.broadcast (fieldSub σ fn)
+      | other => other
+    .array op (substList σ args)
   | .faq out red rs body args =>
-    .faq (out.map (fieldSub σ)) (fieldSub σ red) (substRanges σ rs) (subst σ body)
+    .faq (out.map (fun i => i.mapSymbol (fieldSub σ))) (fieldSub σ red) (substRanges σ rs) (subst σ body)
       (substList σ args)
   | .faqWhere out red rs p body args =>
-    .faqWhere (out.map (fieldSub σ)) (fieldSub σ red) (substRanges σ rs) (subst σ p)
+    .faqWhere (out.map (fun i => i.mapSymbol (fieldSub σ))) (fieldSub σ red) (substRanges σ rs) (subst σ p)
       (subst σ body) (substList σ args)
+  | .faqJoin out red rs pairs p body args =>
+    .faqJoin (out.map (fun i => i.mapSymbol (fieldSub σ))) (fieldSub σ red) (substRanges σ rs)
+      (pairs.map (JoinPair.mapNames (fieldSub σ))) (subst σ p) (subst σ body) (substList σ args)
   | .apply n bs => .apply n (substBinds σ bs)
 
 def substList (σ : Bindings) : List Ast → List Ast
@@ -81,6 +96,8 @@ def substRanges (σ : Bindings) : Ranges → Ranges
   | .nil => .nil
   | .cons k t rs => .cons k (substList σ t) (substRanges σ rs)
   | .fromSet k set rs => .fromSet k (fieldSub σ set) (substRanges σ rs)
+  | .fromRagged k set parents rs =>
+    .fromRagged k (fieldSub σ set) (parents.map (fieldSub σ)) (substRanges σ rs)
 
 def substBinds (σ : Bindings) : Binds → Binds
   | .nil => .nil
@@ -121,10 +138,14 @@ def walkRefs (f : String → Binds → Except ExpandError Ast) : Ast → Except 
   | .var s => .ok (.var s)
   | .const c => .ok (.const c)
   | .node op args => do return .node op (← walkRefsList f args)
+  | .array op args => do return .array op (← walkRefsList f args)
   | .faq out red rs body args => do
     return .faq out red (← walkRefsRanges f rs) (← walkRefs f body) (← walkRefsList f args)
   | .faqWhere out red rs p body args => do
     return .faqWhere out red (← walkRefsRanges f rs) (← walkRefs f p) (← walkRefs f body)
+      (← walkRefsList f args)
+  | .faqJoin out red rs pairs p body args => do
+    return .faqJoin out red (← walkRefsRanges f rs) pairs (← walkRefs f p) (← walkRefs f body)
       (← walkRefsList f args)
   | .apply n bs => do f n (← walkRefsBinds f bs)
 
@@ -138,6 +159,7 @@ def walkRefsRanges (f : String → Binds → Except ExpandError Ast) :
   | .nil => .ok .nil
   | .cons k t rs => do return .cons k (← walkRefsList f t) (← walkRefsRanges f rs)
   | .fromSet k set rs => do return .fromSet k set (← walkRefsRanges f rs)
+  | .fromRagged k set parents rs => do return .fromRagged k set parents (← walkRefsRanges f rs)
 
 def walkRefsBinds (f : String → Binds → Except ExpandError Ast) :
     Binds → Except ExpandError Binds

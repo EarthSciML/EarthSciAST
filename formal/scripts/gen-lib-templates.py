@@ -106,12 +106,32 @@ def ast(e, indent, path):
         if "expr" not in e:
             raise Unsupported(f"{path}: faq has no expr")
         out = e.get("output_idx", [])
-        if any(not isinstance(o, str) for o in out):
-            raise Unsupported(f"{path}: faq output_idx entry that is not a symbol")
+        axes = []
+        for axis in out:
+            if isinstance(axis, str):
+                axes.append(f"(OutputIndex.symbol {lean_str(axis)})")
+            elif type(axis) is int and axis == 1:
+                axes.append("OutputIndex.singleton")
+            else:
+                raise Unsupported(f"{path}: faq output_idx entry that is not a symbol or 1")
         ranges = "Ranges.nil"
         for k, r in reversed(list(e.get("ranges", {}).items())):
             if isinstance(r, dict) and set(r) == {"from"} and isinstance(r["from"], str):
                 ranges = f"(Ranges.fromSet {lean_str(k)} {lean_str(r['from'])} {ranges})"
+                continue
+            if isinstance(r, dict) and set(r) == {"from", "of"}:
+                parent_names = r["of"]
+                if not (
+                    isinstance(r["from"], str)
+                    and isinstance(parent_names, list)
+                    and parent_names
+                    and all(isinstance(parent, str) for parent in parent_names)
+                ):
+                    raise Unsupported(f"{path}: ragged faq range {k!r} needs a set and parent names")
+                parents = ", ".join(lean_str(parent) for parent in parent_names)
+                ranges = (
+                    f"(Ranges.fromRagged {lean_str(k)} {lean_str(r['from'])} [{parents}] {ranges})"
+                )
                 continue
             if not isinstance(r, list):
                 raise Unsupported(f"{path}: faq range {k!r} is neither a tuple nor a from-set")
@@ -120,8 +140,7 @@ def ast(e, indent, path):
                       + f"] {ranges})")
         head = "(Ast.faqWhere [" if "filter" in e else "(Ast.faq ["
         lines = [
-            pad + head + ", ".join(lean_str(o) for o in out) + "] "
-            + lean_str(e.get("reduce", "+")) + " " + ranges,
+            pad + head + ", ".join(axes) + "] " + lean_str(e.get("reduce", "+")) + " " + ranges,
         ]
         if "filter" in e:
             lines.append(ast(e["filter"], indent + 1, path + ".filter"))

@@ -2386,6 +2386,38 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         );
     }
 
+    if let Some(cell) =
+        super::index_cell::ElementwiseCell::plan(&node.args[0], node.args.len() - 1, &|name| {
+            if ctx.param_binding(name).is_some() || ctx.recur.is_some_and(|r| r.name == name) {
+                return None;
+            }
+            if name == "t" || ctx.loop_binds.contains_key(name) {
+                return Some(DimU::new());
+            }
+            if let Some(array) = ctx
+                .state_arrays
+                .get(name)
+                .or_else(|| ctx.observed_arrays.get(name))
+            {
+                return Some(array.shape().iter().copied().collect());
+            }
+            if ctx.param_names.iter().any(|p| p == name) {
+                return Some(DimU::new());
+            }
+            ctx.forcing
+                .borrow()
+                .get(name)
+                .map(|array| array.shape().iter().copied().collect())
+        })
+    {
+        let (raw, scalar_indices) = eval_index_args(&node.args[1..], ctx);
+        return if scalar_indices {
+            eval(&cell.select(&raw), ctx)
+        } else {
+            Value::Scalar(0.0)
+        };
+    }
+
     // The gather's PROVENANCE is decided by the operand itself: a named const
     // factor, or a `const` literal written inline (esm-spec §4.3.3). A computed
     // array operand (`index(reshape(...), i)`) is never a const-array gather.

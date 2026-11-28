@@ -95,14 +95,17 @@ _rrc_terms(t) = t == "all" ? :all :
 _rrc_writes(w) = w == "all" ? :all : String[String(x) for x in w]
 _rrc_box(b) = [String(k) => Int(v[1]):Int(v[2]) for (k, v) in pairs(b)]
 
-function _rrc_problem(c)
+function _rrc_problem(c, problems)
     mp = haskey(c, :metaparameters) ?
         Dict{String, Int}(String(k) => Int(v) for (k, v) in pairs(c.metaparameters)) :
         Dict{String, Int}()
-    return RRC.esm_problem(
-        joinpath(_RRC_DIR, c.document), (0.0, 1.0);
-        metaparameters = mp, compiler = :native
-    )
+    document = String(c.document)
+    return get!(problems, (document, mp)) do
+        RRC.esm_problem(
+            joinpath(_RRC_DIR, document), (0.0, 1.0);
+            metaparameters = mp, compiler = :native
+        )
+    end
 end
 
 function _rrc_op(c, prob)
@@ -144,8 +147,7 @@ function _rrc_tile_wrap(m, b, c)
 end
 
 # Run one tile against G; return the G slots its owned rows covered.
-function _rrc_check_tile!(op, dec, t, G, ext, p; du_shared = nothing)
-    tile = RRC.restrict(op, dec; owned = _rrc_box(t.owned), storage = _rrc_box(t.storage))
+function _rrc_check_tile!(op, dec, tile, G, ext, p; du_shared = nothing)
     L = RRC.tile_layout(tile)
     m = RRC._axis_model(op, dec)
     wrap = (b, c) -> _rrc_tile_wrap(m, b, c)
@@ -201,14 +203,11 @@ function _rrc_tile_partition(c, prob)
             du_shared = nothing
             owned_all = Set{Int}()
             for t in tiling.tiles
+                tile = RRC.restrict(op, dec; owned = _rrc_box(t.owned), storage = _rrc_box(t.storage))
                 if shared && du_shared === nothing
-                    tile0 = RRC.restrict(
-                        op, dec; owned = _rrc_box(t.owned),
-                        storage = _rrc_box(t.storage)
-                    )
-                    du_shared = fill(NaN, RRC.tile_layout(tile0).n_u)
+                    du_shared = fill(NaN, RRC.tile_layout(tile).n_u)
                 end
-                cov, os, _ = _rrc_check_tile!(op, dec, t, G, ext, prob.p; du_shared = du_shared)
+                cov, os, _ = _rrc_check_tile!(op, dec, tile, G, ext, prob.p; du_shared = du_shared)
                 union!(owned_all, os)
                 for gs in cov
                     counts[gs] += 1
@@ -385,17 +384,22 @@ end
     @test manifest.compiler == "native"
     only = get(ENV, "RANGE_RHS_CASES", "")
     pick = isempty(only) ? nothing : Set(split(only, ","))
+    problems = Dict{Tuple{String, Dict{String, Int}}, RRC.EsmProblem}()
     for c in manifest.cases
         pick === nothing || String(c.id) in pick || continue
         @testset "$(c.id)" begin
-            prob = _rrc_problem(c)
+            prob = _rrc_problem(c, problems)
             k = String(c.kind)
             if k == "tile_partition"
                 _rrc_tile_partition(c, prob)
             elseif k == "tile_ok"
                 _, op = _rrc_op(c, prob)
                 G, ext = _rrc_whole(op, prob.p)
-                _rrc_check_tile!(op, _rrc_dec(c.decomposition), c.tile, G, ext, prob.p)
+                dec = _rrc_dec(c.decomposition)
+                tile = RRC.restrict(
+                    op, dec; owned = _rrc_box(c.tile.owned), storage = _rrc_box(c.tile.storage)
+                )
+                _rrc_check_tile!(op, dec, tile, G, ext, prob.p)
             elseif k == "tile_error"
                 _, op = _rrc_op(c, prob)
                 _rrc_expect_error(c) do

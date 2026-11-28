@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::op_registry::{CoreOp, OtherOp as O};
+use crate::simulate_array::index_cell::ElementwiseCell;
 
 impl<'m> TapeBuilder<'m> {
     // -- wholesale-body lowering (the per-cell `eval` mirror) -----------------
@@ -603,6 +604,12 @@ impl<'m> TapeBuilder<'m> {
         let Some((base, idx_args)) = node.args.split_first() else {
             return Ok(LV::Lit(f64::NAN));
         };
+        if let Some(cell) = self.elementwise_index_plan(base, idx_args.len(), None) {
+            // Keep value-numbering entries for the temporary projection
+            // separate from the enclosing rule's interned nodes.
+            return self
+                .lower_wholesale_rule(|builder| builder.lower_elementwise_cell(&cell, idx_args));
+        }
         let const_base = self.const_arrays.is_const_base(base);
         let basev = self.lower_wholesale(base)?;
         let Some((shape, origin)) = self.lv_box(&basev) else {
@@ -687,6 +694,65 @@ impl<'m> TapeBuilder<'m> {
         let src = self.src_of(&basev);
         self.emit(Instr::LoadElem { src, idx, out }, sec);
         Ok(LV::Scalar(out))
+    }
+
+    fn lower_elementwise_cell(&mut self, cell: &ElementwiseCell, indices: &[Expr]) -> LResult<LV> {
+        let mut subs = SmallVec::<[LV; 4]>::new();
+        for index in indices {
+            let value = self.lower_wholesale(index)?;
+            if self.lv_box(&value).is_some() {
+                bail_tape!("wholesale: an array-valued index argument");
+            }
+            subs.push(value);
+        }
+        let fixed: Option<DimI> = subs
+            .iter()
+            .map(|sub| match sub {
+                LV::Lit(value) => Some(value.round() as i64),
+                _ => None,
+            })
+            .collect();
+        if let Some(fixed) = fixed {
+            return self.lower_wholesale(&cell.select(&fixed));
+        }
+
+        // A wholesale computed gather rounds its f64 subscript before
+        // comparing it with the source extent. The half-integer endpoints
+        // give exactly the same interval, including a tie at either end.
+        let reach = {
+            let _precision = crate::precision::enter(Precision::Float64);
+            let mut reach = LV::Lit(1.0);
+            for (&len, sub) in cell.extents().iter().zip(subs) {
+                if len == 0 {
+                    return Ok(LV::Lit(0.0));
+                }
+                let (upper_op, upper) = if (len as u64) < (1 << 52) {
+                    (BinCode::Lt, len as f64 + 0.5)
+                } else {
+                    // At this magnitude binary64 already holds integers.
+                    let upper = len as f64;
+                    let op = if upper as u64 > len as u64 {
+                        BinCode::Lt
+                    } else {
+                        BinCode::Le
+                    };
+                    (op, upper)
+                };
+                let lo = self.emit_bin(BinCode::Ge, sub.clone(), LV::Lit(0.5))?;
+                let hi = self.emit_bin(upper_op, sub, LV::Lit(upper))?;
+                let axis = self.emit_bin(BinCode::And, lo, hi)?;
+                reach = self.emit_bin(BinCode::And, reach, axis)?;
+            }
+            reach
+        };
+        let chosen = cell.project(indices);
+        self.lower_branchy(reach, false, |builder, taken| {
+            if taken {
+                builder.lower_wholesale(&chosen)
+            } else {
+                Ok(LV::Lit(0.0))
+            }
+        })
     }
 
     /// `eval_faq` mirror (a standalone aggregate evaluated wholesale):

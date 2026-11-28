@@ -1,0 +1,444 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "lanes_forcing_contraction",
+    "description": "A pointwise operator on a 6 x 5 x 4 grid fed by forcing data the way a regridded emission inventory is. F and G are data-fed array parameters (forcing slots); the source is never read, so the default forcing set holds their declared defaults. E over 30 target cells is a whole-domain contraction of the forcing array F over 40 source cells (it reads forcing only: no state, no t), Exy over (lon, lat) reads E at the computed flattened subscript (j-1)*6+i, and the right-hand side also reads the forcing arrays G at the non-affine subscript floor((i+2j)/2) and F at the affine subscript (j-1)*6+i+5, which a lane program pre-gathers per lane. A lane program evaluates E once per forcing set, not once per call or per chunk of lanes.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-26T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "data_sources": {
+    "Inventory": {
+      "kind": "static",
+      "source": {
+        "url_template": "file:///data/inventory_that_is_never_read.nc"
+      }
+    }
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 6
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 5
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    },
+    "src": {
+      "kind": "interval",
+      "size": 40
+    },
+    "tgt": {
+      "kind": "interval",
+      "size": 30
+    },
+    "gsrc": {
+      "kind": "interval",
+      "size": 9
+    }
+  },
+  "models": {
+    "Emis": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 1.0
+        },
+        "E": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": [
+            "tgt"
+          ]
+        },
+        "Exy": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": [
+            "lon",
+            "lat"
+          ]
+        },
+        "F": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [
+            "src"
+          ],
+          "default": [
+            0.91,
+            1.32,
+            0.63,
+            1.04,
+            1.45,
+            0.76,
+            1.17,
+            1.58,
+            0.89,
+            1.3,
+            0.61,
+            1.02,
+            1.43,
+            0.74,
+            1.15,
+            1.56,
+            0.87,
+            1.28,
+            1.69,
+            1.0,
+            1.41,
+            0.72,
+            1.13,
+            1.54,
+            0.85,
+            1.26,
+            1.67,
+            0.98,
+            1.39,
+            1.8,
+            1.11,
+            1.52,
+            0.83,
+            1.24,
+            1.65,
+            0.96,
+            1.37,
+            1.78,
+            1.09,
+            1.5
+          ],
+          "update": {
+            "kind": "data",
+            "source": "Inventory",
+            "from": {
+              "file_variable": "F"
+            }
+          }
+        },
+        "G": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [
+            "gsrc"
+          ],
+          "default": [
+            1.375,
+            1.375,
+            1.375,
+            1.75,
+            1.75,
+            1.75,
+            2.125,
+            2.125,
+            2.125
+          ],
+          "update": {
+            "kind": "data",
+            "source": "Inventory",
+            "from": {
+              "file_variable": "G"
+            }
+          }
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": "E",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "tgt"
+              },
+              "s": {
+                "from": "src"
+              }
+            },
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "F",
+                    "s"
+                  ]
+                },
+                {
+                  "op": "+",
+                  "args": [
+                    1.0,
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "-",
+                          "args": [
+                            "s",
+                            "c"
+                          ]
+                        },
+                        {
+                          "op": "-",
+                          "args": [
+                            "s",
+                            "c"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "Exy",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "E",
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "-",
+                          "args": [
+                            "j",
+                            1
+                          ]
+                        },
+                        6
+                      ]
+                    },
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "l"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "l": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A",
+                    "i",
+                    "j",
+                    "l"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "l"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "l": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        "k"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "A",
+                        "i",
+                        "j",
+                        "l"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "ifelse",
+                  "args": [
+                    {
+                      "op": "<",
+                      "args": [
+                        "l",
+                        2
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        0.01,
+                        {
+                          "op": "index",
+                          "args": [
+                            "Exy",
+                            "i",
+                            "j"
+                          ]
+                        }
+                      ]
+                    },
+                    0.0
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.001,
+                    {
+                      "op": "index",
+                      "args": [
+                        "G",
+                        {
+                          "op": "floor",
+                          "args": [
+                            {
+                              "op": "/",
+                              "args": [
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    {
+                                      "op": "*",
+                                      "args": [
+                                        2,
+                                        "j"
+                                      ]
+                                    }
+                                  ]
+                                },
+                                2
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.002,
+                    {
+                      "op": "index",
+                      "args": [
+                        "F",
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "j",
+                                    1
+                                  ]
+                                },
+                                6
+                              ]
+                            },
+                            "i",
+                            5
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

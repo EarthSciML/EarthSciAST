@@ -2,7 +2,7 @@
   "category": "broadcast_alignment",
   "runner": "inline_tests",
   "version": "1.0",
-  "description": "Cross-binding conformance for esm-spec \u00a74.3.4's NAME-BASED operand alignment in an array-level equation, and for the scope boundary that rule has. An operand of a bare array-level expression aligns to the result by INDEX-SET NAME: it supplies the axes it is declared over, replicates along the ones it is not, and TRANSPOSES when its declaration order differs from the result's. An operand whose shape is ANONYMOUS \u2014 a `faq` result, whose axes carry node-local output symbols rather than index-set names \u2014 stays POSITIONAL, and the `broadcast` node spelling is governed by exactly the same rule as the bare one. Every binding got the alignment half wrong in its own vocabulary and in OPPOSITE directions (EarthSciML/EarthSciAST#100): Rust flattened the operand into the result's linear layout and zero-filled the tail, Python right-aligned the way NumPy does, and both produced finite, plausible, wrong fields. A one-operand `broadcast` separately dropped its `fn` and behaved as the identity (#101), which turns a negated flux into an un-negated one \u2014 also finite and plausible. The fixtures are documents that carry their own \u00a76.6 `tests` blocks, so the authored expectation travels with the physics; the goldens are the Julia `interpreter`'s actuals for the same assertions.",
+  "description": "Cross-binding conformance for esm-spec \u00a74.3.4's NAME-BASED operand alignment in an array-level equation, and for the scope boundary that rule has. An operand of a bare array-level expression aligns to the result by INDEX-SET NAME: it supplies the axes it is declared over, replicates along the ones it is not, and TRANSPOSES when its declaration order differs from the result's. An operand whose shape is ANONYMOUS \u2014 one that names no index sets, such as a `faq` over inline intervals \u2014 stays POSITIONAL, while a `faq` over `{from}` index sets is placed by those names, and the `broadcast` node spelling is governed by exactly the same rule as the bare one. Every binding got the alignment half wrong in its own vocabulary and in OPPOSITE directions (EarthSciML/EarthSciAST#100): Rust flattened the operand into the result's linear layout and zero-filled the tail, Python right-aligned the way NumPy does, and both produced finite, plausible, wrong fields. A one-operand `broadcast` separately dropped its `fn` and behaved as the identity (#101), which turns a negated flux into an un-negated one \u2014 also finite and plausible. The fixtures are documents that carry their own \u00a76.6 `tests` blocks, so the authored expectation travels with the physics; the goldens are the Julia `interpreter`'s actuals for the same assertions.",
   "reference_binding": "julia",
   "reference_compiler": "interpreter",
   "bindings_required": [
@@ -34,7 +34,7 @@
   "tolerances": {
     "golden_rtol": 1e-09,
     "golden_atol": 1e-11,
-    "detail": "The band between a producer's actual and the Julia-interpreter golden. It is separate from, and tighter than, each assertion's own \u00a76.6.4 band: the assertion states what the PHYSICS is (and is gated at the document's own tolerance by each binding's \u00a76.6.3 predicate), while this states how far two evaluations of the same arithmetic may drift. Every fixture here integrates a CONSTANT tendency from a zero initial condition, or a scalar exponential, so an integrator contributes nothing near this floor."
+    "detail": "The band between a producer's actual and the Julia-interpreter golden. It is separate from, and tighter than, each assertion's own \u00a76.6.4 band: the assertion states what the PHYSICS is (and is gated at the document's own tolerance by each binding's \u00a76.6.3 predicate), while this states how far two evaluations of the same arithmetic may drift. The state-free probes test named alignment directly. The trajectory probes integrate a constant tendency from a zero initial condition, or a scalar exponential."
   },
   "fixtures": [
     {
@@ -63,7 +63,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "bare_mixed_rank_product",
@@ -91,7 +100,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "bare_axis_permuted_operand",
@@ -119,7 +137,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "broadcast_node_mixed_rank",
@@ -147,7 +174,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "anonymous_shape_positional",
@@ -175,7 +211,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "unary_broadcast_fn",
@@ -204,7 +249,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
     },
     {
       "id": "observed_expression_aligned",
@@ -218,6 +272,214 @@
         "issue-100"
       ],
       "note": "Authored here. Migrated from the Python `test_observed_expression_is_aligned_too` and the Rust `array_shaped_observed_broadcasts_by_name`.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
+    },
+    {
+      "id": "static_named_broadcast",
+      "path": "fixtures/static_named_broadcast.esm",
+      "model": "StaticNamedBroadcast",
+      "golden": "golden/static_named_broadcast.json",
+      "tags": [
+        "static",
+        "array"
+      ],
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "nested_producer_union",
+      "path": "fixtures/nested_producer_union.esm",
+      "model": "NestedProducerUnion",
+      "golden": "golden/nested_producer_union.json",
+      "tags": [
+        "static",
+        "array",
+        "undeclared-result",
+        "faq-producer",
+        "esm-spec-4.3.4"
+      ],
+      "note": "Authored here. An undeclared result spans the union of its operands' index sets, a faq producer contributing its own wherever it sits on the value path.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": [],
+      "lean_assertion_exclusions": {
+        "zw[2,3]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zw[1,2]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zv[2,3]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zv[1,1]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zt": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zi[2,3]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zi[1,2]": "The Lean static adapter reads shapes from declarations only; it does not infer the index sets of a variable declared without a `shape` (esm-spec \u00a74.3.4), so it refuses this read with array_shape_mismatch.",
+        "zr": "The Lean static adapter checks a `faq` definition's extents against the declared shape position by position; it does not place a `faq` over `{from}` index sets by name when that `faq` is the whole definition (esm-spec \u00a74.3.4 rule 2), so it refuses this transposed definition with array_shape_mismatch.",
+        "xr": "The Lean static adapter checks a `faq` definition's extents against the declared shape position by position; it does not place a `faq` over `{from}` index sets by name when that `faq` is the whole definition (esm-spec \u00a74.3.4 rule 2), so it refuses this replicated definition with array_shape_mismatch."
+      }
+    },
+    {
+      "id": "undeclared_operand_state",
+      "path": "fixtures/undeclared_operand_state.esm",
+      "model": "UndeclaredOperandState",
+      "golden": "golden/undeclared_operand_state.json",
+      "tags": [
+        "array-level",
+        "state",
+        "undeclared-operand",
+        "faq-producer",
+        "esm-spec-4.3.4"
+      ],
+      "note": "Authored here. A whole-array state equation aligns an operand declared without a `shape` by the index sets its definition spans, as an observed equation does.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "The authored assertions require an integrated state. Lean scores the state-free companion in this tier."
+        }
+      ]
+    },
+    {
+      "id": "faq_producer_foreign_index_set",
+      "path": "fixtures/faq_producer_foreign_index_set.esm",
+      "model": "FaqProducerForeignIndexSet",
+      "golden": null,
+      "expected_fault": {
+        "code": "array_shape_mismatch",
+        "binding_codes": {
+          "julia": "E_TREEWALK_ARRAY_SHAPE_MISMATCH"
+        },
+        "reason": "A faq over {from: lon} under an elementwise operator, in a result declared over [lat] only. The faq aligns by the index sets it names (esm-spec \u00a74.3.4 rule 2), and lon has no axis in the result, so the build refuses, as for a declared operand over lon. A positional read would launder it into the plausible [2, 4] the assertions pin. Julia's build spells the code E_TREEWALK_ARRAY_SHAPE_MISMATCH, the build-time twin of validate()'s array_shape_mismatch."
+      },
+      "tags": [
+        "fault",
+        "array-level",
+        "faq-producer",
+        "esm-spec-4.3.4"
+      ],
+      "note": "Authored here. Every required compiler of every executing binding must decline the document with array_shape_mismatch.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "faq_whole_rhs_foreign_index_set",
+      "path": "fixtures/faq_whole_rhs_foreign_index_set.esm",
+      "model": "FaqWholeRhsForeignIndexSet",
+      "golden": null,
+      "expected_fault": {
+        "code": "array_shape_mismatch",
+        "binding_codes": {
+          "julia": "E_TREEWALK_ARRAY_SHAPE_MISMATCH"
+        },
+        "reason": "The same refusal when the faq over {from: lon} is the whole right-hand side of a result declared over [lat] only. A positional read would launder it into the plausible [1, 2] the assertions pin."
+      },
+      "tags": [
+        "fault",
+        "array-level",
+        "faq-producer",
+        "esm-spec-4.3.4"
+      ],
+      "note": "Authored here. Every required compiler of every executing binding must decline the document with array_shape_mismatch.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "permuted_static_alias",
+      "path": "differential/shaped/permuted_static_alias.esm",
+      "model": "Probe",
+      "golden": "golden/permuted_static_alias.json",
+      "tags": [
+        "static",
+        "named-alignment",
+        "axis-permutation",
+        "differential-replay"
+      ],
+      "note": "Exact saved replay of the Julia native wrong-cell read through a bare shape-permuting alias.",
       "required": {
         "julia": [
           "interpreter",

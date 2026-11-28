@@ -201,7 +201,7 @@ def coreOps : List OpRow := [
     shape := r#"no semiring (or "sum_product"), reduce "+", "*", "max" or "min"; no join, distinct or key"#,
     tier := native,
     latex := r"one \sum, \prod, \max or \min over all reduced indices. A range prints as k \in S (from), k \in S(i) (from with of) or a \le k \le b (dense [a, b]); a lone dense range as \sum_{k=a}^{b}. Several ranges, then the filter, stack in \substack; a range row is never an expression, so the filter row is unambiguous. Output indices as \left[ … \right] with the same range forms in its subscript. args: empty is unmarked; exactly the arrays the body indexes is \sum\limits; any other list of names is a superscript set, on the operator for rank 0 (\sum_{…}^{\{f, g\}} …, the lone dense range then in the one-row form _{a \le k \le b}) and on the output bracket, before its subscript, otherwise (\left[ … \right]^{\{f\}}_{2 \le i \le N - 1}; decided 2026-11-15)",
-    typst := r#"sum_(…), product_(…), max_(…), min_(…) with the same range forms (k in S, k in S(i), a <= k <= b), rows stacked with \ and the filter last; output indices as lr([…])_(…); the args marker limits(sum); a superscript set sum_(…)^({f, g}) and lr([…])^({f})_(…)"# },
+    typst := r#"sum_(…), product_(…), max_(…), min_(…) with the same range forms (k in S, k in S(i), a <= k <= b), the set S's word segments upright (k in upright("lev"), k in upright("lev")"."upright("top"), k in a"."upright("bins")(i); a letter, Greek, x_i or formula segment prints as in any name; decided 2026-11-26), rows stacked with \ and the filter last; output indices as lr([…])_(…); the args marker limits(sum); a superscript set sum_(…)^({f, g}) and lr([…])^({f})_(…)"# },
   { op := "faq", shape := r#"join, distinct, key, a semiring other than "sum_product", or args that are not names"#,
     tier := call, latex := r"\operatorname{faq}(f; \mathrm{expr} = …, \mathrm{join} = …, …)",
     typst := r#"op("faq")(f; upright("expr") = …, …)"# },
@@ -689,7 +689,8 @@ def variants : List Variant := [
 /-! ## Canonical-form spelling rules
 
 Redundant spellings the canonical form merges (landing with the canonical unit spelling).
-`esm-lean canon` (`spellRules` in `Adapter/Doc.lean`) applies the `neg` and `pow` rules and
+`esm-lean canon` (`spellRules` in `Adapter/Doc.lean`) applies the `neg`, `pow` and `faq`
+default-field rules (the last as `faqDefaults`) and
 respells every `units` and `default_units` string (`Esm.Units.canon`, under which `""`,
 `"1"` and `"dimensionless"` are all `"1"`); a `const` node whose units spell `"1"` drops
 them, so one whose value is a number is that bare number, whatever other fields it has

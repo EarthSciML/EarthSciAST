@@ -7,6 +7,7 @@
     {"id": "float_subnormal",   "path": "float_subnormal.json",   "tags": ["float", "subnormal", "signed_zero", "ordering"]},
     {"id": "float_ties",        "path": "float_ties.json",        "tags": ["float", "tie", "ordering"]},
     {"id": "n_ary_flatten",     "path": "n_ary_flatten.json",     "tags": ["flatten", "ordering", "nonleaf"]},
+    {"id": "nested_typed_arithmetic", "path": "nested_typed_arithmetic.json", "tags": ["flatten", "ordering", "zero_elim", "float", "integer"]},
     {"id": "zero_elim",         "path": "zero_elim.json",         "tags": ["zero_elim", "integer", "ordering", "nonleaf"]},
     {"id": "nonleaf_ordering",  "path": "nonleaf_ordering.json",  "tags": ["ordering", "nonleaf"]},
     {"id": "faq_unsupported",       "path": "faq_unsupported.json",       "tags": ["fail_closed", "faq", "reduce", "semiring"]},

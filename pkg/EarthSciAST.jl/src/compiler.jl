@@ -1069,6 +1069,16 @@ function _percell_license(rule::AbstractString, reason; probe = nothing)
 end
 
 """
+    _optional_percell_license() -> Union{_PerCellLicense, Nothing}
+
+A license under a non-strict plan, `nothing` under a strict one. For a route
+that may CHOOSE a per-cell walk over the compiled form it would otherwise
+build (a walk cheaper than compiling a tiny sweep, say): with no license it
+builds the compiled form, and nothing is refused.
+"""
+_optional_percell_license() = _compiler_is_strict() ? nothing : _PerCellLicense()
+
+"""
     _percell_evaluation_license(rule, what, cells; probe, one_cell) -> _PerCellLicense
 
 The license for a materialization that RESOLVES AND COMPILES the expression once

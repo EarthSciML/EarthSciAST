@@ -62,7 +62,14 @@
      "native"
     ]
    },
-   "named_exclusions": []
+   "named_exclusions": [
+    {
+     "binding": "lean",
+     "compilers": ["interpreter"],
+     "code": "unsupported_construct",
+     "reason": "Every assertion requires an integrated state. Lean evaluates the state-free indexed_filter_two_outputs fixture in this tier."
+    }
+   ]
   },
   {
    "id": "indexed_filter_two_outputs",

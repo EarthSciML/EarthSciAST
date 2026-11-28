@@ -1,0 +1,163 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "RaggedDistinctStatic",
+    "description": "Distinct enumerates actual ragged members, sort-deduplicates keys and binds the derived extent.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {
+    "faces": {
+      "kind": "interval",
+      "size": 3
+    },
+    "slots": {
+      "kind": "interval",
+      "size": 3
+    },
+    "neighbors": {
+      "kind": "ragged",
+      "of": [
+        "faces"
+      ],
+      "offsets": "lengths",
+      "values": "members"
+    },
+    "found": {
+      "kind": "derived",
+      "from_faq": "unique_neighbors"
+    }
+  },
+  "models": {
+    "RaggedDistinctStatic": {
+      "variables": {
+        "lengths": {
+          "type": "unknown",
+          "shape": [
+            "faces"
+          ]
+        },
+        "members": {
+          "type": "unknown",
+          "shape": [
+            "faces",
+            "slots"
+          ]
+        },
+        "exists": {
+          "type": "unknown",
+          "shape": [
+            "found"
+          ]
+        },
+        "num_found": {
+          "type": "unknown"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "num_found",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "z": {
+                "from": "found"
+              }
+            },
+            "expr": 1
+          }
+        },
+        {
+          "lhs": {
+            "op": "index",
+            "args": [
+              "exists",
+              "i"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "id": "unique_neighbors",
+            "semiring": "bool_and_or",
+            "distinct": true,
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "a": {
+                "from": "neighbors",
+                "of": [
+                  "z"
+                ]
+              },
+              "z": {
+                "from": "faces"
+              }
+            },
+            "key": "a",
+            "expr": {
+              "op": "true",
+              "args": []
+            }
+          }
+        },
+        {
+          "lhs": "lengths",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              2,
+              0,
+              2
+            ]
+          }
+        },
+        {
+          "lhs": "members",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              [
+                9,
+                3,
+                99
+              ],
+              [
+                99,
+                99,
+                99
+              ],
+              [
+                9,
+                4,
+                99
+              ]
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "ragged_distinct",
+          "time_span": {
+            "start": 0,
+            "end": 1
+          },
+          "assertions": [
+            {
+              "variable": "num_found",
+              "expected": 3,
+              "time": 0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

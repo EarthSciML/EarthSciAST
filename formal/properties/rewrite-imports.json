@@ -1,0 +1,28 @@
+{
+  "properties": [
+    {
+      "id": "P-rewrite-import-append-unseen",
+      "clauses": ["spec.9.6.3.fixpoint-byte-identical"],
+      "statement": "An import registry merge appends an unseen declaration at the end of the effective sequence.",
+      "lean_statement": "∀ (code name : String) (earlier : Esm.Rewrite.Imports.Entries) (value : Esm.Document.Json), earlier.lookup name = none → Esm.Rewrite.Imports.mergeEntries code earlier [(name, value)] = .ok (earlier ++ [(name, value)])",
+      "status": "proven",
+      "theorem": "Esm.Rewrite.Imports.mergeEntries_append_new"
+    },
+    {
+      "id": "P-rewrite-import-keep-first-equal",
+      "clauses": ["spec.9.6.3.fixpoint-byte-identical"],
+      "statement": "A deep-equal duplicate keeps the registry intact, including the earlier declaration’s position.",
+      "lean_statement": "∀ (code name : String) (earlier : Esm.Rewrite.Imports.Entries) (previous value : Esm.Document.Json), earlier.lookup name = some previous → Esm.Rewrite.sameValue previous value = true → Esm.Rewrite.Imports.mergeEntries code earlier [(name, value)] = .ok earlier",
+      "status": "proven",
+      "theorem": "Esm.Rewrite.Imports.mergeEntries_keep_first"
+    },
+    {
+      "id": "P-rewrite-import-rename-shape-axes",
+      "clauses": ["spec.9.6.1.where-shape-rename"],
+      "statement": "An import edge maps every axis in a shape constraint through its axis rename, preserving the order and the parameter constrained.",
+      "lean_statement": "∀ (mapping : Esm.Rewrite.Imports.Renames) (param : String) (axes : List String), Esm.Rewrite.Imports.renameWhere mapping (.obj [(param, .obj [(\"shape\", .arr (axes.map Esm.Document.Json.str))])]) = .obj [(param, .obj [(\"shape\", .arr ((axes.map (Esm.Rewrite.Imports.renamed mapping)).map Esm.Document.Json.str))])]",
+      "status": "proven",
+      "theorem": "Esm.Rewrite.Imports.renameWhere_shape"
+    }
+  ]
+}

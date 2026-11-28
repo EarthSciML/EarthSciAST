@@ -63,6 +63,39 @@
           "native"
         ]
       },
+      "named_exclusions": [],
+      "lean_assertion_exclusions": {
+        "probe": "The probe is an integrated state."
+      }
+    },
+    {
+      "id": "nan_extrema",
+      "path": "fixtures/nan_extrema.esm",
+      "model": "Probe",
+      "golden": "golden/nan_extrema.json",
+      "tags": [
+        "scalar",
+        "operators",
+        "faq",
+        "nan",
+        "esm-spec-4.2",
+        "static-evaluation"
+      ],
+      "note": "Authored here to pin issue #568. Self-inequality gives a finite control for NaN propagation, including under a selected FAQ max term.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
       "named_exclusions": []
     },
     {
@@ -91,7 +124,10 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [],
+      "lean_assertion_exclusions": {
+        "probe": "The probe is an integrated state."
+      }
     },
     {
       "id": "pow_alias",
@@ -119,7 +155,10 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [],
+      "lean_assertion_exclusions": {
+        "probe": "The probe is an integrated state."
+      }
     },
     {
       "id": "boolean_literal_true",
@@ -147,7 +186,10 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [],
+      "lean_assertion_exclusions": {
+        "probe": "The probe is an integrated state."
+      }
     },
     {
       "id": "angle_array_element",
@@ -177,7 +219,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "Angle conversion and shaped variables are outside the scalar model."
+        }
+      ]
     },
     {
       "id": "angle_nested_fields",
@@ -208,7 +259,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "Angle conversion and shaped variables are outside the scalar model."
+        }
+      ]
     },
     {
       "id": "pre_passthrough",
@@ -236,7 +296,16 @@
           "native"
         ]
       },
-      "named_exclusions": []
+      "named_exclusions": [
+        {
+          "binding": "lean",
+          "compilers": [
+            "interpreter"
+          ],
+          "code": "unsupported_construct",
+          "reason": "Pre and its event semantics are outside the scalar model."
+        }
+      ]
     }
   ]
 }

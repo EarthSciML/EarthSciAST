@@ -76,6 +76,8 @@ Base.length(::Build) = 6
 # `EarthSciAST.notify_forcing_refresh!`).
 EarthSciAST.notify_forcing_refresh!(b::Build) =
     EarthSciAST._bump_epoch!(b.report.products.forcing_epoch)
+EarthSciAST._declare_announced!(b::Build) =
+    (b.report.products.forcing_epoch.announced = true; nothing)
 
 """
     Internal.build(input; model_name = "M", compiler = :native, index_sets = nothing,

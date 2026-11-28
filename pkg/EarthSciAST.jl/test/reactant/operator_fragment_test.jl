@@ -159,6 +159,97 @@ function fragment_rk4_program()
     return f, args, run
 end
 
+# A lane model whose right-hand side references the template `sq` twice, with
+# different arguments: `D(u[i]) = sq(u[i]) + sq(0.5 u[i] + data[i])`.
+function template_problem(; n = 6)
+    op(name, args...) = Dict{String, Any}("op" => name, "args" => Any[args...])
+    ix(name) = op("index", name, "i")
+    faq(expr) = merge(
+        op("faq"), Dict(
+            "output_idx" => ["i"], "ranges" => Dict("i" => Dict("from" => "cell")), "expr" => expr
+        )
+    )
+    sq(w) = Dict{String, Any}(
+        "op" => "apply_operator", "args" => Any[], "name" => "sq",
+        "bindings" => Dict{String, Any}("w" => w)
+    )
+    vars = Dict{String, Any}(
+        "u" => Dict{String, Any}("type" => "unknown", "default" => 1.0, "shape" => ["cell"]),
+        "data" => Dict{String, Any}("type" => "parameter", "default" => collect(1.0:n), "shape" => ["cell"]),
+    )
+    rhs = faq(op("+", sq(ix("u")), sq(op("+", op("*", 0.5, ix("u")), ix("data")))))
+    lhs = faq(merge(op("D", ix("u")), Dict("wrt" => "t")))
+    doc = Dict(
+        "esm" => "2.4.0", "metadata" => Dict("name" => "Template calls"),
+        "index_sets" => Dict("cell" => Dict("kind" => "interval", "size" => n)),
+        "models" => Dict(
+            "M" => Dict(
+                "variables" => vars, "equations" => [Dict("lhs" => lhs, "rhs" => rhs)],
+                "operators" => Dict(
+                    "sq" => Dict(
+                        "params" => ["w"],
+                        "body" => op("-", op("*", "w", "w"), op("*", 0.25, "w")),
+                    )
+                ),
+            )
+        ),
+    )
+    return esm_problem(doc, (0.0, 1.0))
+end
+one_call(fragment, u, aux, p, t) = fragment(u, aux, p, t, ())
+
+# A model whose templates read ARRAY arguments: `smooth` reads the state array
+# `q` around the caller's cell (ghost zeros past the ends), and `linear`
+# (lib/interp.esm) reads the parameter table `T` at a subscript computed from
+# the state. With `runtime_array_parameters`, `T` is a live forcing buffer.
+function array_template_problem(; n = 7, live = false)
+    op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
+    ref(name, b) = Dict{String, Any}("op" => "apply_operator", "args" => Any[], "name" => name, "bindings" => b)
+    lib = JSON3.read(read(joinpath(pkgdir(EarthSciAST), "data", "lib", "interp.esm"), String), Dict{String, Any})
+    operators = Dict{String, Any}(
+        "linear" => lib["operators"]["linear"],
+        "smooth" => Dict(
+            "params" => Any["q", "w"],
+            "body" => op(
+                "+", op("*", "w", op("index", "q", op("-", "i", 1))),
+                op("*", op("-", 1, op("*", 2, "w")), op("index", "q", "i")),
+                op("*", "w", op("index", "q", op("+", "i", 1)))
+            ),
+        ),
+    )
+    vars = Dict{String, Any}(
+        "T" => Dict("type" => "parameter", "shape" => Any["x"], "default" => Any[0.2 + 0.1 * k for k in 1:n]),
+        "s" => Dict("type" => "unknown", "default" => 0.5),
+        "q" => Dict("type" => "unknown", "shape" => Any["x"], "default" => 1.1),
+    )
+    faq(e) = Dict("op" => "faq", "output_idx" => Any["i"], "args" => Any[], "ranges" => Dict("i" => Any[1, n]), "expr" => e)
+    eqs = Any[
+        Dict(
+            "lhs" => faq(Dict("op" => "D", "args" => Any[op("index", "q", "i")], "wrt" => "t")),
+            "rhs" => faq(op("-", ref("smooth", Dict("q" => "q", "w" => 0.25)), op("*", 0.1, op("index", "q", "i")))),
+        ),
+        Dict(
+            "lhs" => Dict("op" => "D", "args" => Any["s"], "wrt" => "t"),
+            "rhs" => op(
+                "-", ref(
+                    "linear", Dict(
+                        "table" => "T",
+                        "axis" => Dict("op" => "const", "args" => Any[], "value" => Any[Float64(k) for k in 1:n]),
+                        "x" => op("+", 1.5, op("*", 4.0, "s")), "n" => n
+                    )
+                ), "s"
+            ),
+        ),
+    ]
+    doc = Dict(
+        "esm" => "2.0.0", "metadata" => Dict("name" => "array template arguments"),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => n)),
+        "models" => Dict("M" => Dict("operators" => operators, "variables" => vars, "equations" => eqs)),
+    )
+    return esm_problem(doc, (0.0, 1.0); runtime_array_parameters = live)
+end
+forcing_call(fragment, u, aux, p, t, forcing) = fragment(u, aux, p, t, forcing)
+
 if get(ENV, "ESM_REACTANT_FRAGMENT_CHILD", "") == "1"
     f, args, run = fragment_rk4_program()
     println(join(reinterpret(UInt64, Array(run(f, args...))), ","))
@@ -175,6 +266,77 @@ end
         @test_throws ArgumentError KernelOutputs(spec; out_eltype = BigFloat)
         @test_throws ArgumentError KernelOutputs(spec; out_eltype = Int32)
         @test_throws ArgumentError KernelOutputs(spec, BigFloat)
+    end
+
+    @testset "template references are called functions" begin
+        prob = template_problem()
+        ir = operator_ir(prob)
+        f, g = emit_fragment(ir), emit_fragment(ir; calls = :inline)
+        u = ConcreteRArray(collect(range(-0.5, 1.5; length = 6)))
+        aux, p, t = ConcreteRArray(Float64[]), ConcreteRArray(Float64[]), ConcreteRNumber(0.0)
+        hf = repr(Reactant.@code_hlo optimize = false one_call(f, u, aux, p, t))
+        hg = repr(Reactant.@code_hlo optimize = false one_call(g, u, aux, p, t))
+        # One private function for `sq`, called at both uses; none inline.
+        @test count(r"func\.func private @[^(]*esm_tpl_sq", hf) == 1
+        @test count(r"call @[^(]*esm_tpl_sq", hf) == 2
+        @test !occursin("esm_tpl_", hg)
+        @test !occursin("func.call", hg)
+        uh = Array(u)
+        expected = (uh .* uh .- 0.25 .* uh) .+ (w -> w * w - 0.25 * w).(0.5 .* uh .+ (1.0:6.0))
+        rf = Reactant.@compile one_call(f, u, aux, p, t)
+        rg = Reactant.@compile one_call(g, u, aux, p, t)
+        @test Array(rf(f, u, aux, p, t)) ≈ expected rtol = 1.0e-14
+        @test Array(rg(g, u, aux, p, t)) ≈ expected rtol = 1.0e-14
+    end
+
+    @testset "templates reading state and forcing arrays are called functions" begin
+        for live in (false, true)
+            prob = array_template_problem(; live)
+            prog = rhs_program(prob)
+            ir = operator_ir(prog)
+            f = emit_fragment(ir)
+            u0 = copy(prob.u0) .+ 0.01 .* (1:length(prob.u0))
+            u, aux = ConcreteRArray(u0), ConcreteRArray(Float64[])
+            p, t = ConcreteRArray(parameter_vector(prog)), ConcreteRNumber(0.25)
+            host = EarthSciAST.forcing_buffers(ir.f)
+            forcing = Tuple(ConcreteRArray(vec(collect(Float64, host[Symbol(s.name)]))) for s in forcing_slots(ir))
+            @test length(forcing) == (live ? 1 : 0)
+            h = repr(Reactant.@code_hlo optimize = false forcing_call(f, u, aux, p, t, forcing))
+            # One function per template instance and argument shape: the
+            # signatures of a template's functions are all different.
+            for name in ("smooth", "linear")
+                sigs = [m.captures[1] for m in eachmatch(Regex("func\\.func private @[^(]*esm_tpl_$name[^(]*(\\([^)]*\\))"), h)]
+                @test !isempty(sigs)
+                @test allunique(sigs)
+            end
+            run = Reactant.@compile forcing_call(f, u, aux, p, t, forcing)
+            du = zeros(length(u0))
+            rhs!(du, prog, rhs_workspace(prog), u0, Float64[], parameter_vector(prog), 0.25, default_forcing_set(prog))
+            got = Array(run(f, u, aux, p, t, forcing))
+            @test got ≈ du rtol = 1.0e-13
+            @test Array(run(f, u, aux, p, t, forcing)) == got
+            if !live
+                # The inlined baseline reads the same values. (With a live
+                # table it is refused: it resolves forcing subscripts on the host.)
+                g = emit_fragment(ir; calls = :inline)
+                run_g = Reactant.@compile forcing_call(g, u, aux, p, t, forcing)
+                @test Array(run_g(g, u, aux, p, t, forcing)) ≈ du rtol = 1.0e-13
+            end
+        end
+    end
+
+    @testset "an RK4 leaf emits the operator once" begin
+        f, args = fragment_rk4_inputs()
+        h = repr(Reactant.@code_hlo optimize = false fragment_rk4(f, args...))
+        @test count(r"func\.func private @[^(]*_fragment_body", h) == 1
+        @test count(r"call @[^(]*_fragment_body", h) == 4
+        g = emit_fragment(f.ir; calls = :inline)
+        hg = repr(Reactant.@code_hlo optimize = false fragment_rk4(g, args...))
+        @test !occursin("_fragment_body", hg)
+        run_f = Reactant.@compile donated_args = :none fragment_rk4(f, args...)
+        run_g = Reactant.@compile donated_args = :none fragment_rk4(g, args...)
+        @test Array(run_f(f, args...)) ≈ Array(run_g(g, args...)) rtol = 1.0e-14
+        @test_throws EarthSciAST.DirectEmitError emit_fragment(f.ir; calls = :sometimes)
     end
 
     @testset "vector parameters and caller-owned loop" begin
@@ -250,10 +412,18 @@ end
         fold = witness()
         fold["models"]["M"]["equations"][1]["rhs"]["expr"] =
             _op("+", 1.0e8, "a", -1.0e8, 1.0)
-        frag = emit_fragment(operator_ir(problem(fold); unspecified_eltype = Float32))
+        # Where precision is unspecified a binary32 fold is a fixed balanced
+        # tree by default: (1e8 + a) + (-1e8 + 1) rounds to 0. `fold = :reduce`
+        # keeps the source order: ((1e8 + a) - 1e8) + 1 rounds to 1.
         ones_p = ConcreteRArray([1.0])
+        fold_ir = operator_ir(problem(fold); unspecified_eltype = Float32)
+        frag = emit_fragment(fold_ir)
         run = Reactant.@compile frag(u32, aux32, ones_p, t, ())
-        @test Array(run(u32, aux32, ones_p, t, ())) == Float32[1, 1]
+        @test Array(run(u32, aux32, ones_p, t, ())) == Float32[0, 0]
+        @test Array(run(u32, aux32, ones_p, t, ())) == Array(run(u32, aux32, ones_p, t, ()))
+        ordered = emit_fragment(fold_ir; fold = :reduce)
+        run_ordered = Reactant.@compile ordered(u32, aux32, ones_p, t, ())
+        @test Array(run_ordered(u32, aux32, ones_p, t, ())) == Float32[1, 1]
 
         # A declared-binary64 key compared exactly feeds the binary32 group
         # (esm-spec §11.3.3 P8). Binary32 spaces its integers 256 apart
@@ -418,7 +588,12 @@ end
     @testset "concurrent independent traces" begin
         f, args = fragment_rk4_inputs()
         g = emit_fragment(f.ir; fold = :reduce)
-        trace(fragment) = repr(Reactant.@code_hlo optimize = false fragment_rk4(fragment, args...))
+        # Reactant names each called function with a process-wide counter
+        # (`##_fragment_body#142`), so traces are compared without it.
+        trace(fragment) = replace(
+            repr(Reactant.@code_hlo optimize = false fragment_rk4(fragment, args...)),
+            r"(##[A-Za-z0-9_]+)#[0-9]+" => s"\1"
+        )
         expected = (trace(f), trace(g))
         ready = Channel{Nothing}(2)
         go = Base.Event()

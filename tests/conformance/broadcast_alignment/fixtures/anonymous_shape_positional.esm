@@ -2,7 +2,7 @@
   "esm": "1.1.0",
   "metadata": {
     "name": "anonymous_shape_positional",
-    "description": "The SCOPE BOUNDARY of esm-spec \u00a74.3.4's name-based alignment. `spine` is a `faq` whose `output_idx` are the NODE-LOCAL symbols p, q, r \u2014 not index-set names \u2014 so its result has an ANONYMOUS shape and its axes align POSITIONALLY with the result's, in declaration order. `dp` therefore reads spine[i,j,k] = i + 10 j + 100 k, and `dq` multiplies that by the NAMED rank-1 operand `w1`, whose `lat` axis DOES align by name and replicates over lon and lev. One document holds both rules, so a binding that applied name alignment to the anonymous operand (or positional alignment to the named one) disagrees on one state while agreeing on the other.",
+    "description": "The SCOPE BOUNDARY of esm-spec \u00a74.3.4's name-based alignment. `spine` is a `faq` whose output indices p, q, r range over INLINE intervals ([1, 3], [1, 2], [1, 2]) rather than `{\"from\": <index set>}`, so its result names no index sets: its shape is ANONYMOUS and its axes align POSITIONALLY with the result's, in declaration order (rule 2). A `faq` over `{from}` index sets would instead name them and align by name. `dp` therefore reads spine[i,j,k] = i + 10 j + 100 k, and `dq` multiplies that by the NAMED rank-1 operand `w1`, whose `lat` axis DOES align by name and replicates over lon and lev. One document holds both rules, so a binding that applied name alignment to the anonymous operand (or positional alignment to the named one) disagrees on one state while agreeing on the other.",
     "authors": [
       "EarthSciAST Test Suite"
     ],
@@ -69,7 +69,7 @@
       },
       "equations": [
         {
-          "_comment": "Anonymous faq axes align positionally: dp[i,j,k](1) = i + 10 j + 100 k.",
+          "_comment": "Anonymous faq axes (inline intervals) align positionally: dp[i,j,k](1) = i + 10 j + 100 k.",
           "lhs": {
             "op": "D",
             "args": [
@@ -86,15 +86,18 @@
               "r"
             ],
             "ranges": {
-              "p": {
-                "from": "lon"
-              },
-              "q": {
-                "from": "lat"
-              },
-              "r": {
-                "from": "lev"
-              }
+              "p": [
+                1,
+                3
+              ],
+              "q": [
+                1,
+                2
+              ],
+              "r": [
+                1,
+                2
+              ]
             },
             "expr": {
               "op": "+",
@@ -144,15 +147,18 @@
                   "r"
                 ],
                 "ranges": {
-                  "p": {
-                    "from": "lon"
-                  },
-                  "q": {
-                    "from": "lat"
-                  },
-                  "r": {
-                    "from": "lev"
-                  }
+                  "p": [
+                    1,
+                    3
+                  ],
+                  "q": [
+                    1,
+                    2
+                  ],
+                  "r": [
+                    1,
+                    2
+                  ]
                 },
                 "expr": {
                   "op": "+",

@@ -331,6 +331,22 @@
     ],
     "is_valid": false
   },
+  "undefined_variable_in_gather.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/UnboundConstGatherOperand/equations/0/rhs",
+        "code": "undefined_variable",
+        "message": "Variable 'missingFactor' referenced in equation is not declared",
+        "details": {
+          "variable": "missingFactor",
+          "equation_index": 0,
+          "expected_in": "variables"
+        }
+      }
+    ],
+    "is_valid": false
+  },
   "undefined_variable_in_nested_expr.esm": {
     "schema_errors": [],
     "structural_errors": [

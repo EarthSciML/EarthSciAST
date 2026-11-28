@@ -216,6 +216,121 @@ struct _BareSource end
         @test rhs_alloc_bytes(f!, du, u0, p, 0.0) == 0         # still zero-alloc
     end
 
+    @testset "forcing-only observeds: owner = nothing refills at a new t" begin
+        # g, a contraction of the forcing F, reads forcing but neither the
+        # state nor `t`: in a program build (no discrete-cadence cut) it is a
+        # forcing-cadence observed. A callback with `owner = nothing` rewrites F
+        # in place without announcing it, so the build keeps refilling g when
+        # `t` moves; a callback given `owner` declares the writes announced,
+        # and g is then refilled only on an announcement.
+        N = 4
+        sq(a) = Dict("op" => "*", "args" => Any[a, a])
+        doc() = Dict{String, Any}(
+            "esm" => "1.2.0",
+            "metadata" => Dict("name" => "forcing_tier_refresh", "authors" => ["test"]),
+            "data_sources" => Dict(
+                "Inv" => Dict(
+                    "kind" => "static",
+                    "source" => Dict("url_template" => "file:///never_read.nc")
+                )
+            ),
+            "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => N)),
+            "models" => Dict(
+                "M" => Dict(
+                    "variables" => Dict(
+                        "u" => Dict(
+                            "type" => "unknown", "units" => "1", "shape" => ["x"],
+                            "default" => 0.0
+                        ),
+                        "g" => Dict("type" => "unknown", "units" => "1/s", "shape" => ["x"]),
+                        "F" => Dict(
+                            "type" => "parameter", "units" => "1/s", "shape" => ["x"],
+                            "default" => fill(1.0, N),
+                            "update" => Dict(
+                                "kind" => "data", "source" => "Inv",
+                                "from" => Dict("file_variable" => "F")
+                            )
+                        )
+                    ),
+                    "equations" => Any[
+                        Dict(
+                            "lhs" => "g",
+                            "rhs" => Dict(
+                                "op" => "faq", "args" => Any[], "output_idx" => ["i"],
+                                "ranges" => Dict("i" => Dict("from" => "x"), "k" => Dict("from" => "x")),
+                                "expr" => Dict(
+                                    "op" => "/", "args" => Any[
+                                        Dict("op" => "index", "args" => Any["F", "k"]),
+                                        Dict(
+                                            "op" => "+", "args" => Any[
+                                                1.0,
+                                                sq(Dict("op" => "-", "args" => Any["k", "i"])),
+                                            ]
+                                        ),
+                                    ]
+                                )
+                            )
+                        ),
+                        Dict(
+                            "lhs" => Dict(
+                                "op" => "faq", "args" => Any[], "output_idx" => ["i"],
+                                "ranges" => Dict("i" => Dict("from" => "x")),
+                                "expr" => Dict(
+                                    "op" => "D", "wrt" => "t",
+                                    "args" => Any[Dict("op" => "index", "args" => Any["u", "i"])]
+                                )
+                            ),
+                            "rhs" => Dict(
+                                "op" => "faq", "args" => Any[], "output_idx" => ["i"],
+                                "ranges" => Dict("i" => Dict("from" => "x")),
+                                "expr" => Dict("op" => "index", "args" => Any["g", "i"])
+                            )
+                        ),
+                    ]
+                )
+            )
+        )
+        build(F) = esm_problem(
+            doc(), (0.0, 2.0); compiler = :native, program_build = true,
+            param_arrays = Dict("M.F" => F)
+        )
+        prov() = MockProvider([1.0], Dict(1.0 => Dict("M.F" => fill(3.0, N))))
+
+        F = ones(N)
+        prob = build(F)
+        @test prob.build.products.stats.n_mat_forcing_levels == 1
+        cb, tstops = build_refresh_callback(;
+            owner = nothing, providers = Dict("M.F" => prov()),
+            buffers = RefreshBuffers(Dict("M.F" => F))
+        )
+        @test !prob.build.products.forcing_epoch.announced
+        du = similar(prob.u0)
+        prob.f!(du, prob.u0, prob.p, 0.5)
+        d0 = copy(du)
+        ode = ODE.ODEProblem(prob.f!, prob.u0, (0.0, 2.0), prob.p)
+        sol = ODE.solve(ode, ODE.Tsit5(); callback = cb, tstops = tstops)
+        @test sol.retcode == ODE.SciMLBase.ReturnCode.Success
+        @test F == fill(3.0, N)                       # rewritten at the anchor
+        prob.f!(du, prob.u0, prob.p, 2.5)
+        @test du ≈ 3 .* d0                            # g reads the new data
+
+        F2 = ones(N)
+        prob2 = build(F2)
+        build_refresh_callback(;
+            owner = prob2, providers = Dict("M.F" => prov()),
+            buffers = RefreshBuffers(Dict("M.F" => F2))
+        )
+        @test prob2.build.products.forcing_epoch.announced
+        prob2.f!(du, prob2.u0, prob2.p, 0.5)
+        @test du == d0
+        F2 .= 5.0                                     # an unannounced write
+        prob2.f!(du, prob2.u0, prob2.p, 0.75)
+        @test du == d0                                # kept across a new `t`
+        ESM.notify_forcing_refresh!(prob2)
+        prob2.f!(du, prob2.u0, prob2.p, 0.75)
+        @test du ≈ 5 .* d0
+    end
+
     @testset "protocol + type guards" begin
         # RefreshBuffers rejects a non-dense-Float64 buffer (the param_arrays invariant).
         err = try

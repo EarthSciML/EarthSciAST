@@ -95,8 +95,9 @@ end
 # Each buffer carries the cadence stamps of the prelude (`_CSECache`): `stamp64` /
 # `stampalt` the `p` its const-cadence observeds were filled for, and
 # `tp*`/`tt*`/`te*` the `(p, t, forcing epoch)` its time-cadence observeds were
-# filled for (`_pstamp`, cadence_stamp.jl). A freshly allocated `alt` holds no
-# valid block, so allocating one invalidates both of its stamps.
+# filled for (`_pstamp`, cadence_stamp.jl), and `fp*`/`fe*` the `(p, forcing
+# epoch)` its forcing-cadence observeds were filled for. A freshly allocated
+# `alt` holds no valid block, so allocating one invalidates all of its stamps.
 mutable struct _ObsExtVec
     f64::Vector{Float64}
     alt::Any
@@ -110,12 +111,16 @@ mutable struct _ObsExtVec
     tealt::UInt64
     epoch::_ForcingEpoch
     ustash::Any
+    fp64::Any
+    fe64::UInt64
+    fpalt::Any
+    fealt::UInt64
 end
 _ObsExtVec(n::Int, epoch::_ForcingEpoch = _new_forcing_epoch()) =
     _ObsExtVec(
     _zeros_f64(n), nothing, _CSE_INVALID, _CSE_INVALID,
     _CSE_INVALID, NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID, UInt64(0),
-    epoch, nothing
+    epoch, nothing, _CSE_INVALID, UInt64(0), _CSE_INVALID, UInt64(0)
 )
 # The state part of the call's slot space: `u` itself when it is a `Vector{T}`,
 # else `u` converted into the stash, as the copy into one extended vector did.
@@ -137,6 +142,7 @@ end
     s.alt = nb
     s.stampalt = _CSE_INVALID
     s.tpalt = _CSE_INVALID
+    s.fpalt = _CSE_INVALID
     return nb
 end
 @inline _obsext_const_stale(s::_ObsExtVec, ::Type{Float64}, p) =
@@ -151,6 +157,22 @@ end
     s.stampalt = _pstamp_reuse(s.stampalt, p)
     return nothing
 end
+# The forcing tier's test and mark: the time tier's (below) without `t`.
+@inline _obsext_forcing_stale(s::_ObsExtVec, ::Type{Float64}, p) =
+    !(s.fe64 === _epoch_value(s.epoch) && _pstamp_same(s.fp64, p))
+@inline _obsext_forcing_stale(s::_ObsExtVec, ::Type{T}, p) where {T} =
+    !(s.fealt === _epoch_value(s.epoch) && _pstamp_same(s.fpalt, p))
+@inline function _obsext_mark_forcing!(s::_ObsExtVec, ::Type{Float64}, p)
+    _pstamp_same(s.fp64, p) || (s.fp64 = _pstamp_reuse(s.fp64, p))
+    s.fe64 = _epoch_value(s.epoch)
+    return nothing
+end
+@inline function _obsext_mark_forcing!(s::_ObsExtVec, ::Type{T}, p) where {T}
+    _pstamp_same(s.fpalt, p) || (s.fpalt = _pstamp_reuse(s.fpalt, p))
+    s.fealt = _epoch_value(s.epoch)
+    return nothing
+end
+
 # The time tier's test and mark, with `_cse_t_stale` / `_cse_mark_t!`'s rules:
 # `t` by egal (the Float64 buffer stamps only a Float64 `t`, the other only an
 # isbits one), `p` by `_pstamp_same`, and the build's forcing epoch.

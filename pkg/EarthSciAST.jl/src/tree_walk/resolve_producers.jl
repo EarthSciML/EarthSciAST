@@ -69,11 +69,12 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr}, rc::
             faq_expr, sub_body, ranges_dict, idx_exprs, contract_names, oplus, zerobar, rc
         )
     end
+    gates = faq_expr.join_gates
     contract_iters = _contract_iters_at(
-        contract_names, [ranges_dict[n] for n in contract_names], _out_idx_env, const_arrays
+        contract_names, [ranges_dict[n] for n in contract_names], _out_idx_env,
+        const_arrays; canonical = _has_equality_join(gates)
     )
 
-    gates = faq_expr.join_gates
     filt0 = faq_expr.filter
     # Build-time join gates need CONCRETE output-index bindings (the join
     # binding is seeded from `_out_idx_env`). A symbolic output index has none,
@@ -108,6 +109,9 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr}, rc::
         gates, filt, zerobar, _out_idx_env
     ) do term
         push!(terms, _resolve_indices(term, rc))
+    end
+    if isempty(contract_names) && gates !== nothing
+        return isempty(terms) ? NumExpr(zerobar) : only(terms)
     end
     return _combine_with_reducer(oplus, zerobar, terms)
 end

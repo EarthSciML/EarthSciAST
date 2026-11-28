@@ -725,6 +725,49 @@ def operators(g):
         ),
     )
     E(
+        "faq_set_upright",
+        'A word-named index set is upright in Typst (k in upright("lev")), as is the set '
+        "of a ragged range; an output index's range row too. LaTeX prints it as a name.",
+        faq(
+            op("*", idx("u", "k", "s"), idx("q", "k", "m")),
+            {"k": {"from": "lev"}, "m": {"from": "bins", "of": ["k"]}, "s": {"from": "tracer"}},
+            output_idx=["s"],
+        ),
+        names=("u", "q"),
+        index_sets={
+            "lev": {"kind": "interval", "size": 3},
+            "tracer": {"kind": "interval", "size": 2},
+            "bins": {"kind": "ragged", "of": ["lev"], "offsets": "off", "values": "vals"},
+        },
+    )
+    E(
+        "faq_set_upright_dotted",
+        "Each segment of a scoped set name follows the set rule on its own: a word segment "
+        'is upright (upright("lev")"."upright("top")), a letter keeps its name form '
+        '(a"."upright("bins")).',
+        faq(
+            op("*", idx("u", "k"), idx("q", "k", "m")),
+            {"k": {"from": "lev.top"}, "m": {"from": "a.bins", "of": ["k"]}},
+        ),
+        names=("u", "q"),
+        index_sets={
+            "lev.top": {"kind": "interval", "size": 3},
+            "a.bins": {"kind": "ragged", "of": ["lev.top"], "offsets": "off", "values": "vals"},
+        },
+    )
+    E(
+        "faq_set_shapes",
+        "A set named by a subscript shape (x_i) or a formula (NO) prints as that name, not "
+        "upright text.",
+        op(
+            "+",
+            faq(idx("w", "i"), {"i": {"from": "x_i"}}),
+            faq(idx("w", "j"), {"j": {"from": "NO"}}),
+        ),
+        names=("w",),
+        index_sets={"x_i": {"kind": "interval", "size": 3}, "NO": {"kind": "interval", "size": 2}},
+    )
+    E(
         "faq_call_semiring",
         "A faq with a semiring other than sum_product prints in the call form, its fields "
         "as named arguments.",
@@ -1606,6 +1649,75 @@ def documents(g):
         "component_description",
         "A component's description is a description block after its directive.",
         document(models={"Box": box_model(description="The box model.")}),
+    )
+    P(
+        "description_verbatim",
+        "A description whose text is safe to typeset as Typst markup is written verbatim in "
+        "Typst, #description[...]: code spans, nested brackets, lists and an underscore "
+        "inside a word are kept as written.",
+        document(
+            models={
+                "Box": box_model(
+                    description="Mixes `q` over [lev, [tracer]]; see grids/column_1d.\n- one\n- two"
+                )
+            }
+        ),
+    )
+    P(
+        "description_string",
+        "A description that is not safe to typeset as Typst markup (here a * for "
+        "multiplication, a $, a #, an @, an underscore outside a word, a // and a <) is "
+        'written in Typst as a string, #description("...").',
+        document(
+            models={"Box": box_model(description='Loss is k * c, $5 per #2 @ x_ y // "z" <a>')}
+        ),
+    )
+    V(
+        "description_escaped",
+        "A Typst description written with its markup characters escaped by a backslash, as "
+        "earlier documents were, reads as the unescaped text.",
+        document(models={"Box": box_model(description="First-order *loss* [x]")}),
+        typ,
+        [
+            (
+                '#description("First-order *loss* [x]")',
+                "#description[First\\-order \\*loss\\* \\[x\\]]",
+            )
+        ],
+    )
+    P(
+        "description_string_shorthand",
+        "A description with a Typst shorthand (here ~, -- and ...) or a bracket inside a "
+        "code span is written in Typst as a string: as markup it would typeset differently "
+        "from the text, or not compile.",
+        document(models={"Box": box_model(description="Valid for ~10--20 km... see index [`]`].")}),
+    )
+    V(
+        "description_raw_span",
+        "In a hand-written Typst description, a code span's characters are literal (a "
+        "backslash or bracket inside one is kept as written), and outside one \\u{...} is a "
+        "code point.",
+        document(models={"Box": box_model(description="Use `\\n` or `]` here, caf\u00e9.")}),
+        typ,
+        [
+            (
+                '#description("Use `\\\\n` or `]` here, caf\u00e9.")',
+                "#description[Use `\\n` or `]` here, caf\\u{e9}.]",
+            )
+        ],
+    )
+    V(
+        "description_like_prose",
+        "A line that only starts like a description opener (here #description-note[...]) is "
+        "prose, which the reader skips.",
+        document(models={"Box": box_model(description="The box model.")}),
+        typ,
+        [
+            (
+                "#description[The box model.]",
+                "#description-note[An aside.]\n\n#description[The box model.]",
+            )
+        ],
     )
     P(
         "declarations",
@@ -2797,6 +2909,40 @@ def refusals(g):
             (r"\begin{bmatrix}", r"\left[\begin{array}{cc}"),
             (r"\end{bmatrix}", r" \end{array}\right]"),
         ],
+    )
+    st = expr_doc(
+        faq(idx("w", "i"), {"i": {"from": "lev"}}),
+        ("w",),
+        index_sets={"lev": {"kind": "interval", "size": 3}},
+    )
+    for cid, spelled, why in [
+        ("letter", "a", "a letter prints as a name (a), never upright"),
+        ("greek", "alpha", "a Greek name prints as its symbol (alpha)"),
+        ("euler", "e", "a letter prints as a name, never upright"),
+        ("subscript_shape", "x_i", 'the x_i shape prints x_(upright("i"))'),
+        ("formula", "NO2", 'a formula prints upright("NO")_2'),
+        ("empty", "", "an empty name is no name"),
+        ("digit_start", "2lev", "a name starts with a letter or _"),
+        ("space", "le v", "a name is an identifier"),
+        ("non_ascii", "l\u00e9v", "a name is an ASCII identifier"),
+    ]:
+        R(
+            f"set_upright_{cid}_typst",
+            "An upright set name is read only as the printer writes one, a word that would "
+            f"otherwise print italic: {why}.",
+            st,
+            typ,
+            "parse_error",
+            [('upright("lev")', f'upright("{spelled}")')],
+        )
+    R(
+        "set_upright_dotted_letter_typst",
+        "Each segment of an upright scoped set name is read by the set rule: a letter "
+        "segment is never upright.",
+        st,
+        typ,
+        "parse_error",
+        [('upright("lev")', 'upright("lev")"."upright("a")')],
     )
     return a
 

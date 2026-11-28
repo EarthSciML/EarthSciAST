@@ -1,0 +1,84 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "ShapedProbe",
+    "description": "Generated transpose differential fixture"
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 1
+    },
+    "columns": {
+      "kind": "interval",
+      "size": 1
+    }
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "source": {
+          "type": "unknown",
+          "units": "1",
+          "description": "source",
+          "shape": [
+            "rows",
+            "columns"
+          ]
+        },
+        "result": {
+          "type": "unknown",
+          "units": "1",
+          "description": "result",
+          "shape": [
+            "columns",
+            "rows"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "source",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              [
+                0
+              ]
+            ]
+          }
+        },
+        {
+          "lhs": "result",
+          "rhs": {
+            "op": "transpose",
+            "args": [
+              "source"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "probe",
+          "time_span": {
+            "start": 0,
+            "end": 1
+          },
+          "assertions": [
+            {
+              "variable": "result",
+              "time": 0,
+              "expected": 0,
+              "coords": {
+                "columns": 1,
+                "rows": 1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

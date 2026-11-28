@@ -1667,3 +1667,168 @@ end
         @test err isa ArgumentError && occursin("'M.f'", err.msg)
     end
 end
+
+_rrt_lane_allocated(du, lp, ws, u, aux, p, t, x, cells, n) =
+    @allocated rhs!(du, lp, ws, u, aux, p, t, x, cells, n)
+_rrt_gather_allocated(li, lp, p, fs, cells, n) =
+    @allocated gather_lane_inputs!(li, lp, p, 0.25, fs, cells, n)
+
+# A lane call is straight-line work over its lanes: it allocates nothing, it
+# computes a value derived from forcing data alone (a whole-domain contraction
+# of a forcing array) once per forcing set rather than on every call or chunk,
+# and it still recomputes it for a new forcing set. The document is the
+# conformance suite's `lanes_forcing_contraction`.
+@testset "lane calls: no allocation, forcing-only values once per forcing set" begin
+    path = joinpath(
+        @__DIR__, "..", "..", "..", "tests", "conformance", "range_restricted_rhs",
+        "fixtures", "lanes_forcing_contraction.esm"
+    )
+    prob = esm_problem(path, (0.0, 1.0); compiler = :native)
+    prog = rhs_program(prob)
+    lp = lanes(prog, :cells, ["lon", "lat", "lev"]; chunk = 4)
+    LL = lane_layout(lp)
+    L = 6                                   # two chunks of 4, the second padded
+    cells = Int32[
+        3 6 1 2 5 4
+        2 5 1 3 4 1
+        1 1 2 1 3 1
+    ]
+    n = 6
+    u = [0.5 + 0.1 * l for l in 1:(LL.n_u * L)]
+    fs = default_forcing_set(lp)
+    ws = rhs_workspace(lp)
+    du = fill(NaN, LL.n_u * L)
+    # The whole-domain values at each lane's cell.
+    function whole(fs_whole)
+        W = tile_layout(prog)
+        b = only(W.u)
+        uw = fill(1.0, W.n_u)
+        for l in 1:n
+            uw[RRT._tile_slot(b, Tuple(Int.(cells[:, l])))] = u[l]
+        end
+        dw = fill(NaN, W.n_u)
+        rhs!(dw, prog, rhs_workspace(prog), uw, Float64[], prob.p, 0.25, fs_whole)
+        return [dw[RRT._tile_slot(b, Tuple(Int.(cells[:, l])))] for l in 1:n]
+    end
+    bits(x) = reinterpret(UInt64, x)
+    rhs!(du, lp, ws, u, Float64[], prob.p, 0.25, fs, cells, n)
+    ref = whole(default_forcing_set(prog))
+    @test bits.(du[1:n]) == bits.(ref)
+    # Steady state: nothing allocated, at a new time and at the same one.
+    noaux = Float64[]
+    _rrt_lane_allocated(du, lp, ws, u, noaux, prob.p, 0.5, fs, cells, n)
+    @test _rrt_lane_allocated(du, lp, ws, u, noaux, prob.p, 0.75, fs, cells, n) == 0
+    @test _rrt_lane_allocated(du, lp, ws, u, noaux, prob.p, 0.75, fs, cells, n) == 0
+    li = lane_inputs(lp, L)
+    _rrt_gather_allocated(li, lp, prob.p, fs, cells, n)
+    _rrt_lane_allocated(du, lp, ws, u, noaux, prob.p, 0.25, li, cells, n)
+    @test _rrt_gather_allocated(li, lp, prob.p, fs, cells, n) == 0
+    @test _rrt_lane_allocated(du, lp, ws, u, noaux, prob.p, 0.5, li, cells, n) == 0
+    @test bits.(du[1:n]) == bits.(ref)
+    # The forcing-only contraction E is not recomputed by a call under the
+    # same forcing set: scribble over the workspace's copy of F (which only
+    # E reads; the pre-gathered reads of F come from the set itself) and the
+    # lanes still hold the values of the set's F.
+    kF = findfirst(s -> s.name == "Emis.F", forcing_slots(lp))
+    saved = copy(ws.fbufs[kF])
+    ws.fbufs[kF] .= 1.0e6
+    rhs!(du, lp, ws, u, Float64[], prob.p, 0.9, fs, cells, n)
+    @test bits.(du[1:n]) == bits.(ref)
+    ws.fbufs[kF] .= saved
+    # A new forcing set: E is recomputed from it.
+    F2 = [1.0 + 0.5 * s for s in 1:40]
+    fs2 = replace_forcing(fs, kF, F2)
+    rhs!(du, lp, ws, u, Float64[], prob.p, 0.25, fs2, cells, n)
+    ref2 = whole(replace_forcing(default_forcing_set(prog), kF, F2))
+    @test bits.(du[1:n]) == bits.(ref2)
+    @test bits.(ref2) != bits.(ref)
+    # A cell outside its lane set's range is refused.
+    bad = copy(cells)
+    bad[2, 3] = 6
+    @test_throws ArgumentError rhs!(du, lp, ws, u, Float64[], prob.p, 0.25, fs, bad, n)
+    @test_throws ArgumentError gather_lane_inputs!(li, lp, prob.p, 0.25, fs, bad, n)
+end
+
+# The lane gathers read a forcing set's buffers unchecked, so a set whose
+# buffer is shorter than its slot is refused before any read, naming the slot.
+# `forcing_set` checks lengths itself; the constructor does not.
+@testset "lane calls refuse a forcing buffer of the wrong length" begin
+    path = joinpath(
+        @__DIR__, "..", "..", "..", "tests", "conformance", "range_restricted_rhs",
+        "fixtures", "lanes_forcing_contraction.esm"
+    )
+    prob = esm_problem(path, (0.0, 1.0); compiler = :native)
+    prog = rhs_program(prob)
+    lp = lanes(prog, :cells, ["lon", "lat", "lev"]; chunk = 4)
+    LL = lane_layout(lp)
+    cells = Int32[3 6; 2 5; 1 1]
+    u = fill(0.5, LL.n_u * 2)
+    du = similar(u)
+    fs = default_forcing_set(lp)
+    kF = findfirst(s -> s.name == "Emis.F", forcing_slots(lp))
+    bufs = copy(fs.bufs)
+    bufs[kF] = fs.bufs[kF][1:(end - 1)]
+    short = ForcingSet(fs.slots, bufs, RRT._next_set_epoch())
+    err = try
+        rhs!(du, lp, rhs_workspace(lp), u, Float64[], prob.p, 0.25, short, cells, 2)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError && occursin("'Emis.F'", err.msg)
+    @test_throws ArgumentError gather_lane_inputs!(
+        lane_inputs(lp, 2), lp, prob.p, 0.25, short, cells, 2
+    )
+    # The same set with full-length buffers is accepted.
+    ok = ForcingSet(fs.slots, copy(fs.bufs), RRT._next_set_epoch())
+    rhs!(du, lp, rhs_workspace(lp), u, Float64[], prob.p, 0.25, ok, cells, 2)
+    @test all(isfinite, du)
+end
+
+# A non-affine pre-gathered subscript whose table would be larger than
+# `_LANE_SUBSCRIPT_TABLE_MAX` is evaluated per lane at the call instead; the
+# values are the table's, bit for bit.
+@testset "lane subscripts too large to table are evaluated per call" begin
+    path = joinpath(
+        @__DIR__, "..", "..", "..", "tests", "conformance", "range_restricted_rhs",
+        "fixtures", "lanes_forcing_contraction.esm"
+    )
+    prob = esm_problem(path, (0.0, 1.0); compiler = :native)
+    prog = rhs_program(prob)
+    sets = ["lon", "lat", "lev"]
+    lp_tab = lanes(prog, :cells, sets; chunk = 4)
+    cap = RRT._LANE_SUBSCRIPT_TABLE_MAX[]
+    lp_eval = try
+        RRT._LANE_SUBSCRIPT_TABLE_MAX[] = 0
+        lanes(prog, :cells, sets; chunk = 4)
+    finally
+        RRT._LANE_SUBSCRIPT_TABLE_MAX[] = cap
+    end
+    nonaffine(lp) = [s for gp in lp.gplans for s in gp.subs if !s.affine]
+    @test !isempty(nonaffine(lp_tab)) && all(s -> s.tabled, nonaffine(lp_tab))
+    @test !isempty(nonaffine(lp_eval)) && all(s -> !s.tabled && isempty(s.table), nonaffine(lp_eval))
+    LL = lane_layout(lp_tab)
+    cells = Int32[
+        3 6 1 2 5 4
+        2 5 1 3 4 1
+        1 1 2 1 3 1
+    ]
+    n = 6
+    u = [0.5 + 0.1 * l for l in 1:(LL.n_u * n)]
+    bits(x) = reinterpret(UInt64, x)
+    fs = default_forcing_set(lp_tab)
+    function run(lp)
+        du = fill(NaN, LL.n_u * n)
+        rhs!(du, lp, rhs_workspace(lp), u, Float64[], prob.p, 0.25, fs, cells, n)
+        li = lane_inputs(lp, n)
+        gather_lane_inputs!(li, lp, prob.p, 0.25, fs, cells, n)
+        dg = fill(NaN, LL.n_u * n)
+        rhs!(dg, lp, rhs_workspace(lp), u, Float64[], prob.p, 0.25, li, cells, n)
+        return du, dg, li.gathered
+    end
+    du_t, dg_t, g_t = run(lp_tab)
+    du_e, dg_e, g_e = run(lp_eval)
+    @test bits.(du_e) == bits.(du_t)
+    @test bits.(dg_e) == bits.(dg_t)
+    @test all(k -> bits.(g_e[k]) == bits.(g_t[k]), eachindex(g_t))
+end

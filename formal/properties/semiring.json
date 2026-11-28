@@ -1,0 +1,104 @@
+{
+  "properties": [
+    {
+      "id": "P-semiring-exact-laws",
+      "clauses": [
+        "conf.5.6.identities-not-in-file",
+        "conf.5.6.3.empty-reduction-registry-identity"
+      ],
+      "statement": "The five registry rows satisfy the commutative semiring laws on their exact carriers, adjoining the absorbing −∞ sentinel for max_product.",
+      "lean_statement": "∀ row : Esm.Semiring.Name, Esm.Semiring.Valid (Esm.Semiring.operations row)",
+      "status": "proven",
+      "theorem": "Esm.Semiring.operations_valid"
+    },
+    {
+      "id": "P-semiring-registered-precedence",
+      "clauses": [
+        "conf.5.6.identities-not-in-file"
+      ],
+      "statement": "An explicit registered semiring resolves to its own reduction regardless of whether a legacy reduce field is present.",
+      "lean_statement": "∀ (row : Esm.Semiring.Name) (legacy : Option String), Esm.Semiring.resolveReduction (some row.spelling) legacy = .ok row.reduction",
+      "status": "proven",
+      "theorem": "Esm.Semiring.resolveReduction_registered"
+    },
+    {
+      "id": "P-semiring-bool-existential",
+      "clauses": [
+        "conf.5.6.3.empty-reduction-registry-identity"
+      ],
+      "statement": "When every term evaluates successfully, the scalar Boolean fold is true exactly when some admitted term is nonzero. Excluded terms count as false.",
+      "lean_statement": "∀ {α ε : Type} (items : List α) (term : α → Except ε Bool) (predicate : α → Bool), (∀ x ∈ items, term x = .ok (predicate x)) → Esm.Semiring.foldBoolM items term = .ok (items.any predicate)",
+      "status": "proven",
+      "theorem": "Esm.Semiring.foldBoolM_except_eq_any"
+    },
+    {
+      "id": "P-semiring-bool-order-invariant",
+      "clauses": [
+        "conf.5.6.3.empty-reduction-registry-identity"
+      ],
+      "statement": "Permuting terms that evaluate successfully preserves their scalar Boolean fold result.",
+      "lean_statement": "∀ {α ε : Type} (items reordered : List α) (term : α → Except ε Bool) (predicate : α → Bool), (∀ x ∈ items, term x = .ok (predicate x)) → items.Perm reordered → Esm.Semiring.foldBoolM items term = Esm.Semiring.foldBoolM reordered term",
+      "status": "proven",
+      "theorem": "Esm.Semiring.foldBoolM_except_perm"
+    },
+    {
+      "id": "P-semiring-bool-exclusions",
+      "clauses": [
+        "conf.5.6.3.empty-reduction-registry-identity"
+      ],
+      "statement": "A scalar Boolean fold with no admitted terms returns false. This covers both an empty range and a filter that excludes every combination.",
+      "lean_statement": "∀ {α ε : Type} (items : List α) (term : α → Except ε Bool), (∀ x ∈ items, term x = .ok false) → Esm.Semiring.foldBoolM items term = .ok false",
+      "status": "proven",
+      "theorem": "Esm.Semiring.foldBoolM_except_all_excluded"
+    },
+    {
+      "id": "P-semiring-bool-nan",
+      "clauses": [
+        "conf.5.6.identities-not-in-file"
+      ],
+      "statement": "An admitted NaN term in a scalar Boolean reduction contributes true.",
+      "lean_statement": "∀ {α : Type} [Esm.Closed.Scalar α] [Esm.Expr.Lits α] (x : α), Esm.Closed.Scalar.isNaN x = true → Esm.Expr.nonzeroTerm (Esm.Expr.Val.num x) = .ok true",
+      "status": "proven",
+      "theorem": "Esm.Semiring.nonzeroTerm_nan"
+    },
+    {
+      "id": "P-semiring-max-product-signed-counterexample",
+      "clauses": [
+        "conf.5.6.identities-not-in-file"
+      ],
+      "statement": "Ordinary multiplication of signed real factors fails to distribute over max.",
+      "lean_statement": "¬ (∀ a b c : ℝ, a * max b c = max (a * b) (a * c))",
+      "status": "proven",
+      "theorem": "Esm.Semiring.signed_max_product_not_distributive"
+    },
+    {
+      "id": "P-semiring-identity-field-verdict",
+      "clauses": [
+        "conf.5.6.identities-not-in-file"
+      ],
+      "statement": "Specify the validator verdict for a file that attempts to author a semiring identity.",
+      "status": "question",
+      "question": "Q-17"
+    },
+    {
+      "id": "P-semiring-max-product-finite-multiplication",
+      "clauses": [
+        "conf.5.6.identities-not-in-file"
+      ],
+      "statement": "The exact max_product multiplication of embedded nonnegative real factors is their ordinary product embedded in the exact carrier.",
+      "lean_statement": "∀ (a b : NNReal), Esm.Semiring.maxProductMul (↑a) (↑b) = ↑(a * b)",
+      "status": "proven",
+      "theorem": "Esm.Semiring.maxProductMul_finite"
+    },
+    {
+      "id": "P-semiring-max-product-bottom",
+      "clauses": [
+        "conf.5.6.3.empty-reduction-registry-identity"
+      ],
+      "statement": "The abstract bottom absorbs multiplication with every element of the exact max_product carrier.",
+      "lean_statement": "∀ (a : Esm.Semiring.MaxProduct), Esm.Semiring.maxProductMul ⊥ a = ⊥",
+      "status": "proven",
+      "theorem": "Esm.Semiring.bot_maxProductMul"
+    }
+  ]
+}

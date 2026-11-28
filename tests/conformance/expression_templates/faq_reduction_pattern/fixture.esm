@@ -1,0 +1,38 @@
+{
+  "esm": "2.4.0",
+  "metadata": {"name": "FaqReductionPattern"},
+  "models": {
+    "Probe": {
+      "variables": {
+        "explicit_sum": {"type": "unknown"},
+        "product": {"type": "unknown"},
+        "implicit_sum": {"type": "unknown"}
+      },
+      "operators": {
+        "replace_explicit_sum": {
+          "params": [],
+          "match": {"op": "faq", "args": [], "output_idx": [], "expr": "i",
+                    "ranges": {"i": [2, 3]}, "reduce": "+"},
+          "body": 17
+        }
+      },
+      "equations": [
+        {
+          "lhs": "explicit_sum",
+          "rhs": {"op": "faq", "args": [], "output_idx": [], "expr": "i",
+                  "ranges": {"i": [2, 3]}, "reduce": "+"}
+        },
+        {
+          "lhs": "product",
+          "rhs": {"op": "faq", "args": [], "output_idx": [], "expr": "i",
+                  "ranges": {"i": [2, 3]}, "reduce": "*"}
+        },
+        {
+          "lhs": "implicit_sum",
+          "rhs": {"op": "faq", "args": [], "output_idx": [], "expr": "i",
+                  "ranges": {"i": [2, 3]}}
+        }
+      ]
+    }
+  }
+}
