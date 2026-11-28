@@ -571,6 +571,16 @@ function _mtk_init_defaults_to_guesses!(system, flat::FlattenedSystem, handles)
     targets = Set{Any}(
         Symbolics.unwrap(handles[n]) for n in names if haskey(handles, n)
     )
+    # An array unknown's handles are its cells; its initial condition is keyed
+    # by the whole array.
+    for (hn, h) in handles
+        br = findfirst('[', hn)
+        br === nothing && continue
+        hn[1:prevind(hn, br)] in names || continue
+        x = Symbolics.unwrap(h)
+        SymUtils.iscall(x) && SymUtils.operation(x) === getindex &&
+            push!(targets, SymUtils.arguments(x)[1])
+    end
     isempty(targets) && return String[]
     guesses = getfield(system, :guesses)
     moved = String[]

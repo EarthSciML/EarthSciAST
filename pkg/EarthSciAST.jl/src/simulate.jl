@@ -1445,7 +1445,8 @@ function _stripped_problem(input, req::_ProblemRequest, classes::Vector{String})
         end
         append!(
             sobj.z0, _z_starting_values(
-                sflat, sobj.z_layout, params, req.span[1]; u0 = z_u0, guesses = sflat.guesses
+                sflat, sobj.z_layout, params, req.span[1]; u0 = z_u0, guesses = sflat.guesses,
+                built = k -> (i = get(prob.var_map, k, 0); i == 0 ? nothing : prob.u0[i])
             )
         )
     end

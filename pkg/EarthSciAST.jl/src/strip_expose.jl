@@ -579,7 +579,8 @@ end
 # else its declared default.
 function _z_starting_values(
         flat::FlattenedSystem, z, params, t0;
-        u0::AbstractDict = Dict{String, Float64}(), guesses::AbstractDict = Dict{String, Any}()
+        u0::AbstractDict = Dict{String, Float64}(), guesses::AbstractDict = Dict{String, Any}(),
+        built = nothing
     )
     out = Union{Float64, Nothing}[]
     for b in z
@@ -599,7 +600,16 @@ function _z_starting_values(
             end
         end
         vals = nothing
-        if rhs !== nothing
+        if rhs !== nothing && built !== nothing
+            # The value the Problem's own build gave the element: the explicit
+            # initial condition evaluated by the build's evaluator, under the
+            # Problem's compiler (`built(element name)`).
+            cells = isempty(b.shape) ? [Int[]] :
+                [collect(Int, Tuple(c)) for c in vec(collect(CartesianIndices(Tuple(b.shape))))]
+            got = Any[built(isempty(c) ? b.name : _cell_key(b.name, c)) for c in cells]
+            all(x -> x isa Real, got) && (vals = Float64[x for x in got])
+        end
+        if rhs !== nothing && vals === nothing
             cells = isempty(b.shape) ? [Int[]] :
                 [collect(Int, Tuple(c)) for c in vec(collect(CartesianIndices(Tuple(b.shape))))]
             vals = try
