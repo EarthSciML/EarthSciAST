@@ -2899,14 +2899,17 @@ fn ab_elementwise_observed_gather_fixture() {
 /// another entry's value and the bitwise comparison fails.
 const PAST_U16: usize = 70_000;
 
-/// Scalar states and parameters straddle the 16-bit boundary. The six active
-/// equations exercise neighbour reads and writes on both sides, and read
-/// parameters from the opposite end of the table. The other equations fill
-/// the state table with a cheap literal derivative.
+/// Scalar states and parameters straddle the 16-bit boundary. The six
+/// equations at the ends of the chain read both neighbours and a parameter
+/// from the opposite end of the table. Each equation between them reads its
+/// right neighbour only, so those equations form one lane program with more
+/// lanes than a 16-bit index can count, whose evenly spaced state reads and
+/// `dy` writes cross the boundary inside the program.
 #[test]
 fn ab_state_and_parameter_indices_past_u16() {
     let max = usize::from(u16::MAX);
-    let n = max + 4;
+    // Six end equations plus more than `max + 1` filler lanes.
+    let n = max + 8;
     let state = |k: usize| format!("u{k:05}");
     let param = |k: usize| format!("c{k:05}");
     let mut vars = serde_json::Map::new();
@@ -2931,7 +2934,7 @@ fn ab_state_and_parameter_indices_past_u16() {
                     {"op": "*", "args": [2, state(k)]}
                 ]}]})
             } else {
-                json!(-0.125)
+                json!({"op": "*", "args": [-0.125, state(k + 1)]})
             };
             json!({
                 "lhs": {"op": "D", "args": [state(k)], "wrt": "t"},
@@ -2963,6 +2966,30 @@ fn ab_state_and_parameter_indices_past_u16() {
     assert!(
         wide_dy,
         "a scalar derivative must write beyond the 16-bit boundary"
+    );
+    // The filler lane program: more than `max + 1` lanes, reading an evenly
+    // spaced run of states that starts below the boundary and ends above it.
+    let crosses = |ix: &LaneIx, lanes: usize| {
+        matches!(ix, LaneIx::Affine { .. })
+            && ix.at(0) as usize <= max
+            && ix.at(lanes - 1) as usize > max
+    };
+    let wide_group = prog.lanes.iter().any(|group| {
+        let lanes = group.lanes as usize;
+        lanes > max + 1
+            && group
+                .inputs
+                .iter()
+                .any(|t| t.kind == LaneKind::State && crosses(&t.ix, lanes))
+            && group
+                .writes
+                .iter()
+                .any(|w| matches!(&w.dst, LaneDst::Dy(ix) if crosses(ix, lanes)))
+    });
+    assert!(
+        wide_group,
+        "a lane program must span more lanes than 16 bits count, reading and \
+         writing an evenly spaced run across the boundary"
     );
 }
 
