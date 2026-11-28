@@ -187,7 +187,7 @@
 
     { "id": "spatial/pde_tests_analyses",            "path": "spatial/pde_tests_analyses.esm",            "tags": ["pde", "spatial-assertions", "expression-ic", "field-plots", "gt-vzwk", "divergent"] },
 
-    { "id": "valid/nonlinear_isorropia_shape",       "path": "valid/nonlinear_isorropia_shape.esm",       "tags": ["nonlinear", "initialization", "guesses", "gt-ebuq"] },
+    { "id": "valid/nonlinear_isorropia_shape",       "path": "valid/nonlinear_isorropia_shape.esm",       "tags": ["nonlinear", "initialization", "guesses", "gt-ebuq"], "load_transforms": [{ "transform": "initialization_equations_migration", "spec": "esm-spec 11.4.4", "detail": "The deprecated `initialization_equations` block of a model with no time derivative is read into `guesses` (decision of #820); both of its unknowns already have a `guesses` entry, which is kept, so the block is dropped and `guesses` is unchanged. All five bindings." }] },
     { "id": "valid/nonlinear_mogi_shape",            "path": "valid/nonlinear_mogi_shape.esm",            "tags": ["nonlinear", "geodynamics", "gt-ebuq"] },
 
     { "id": "valid/reservoir_species_constant",      "path": "valid/reservoir_species_constant.esm",      "tags": ["reactions", "constant-species", "reservoir", "gt-ertm"] },

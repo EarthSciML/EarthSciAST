@@ -62,6 +62,12 @@ import {
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { resolveDataSourceUrls } from './data-source-urls.js'
 import {
+  checkIcArguments,
+  deprecatedInitializationEquationsWarning,
+  InitializationMigrationError,
+  migrateInitializationEquations,
+} from './initialization-migration.js'
+import {
   deprecatedRecordsPerSampleSites,
   deprecatedRecordsPerSampleWarning,
 } from './records-per-sample.js'
@@ -540,6 +546,7 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // same rewrite, silently (the warning above already named every site).
   if (validationView !== data) {
     rewriteOldSpellings(validationView)
+    readInitializationEquations(validationView)
     rewriteDeprecatedOps(validationView)
   }
 
@@ -1334,6 +1341,24 @@ export function rewriteOldSpellings(doc: unknown): OldSpellingSites {
   }
 }
 
+/**
+ * esm 2.5.0 at the wire boundary: the deprecated `initialization_equations`
+ * block rewritten into `ic` equations or `guesses` (esm-spec §11.4.4), then
+ * every `ic` argument checked (esm-spec §4.2). Returns the migrated sites; a
+ * refusal is a `ParseError` carrying its code.
+ */
+function readInitializationEquations(doc: unknown): string[] {
+  try {
+    const sites = migrateInitializationEquations(doc)
+    checkIcArguments(doc)
+    return sites
+  } catch (e) {
+    if (e instanceof InitializationMigrationError)
+      throw new ParseError(e.message, undefined, e.code)
+    throw e
+  }
+}
+
 /** The load-time `deprecated_op` warning naming the rewritten nodes `sites`. */
 export function deprecatedOpWarning(sites: readonly string[]): string {
   return (
@@ -1419,6 +1444,10 @@ export function prepareDocumentOps(doc: unknown, options?: PrepareDocumentOpsOpt
   if (options?.warn !== false) {
     if (old.fields.length > 0) console.warn(deprecatedFieldWarning(old.fields))
     if (old.ops.length > 0) console.warn(deprecatedOperatorSpellingWarning(old.ops))
+  }
+  const migrated = readInitializationEquations(doc)
+  if (migrated.length > 0 && options?.warn !== false) {
+    console.warn(deprecatedInitializationEquationsWarning(migrated))
   }
   const deprecated = rewriteDeprecatedOps(doc)
   if (deprecated.length > 0 && options?.warn !== false) {
