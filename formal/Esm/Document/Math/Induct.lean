@@ -102,20 +102,107 @@ theorem M_all (c : Ctx) : ∀ n e, sizeOf e < n → isE e = true → M c e
 theorem M_of_isE (c : Ctx) (e : Json) (he : isE e = true) : M c e :=
   M_all c _ e (Nat.lt_succ_self _) he
 
-/-- Read a whole token list as one expression. -/
+/-- Read a whole token list as one expression: an expression, or an equation in its
+defining form (`x_s = …, s ∈ S`, `unlift`). -/
 def parseToks (sf : Sf) (S : Sym) (ts : List Tok) : Option Json :=
   match pOr ⟨sf, S⟩ (need 1 ts.length) ts with
   | some (e, []) => some e
+  | some (q, .kw .comma :: r) =>
+    match pTail ⟨sf, S⟩ (need 1 ts.length) r with
+    | some rows =>
+      match rowParts rows with
+      | some (rg, none) => unlift q rg
+      | _ => none
+    | none => none
   | _ => none
+
+/-- An expression printed whole reads back. -/
+theorem parseToks_pa (sf : Sf) (S : Sym) (e : Json) (he : isE e = true) :
+    parseToks sf S (pa ⟨sf, S⟩ 1 e) = some e := by
+  have hm := M_of_isE ⟨sf, S⟩ e he
+  have h := PL_at hm 1 (le_refl _) (by omega) [] (fun t r h => by cases h) _ (le_refl _)
+  rw [pLvl1, List.append_nil] at h
+  unfold parseToks pa
+  rw [h]
+
+theorem rowParts_rngs : ∀ (l : List (String × Json)),
+    rowParts (l.map fun kv => Row.rng kv.1 kv.2) = some (l, none)
+  | [] => rfl
+  | kv :: l => by simp only [List.map_cons, rowParts, rowParts_rngs l, Option.map_some]
+
+/-- The range rows after a defining equation read back. -/
+theorem pTail_tail (c : Ctx) (rows : List (String × Json)) (hne : rows ≠ [])
+    (hrows : rows.all (fun kv => nameOK kv.1 && rangeOK kv.2 &&
+      match kv.2 with | .arr [a, b] => isE a && isE b | _ => true) = true)
+    (f : Nat) (hf : 30 * (defRowsToks c rows).length + 12 ≤ f) :
+    pTail c (f + 1) (defRowsToks c rows) = some (rows.map fun kv => Row.rng kv.1 kv.2) := by
+  let rs := rows.map fun kv => (Row.rng kv.1 kv.2, rowToks c (pr c) kv)
+  have h1 : defRowsToks c rows = sepBy [.kw .comma] (rs.map Prod.snd) := by
+    simp [rs, defRowsToks, Function.comp_def]
+  have h2 : rows.map (fun kv => Row.rng kv.1 kv.2) = rs.map Prod.fst := by
+    simp [rs, Function.comp_def]
+  rw [h1, h2]
+  rw [h1] at hf
+  refine pTail_read c rs (by simpa [rs] using hne) ?_ f hf
+  intro p hp X hX g hg
+  obtain ⟨kv, hkv, rfl⟩ := List.mem_map.1 hp
+  have hc := List.all_eq_true.1 hrows kv hkv
+  simp only [Bool.and_eq_true] at hc
+  obtain ⟨⟨hk, hv⟩, hab⟩ := hc
+  have hM : ∀ a b, kv.2 = .arr [a, b] → M c a ∧ M c b ∧ pr c a = pr c a ∧ pr c b = pr c b := by
+    intro a b e
+    rw [e] at hab
+    simp only [Bool.and_eq_true] at hab
+    exact ⟨M_of_isE c a hab.1, M_of_isE c b hab.2, rfl, rfl⟩
+  rcases hX with rfl | ⟨R, rfl⟩
+  · exact pRow_range_gen c (pr c) kv.1 kv.2 hk hv hM _ rfl rfl [] (Fol_nil _ _)
+      ⟨fun r e => (by cases e), rfl⟩ (fun r e => by cases e) g hg
+  · have hE : EndTok .comma := Or.inr (Or.inr (Or.inr rfl))
+    exact pRow_range_gen c (pr c) kv.1 kv.2 hk hv hM _ rfl rfl _ (endTok_fol hE 4 (by omega) R)
+      (endTok_stop hE R) (fun r e => by simp at e) g hg
 
 /-- The token-level round trip: every well-formed expression reads back from its
 printed tokens, on both surfaces and under every symbol table. -/
 theorem parseToks_print (sf : Sf) (S : Sym) (e : Json) (he : isE e = true) :
     parseToks sf S (print sf S e) = some e := by
-  have hm := M_of_isE ⟨sf, S⟩ e he
-  have h := PL_at hm 1 (le_refl _) (by omega) [] (fun t r h => by cases h) _ (le_refl _)
-  rw [pLvl1, List.append_nil] at h
-  unfold parseToks print pa
-  rw [h]
+  unfold print
+  split
+  · rename_i q rows _
+    split
+    · rename_i hok
+      unfold liftOK at hok
+      simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_eq_false_iff] at hok
+      obtain ⟨⟨⟨hne, hq⟩, hrows⟩, hun⟩ := hok
+      obtain ⟨e', hu, hj⟩ : ∃ e', unlift q rows = some e' ∧ jbeq e' e = true := by
+        revert hun; cases unlift q rows with
+        | none => intro h; cases h
+        | some e' => intro h; exact ⟨e', rfl, h⟩
+      have he' := jbeq_sound _ _ hj
+      subst he'
+      have hm := M_of_isE ⟨sf, S⟩ q hq
+      have hE : EndTok .comma := Or.inr (Or.inr (Or.inr rfl))
+      have hlen : (pa ⟨sf, S⟩ 1 q ++ .kw .comma :: defRowsToks ⟨sf, S⟩ rows).length =
+          (pa ⟨sf, S⟩ 1 q).length + 1 + (defRowsToks ⟨sf, S⟩ rows).length := by simp; omega
+      have h := PL_at hm 1 (le_refl _) (by omega) (.kw .comma :: defRowsToks ⟨sf, S⟩ rows)
+        (endTok_fol hE 1 (le_refl _) _) (need 1 (pa ⟨sf, S⟩ 1 q ++ .kw .comma :: defRowsToks ⟨sf, S⟩ rows).length)
+        (by unfold pa at hlen ⊢; rw [hlen]; unfold need; omega)
+      rw [pLvl1] at h
+      unfold parseToks
+      unfold pa at h ⊢
+      rw [h]
+      simp only
+      have ht := pTail_tail ⟨sf, S⟩ rows hne hrows
+        (need 1 ((pr ⟨sf, S⟩ q).at sf 1 ++ .kw .comma :: defRowsToks ⟨sf, S⟩ rows).length - 1)
+        (by unfold pa at hlen; rw [hlen]; unfold need; omega)
+      have hn1 : need 1 ((pr ⟨sf, S⟩ q).at sf 1 ++ .kw .comma :: defRowsToks ⟨sf, S⟩ rows).length - 1 + 1 =
+          need 1 ((pr ⟨sf, S⟩ q).at sf 1 ++ .kw .comma :: defRowsToks ⟨sf, S⟩ rows).length := by
+        unfold need; omega
+      rw [hn1] at ht
+      rw [ht]
+      simp only
+      rw [rowParts_rngs]
+      exact hu
+    · exact parseToks_pa sf S e he
+  · exact parseToks_pa sf S e he
 
 end Esm.Document.Math

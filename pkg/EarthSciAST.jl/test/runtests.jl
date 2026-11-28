@@ -318,6 +318,9 @@ _selected(group::Symbol) = isempty(_SELECTED) || String(group) in _SELECTED
 function _run_file(path::String)
     name = Symbol("Test_", replace(splitext(basename(path))[1], r"[^A-Za-z0-9_]" => "_"))
     m = Core.eval(Main, Expr(:module, true, name, Expr(:block)))
+    if basename(path) in ("cadence_refresh_test.jl", "concurrent_build_test.jl")
+        Core.eval(m, :(const _BATCH_TWO_THREAD_TESTS = true))
+    end
     return Base.include(m, path)
 end
 

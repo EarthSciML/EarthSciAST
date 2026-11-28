@@ -2250,5 +2250,265 @@ func prTemplate(c Ctx, n string, bs Obj, esc func() Out) Out {
 // l.
 func prPa(c Ctx, l int, e Json) []Tok { return prPr(c, e).at(c.sf, l) }
 
-// prPrint is `Math.print`: the tokens of a whole expression.
-func prPrint(sf Sf, s *Sym, e Json) []Tok { return prPa(Ctx{sf: sf, s: s}, 1, e) }
+// ## The defining form of an equation
+//
+// An equation whose right side is a `faq` with output indices,
+// `x = [body]_(s ∈ S)`, prints with the output indices on its left side and
+// their ranges after its right side, `x_s = body, s ∈ S`. The right side is the
+// reduction over the remaining ranges (a `faq` with no output indices), or the
+// body alone when the `faq` reduces nothing and carries nothing else. The
+// reader takes a trailing `, rows` after a whole equation back to the `faq`
+// (prUnlift); the printer uses the form only when that gives back exactly the
+// equation (prLiftOk), and the bracket form otherwise.
+
+// prSortKvs is `Math.sortKVs`: sort bindings by key (insertion from the right).
+func prSortKvs(xs Obj) Obj {
+	out := Obj{}
+	for i := len(xs) - 1; i >= 0; i-- {
+		out = prInsKv(xs[i], out)
+	}
+	return out
+}
+
+// prIsRedNode is `Math.isRedNode`: a `faq` node with no output indices.
+func prIsRedNode(j Json) bool {
+	kvs, ok := j.(Obj)
+	if !ok {
+		return false
+	}
+	o, _ := exprLook("op", kvs)
+	oi, _ := exprLook("output_idx", kvs)
+	os, isStr := o.(string)
+	l, isArr := oi.([]Json)
+	return isStr && os == "faq" && isArr && len(l) == 0
+}
+
+// prBinNode matches exactly `{"args": [a, b], "op": op}`.
+func prBinNode(j Json, op string) (Json, Json, bool) {
+	kvs, ok := j.(Obj)
+	if !ok || len(kvs) != 2 || kvs[0].K != "args" || kvs[1].K != "op" {
+		return nil, nil, false
+	}
+	if o, ok := kvs[1].V.(string); !ok || o != op {
+		return nil, nil, false
+	}
+	sides, ok := kvs[0].V.([]Json)
+	if !ok || len(sides) != 2 {
+		return nil, nil, false
+	}
+	return sides[0], sides[1], true
+}
+
+// prWithoutOutRanges is the fields of a node other than `output_idx` and
+// `ranges`.
+func prWithoutOutRanges(kvs Obj) Obj {
+	out := Obj{}
+	for _, kv := range kvs {
+		if kv.K != "output_idx" && kv.K != "ranges" {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// prDistinctNames is `Math.distinctNames`: no name occurs twice.
+func prDistinctNames(ks []string) bool {
+	seen := make(map[string]bool, len(ks))
+	for _, k := range ks {
+		if seen[k] {
+			return false
+		}
+		seen[k] = true
+	}
+	return true
+}
+
+// prDefOutsOk is `Math.defOutsOK`: the left side's subscripts os and the ranges
+// rows after the right side are those of a defining form: each subscript a
+// name or `1` (prOutOk, as the bracket form's entries), no name twice, and each
+// row the range of one of the subscripts, at most once. A subscript with no row
+// is an output index with no range, as in the bracket form.
+func prDefOutsOk(os []Json, rows Obj) bool {
+	for _, o := range os {
+		if !prOutOk(o) {
+			return false
+		}
+	}
+	names := prOutNames(os)
+	if !prDistinctNames(names) {
+		return false
+	}
+	keys := make([]string, len(rows))
+	for i, kv := range rows {
+		if !slices.Contains(names, kv.K) {
+			return false
+		}
+		keys[i] = kv.K
+	}
+	return prDistinctNames(keys)
+}
+
+// prUnlift is `Math.unlift`: the equation `x_(os) = rhs` with the ranges rows
+// of its output indices, as the equation it writes: `x = faq` with the output
+// indices os and the rows' ranges, over rhs read as the reduction (a `faq` with
+// no output indices that ranges over at least one index, none of them an
+// output index) or as the body. Nothing else is a defining form: a reduction
+// with no range of its own (`sum v_j`, `limits(sum) v_j`, `sum_(j > 1) v_j`)
+// would read as reducing what it does not, and the printer writes the bracket
+// form for it.
+func prUnlift(q Json, rows Obj) (Json, bool) {
+	lhs, rhs, ok := prBinNode(q, "==")
+	if !ok {
+		return nil, false
+	}
+	lk, ok := lhs.(Obj)
+	if !ok || len(lk) != 2 || lk[0].K != "args" || lk[1].K != "op" {
+		return nil, false
+	}
+	if o, ok := lk[1].V.(string); !ok || o != "index" {
+		return nil, false
+	}
+	ia, ok := lk[0].V.([]Json)
+	if !ok || len(ia) == 0 {
+		return nil, false
+	}
+	x, ok := ia[0].(string)
+	if !ok {
+		return nil, false
+	}
+	os := append([]Json{}, ia[1:]...)
+	if !prDefOutsOk(os, rows) {
+		return nil, false
+	}
+	var f Json
+	if kvs, isObj := rhs.(Obj); isObj && prIsRedNode(rhs) {
+		rv, _ := exprLook("ranges", kvs)
+		rest, ok := rv.(Obj)
+		if !ok || len(rest) == 0 {
+			return nil, false
+		}
+		names := prOutNames(os)
+		for _, kv := range rest {
+			if slices.Contains(names, kv.K) {
+				return nil, false
+			}
+		}
+		rr := append(append(Obj{}, rest...), rows...)
+		fs := append(Obj{{"output_idx", os}, {"ranges", prSortKvs(rr)}}, prWithoutOutRanges(kvs)...)
+		f = prSortKvs(fs)
+	} else {
+		f = Obj{{"args", []Json{}}, {"expr", rhs}, {"op", "faq"}, {"output_idx", os},
+			{"ranges", prSortKvs(append(Obj{}, rows...))}}
+	}
+	return Obj{{"args", []Json{x, f}}, {"op", "=="}}, true
+}
+
+// prLiftParts is `Math.liftParts`: the parts of the defining form of an
+// equation `x = faq`: the equation `x_(os) = rhs` and the ranges of the output
+// indices, when the left side is a name that takes a subscript and the `faq`
+// has output indices.
+func prLiftParts(e Json) (Json, Obj, bool) {
+	xj, r, ok := prBinNode(e, "==")
+	if !ok {
+		return nil, nil, false
+	}
+	x, ok1 := xj.(string)
+	kvs, ok2 := r.(Obj)
+	if !ok1 || !ok2 {
+		return nil, nil, false
+	}
+	o, _ := exprLook("op", kvs)
+	oj, _ := exprLook("output_idx", kvs)
+	rj, _ := exprLook("ranges", kvs)
+	op, isStr := o.(string)
+	os, isArr := oj.([]Json)
+	rs, isObj := rj.(Obj)
+	if !isStr || op != "faq" || !isArr || !isObj {
+		return nil, nil, false
+	}
+	if len(os) == 0 || !prPlainLast(x) {
+		return nil, nil, false
+	}
+	outs := prOutNames(os)
+	rows := Obj{}
+	for _, k := range outs {
+		if v, has := exprLook(k, rs); has {
+			rows = append(rows, KV{k, v})
+		}
+	}
+	rest := Obj{}
+	for _, kv := range rs {
+		if !slices.Contains(outs, kv.K) {
+			rest = append(rest, kv)
+		}
+	}
+	bare := len(rest) == 0
+	for _, kv := range kvs {
+		switch kv.K {
+		case "expr", "op", "output_idx", "ranges":
+		case "args":
+			if a, ok := kv.V.([]Json); !ok || len(a) != 0 {
+				bare = false
+			}
+		default:
+			bare = false
+		}
+	}
+	body, _ := exprLook("expr", kvs)
+	var rhs Json
+	if bare && !prIsRedNode(body) {
+		rhs = body
+	} else {
+		fs := Obj{{"output_idx", []Json{}}}
+		if len(rest) > 0 {
+			fs = append(fs, KV{"ranges", rest})
+		}
+		rk := prSortKvs(append(fs, prWithoutOutRanges(kvs)...))
+		// The reduction must have its native spelling (`faqForm` and `faqOK`).
+		if f, ok := prFaqForm(rk); !ok || !prFaqOk(f) {
+			return nil, nil, false
+		}
+		rhs = rk
+	}
+	lhs := Obj{{"args", append([]Json{x}, os...)}, {"op", "index"}}
+	return Obj{{"args", []Json{lhs, rhs}}, {"op", "=="}}, rows, true
+}
+
+// prLiftOk is `Math.liftOK`: the defining form is used: it reads back as
+// exactly e.
+func prLiftOk(e, q Json, rows Obj) bool {
+	if len(rows) == 0 || !exprIsE(q) {
+		return false
+	}
+	for _, kv := range rows {
+		if !exprNameOk(kv.K) || !prRangeOk(kv.V) {
+			return false
+		}
+		if ab, ok := kv.V.([]Json); ok && len(ab) == 2 && (!exprIsE(ab[0]) || !exprIsE(ab[1])) {
+			return false
+		}
+	}
+	u, ok := prUnlift(q, rows)
+	return ok && JsonEqual(u, e)
+}
+
+// prDefRowsToks is `Math.defRowsToks`: the range rows after a defining equation,
+// separated by commas.
+func prDefRowsToks(c Ctx, rows Obj) []Tok {
+	xs := make([][]Tok, len(rows))
+	for i, kv := range rows {
+		xs[i] = prRowToks(c, kv.K, kv.V)
+	}
+	return prSepBy(kws(KwComma), xs)
+}
+
+// prPrint is `Math.print`: the tokens of a whole expression: an equation
+// `x = faq` with output indices in its defining form when that reads back,
+// otherwise as any expression.
+func prPrint(sf Sf, s *Sym, e Json) []Tok {
+	c := Ctx{sf: sf, s: s}
+	if q, rows, ok := prLiftParts(e); ok && prLiftOk(e, q, rows) {
+		return cat(prPa(c, 1, q), kws(KwComma), prDefRowsToks(c, rows))
+	}
+	return prPa(c, 1, e)
+}

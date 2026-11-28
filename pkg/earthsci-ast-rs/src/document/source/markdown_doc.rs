@@ -20,7 +20,7 @@ use super::text::{blank, no_stop, split_line, string, until_stop};
 use crate::document::json::Json;
 use crate::document::math::expr::name_ok;
 use crate::document::math::token::Sf;
-use crate::document::math::{Sym, latex, parse_latex, print_latex};
+use crate::document::math::{Sym, latex, parse_latex, print_latex, print_latex_eqn};
 use crate::document::strings::{esc_char, is_ident};
 use crate::document::yaml;
 
@@ -28,7 +28,7 @@ use crate::document::yaml;
 
 /// `Md.latexOf`: an equation's LaTeX under the symbol table `s`.
 pub fn latex_of(s: &Sym, e: &Eqn) -> Vec<char> {
-    print_latex(s, &eq_expr(e)).chars().collect()
+    print_latex_eqn(s, &eq_expr(e)).chars().collect()
 }
 
 /// `Md.prMd`: an equation's math text: its `_comment` as a LaTeX comment line,

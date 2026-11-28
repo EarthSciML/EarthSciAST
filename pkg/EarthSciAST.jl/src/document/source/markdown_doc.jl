@@ -32,12 +32,12 @@ using ..SText: blank, no_stop, split_line, string_of, until_stop
 # ## Equations in LaTeX
 
 """`Md.latexOf`: an equation's LaTeX under the symbol table `s`."""
-latex_of(s::Sym, e::Eqn) = collect(Char, DMath.print_latex(s, eq_expr(e)))
+latex_of(s::Sym, e::Eqn) = collect(Char, DMath.print_latex_eqn(s, eq_expr(e)))
 
 """`Md.prMd`: an equation's math text: its `_comment` as a LaTeX comment line,
 then the equation."""
 function pr_md(s::Sym, e::Eqn)
-    l = DMath.print_latex(s, eq_expr(e))
+    l = DMath.print_latex_eqn(s, eq_expr(e))
     return e.comment === nothing ? l : string("% ", e.comment, "\n", l)
 end
 

@@ -1,0 +1,356 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "lanes_data_and_time_observeds",
+    "description": "A pointwise loss on a 6 x 5 x 4 grid that reads two state-free observeds: C, a whole-domain data-derived array that depends on neither the state nor t (each cell sums over the whole lon axis, so no lane can compute it from its own cell), and S, an array observed that depends on t and reads C (the form of a solar-zenith or time-blended data field). A lane program gathers C per lane from its once-computed whole-domain value and computes S per lane, at one time or at a time per lane. E, declared with no shape, is elementwise over S (E = 0.25 + 0.5 S), so the build gives it S's axes; the lane program computes it per lane too.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-26T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 6
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 5
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "Obs": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 1.0
+        },
+        "C": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat"
+          ],
+          "description": "A state-free, t-free observed over the whole domain."
+        },
+        "S": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "description": "A state-free observed that depends on t."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        },
+        "E": {
+          "type": "unknown",
+          "units": "1",
+          "description": "An observed of t declared with no shape: elementwise over S, so the build gives it S's axes."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "C",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              }
+            },
+            "expr": {
+              "op": "faq",
+              "args": [],
+              "output_idx": [],
+              "ranges": {
+                "m": {
+                  "from": "lon"
+                }
+              },
+              "expr": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "+",
+                    "args": [
+                      1.0,
+                      {
+                        "op": "*",
+                        "args": [
+                          0.1,
+                          "m",
+                          "j"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "+",
+                    "args": [
+                      "i",
+                      "m"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "lhs": "S",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "l"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "l": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                1.0,
+                {
+                  "op": "*",
+                  "args": [
+                    0.5,
+                    {
+                      "op": "cos",
+                      "args": [
+                        {
+                          "op": "+",
+                          "args": [
+                            "t",
+                            {
+                              "op": "*",
+                              "args": [
+                                0.3,
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                0.2,
+                                "j"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "exp",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            -0.1,
+                            "l"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "C",
+                        "i",
+                        "j"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "E",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "const",
+                "args": [],
+                "value": 0.25,
+                "units": "1"
+              },
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  "S"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "l"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "l": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A",
+                    "i",
+                    "j",
+                    "l"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "l"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "l": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "k",
+                            {
+                              "op": "index",
+                              "args": [
+                                "S",
+                                "i",
+                                "j",
+                                "l"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "A",
+                        "i",
+                        "j",
+                        "l"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "E",
+                        "i",
+                        "j",
+                        "l"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "const",
+                      "args": [],
+                      "value": 0.01,
+                      "units": "1/s"
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "C",
+                        "i",
+                        "j"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

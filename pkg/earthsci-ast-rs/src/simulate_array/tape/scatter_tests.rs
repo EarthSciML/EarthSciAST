@@ -179,3 +179,67 @@ fn a_ragged_range_under_a_free_index_scatters_per_free_cell() {
     // 3 · (3 + 1 + 4 + 2) pairs the dense tuple list masks at run time.
     assert_eq!(prog.tables.seg_tables[0].rows.last(), Some(&9));
 }
+
+/// The transposed product of an `overlap`-gated binning, `D(g) = faq_j Σ_{c,
+/// r : r == j} inside(c, r)·λ[c]·X[r]`, as EarthSciASTDiff's vector-Jacobian
+/// product document of a regrid writes it: the gate binds only contracted
+/// names and the filter pins the output index, so the gate's candidate pairs
+/// are walked once and scattered into their cells. The list holds the
+/// candidates, one run per record, not one walk of every candidate per output
+/// cell (`|recs| × |candidates|` tuples before). The output index ranges over
+/// a literal `[1, n]`, as the product documents write it: an `overlap` side
+/// resolves by index-set name, so with `j` drawn from `recs` the gate would
+/// bind `j` instead. Record `n` sits on the edge between cells 1 and 2, so
+/// the broad phase admits both and the body keeps one.
+#[test]
+fn a_gated_scatter_walks_the_gates_candidates_once() {
+    let n = 40usize;
+    let ix = |a: &str, i: &str| json!({"op": "index", "args": [a, i]});
+    let cells_w: Vec<f64> = (0..n).map(|k| k as f64).collect();
+    let cells_e: Vec<f64> = (0..n).map(|k| k as f64 + 1.0).collect();
+    // Records at scrambled cell centres, the last one on an edge.
+    let mut xs: Vec<f64> = (0..n).map(|r| ((r * 7) % n) as f64 + 0.5).collect();
+    xs[n - 1] = 1.0;
+    let inside = json!({"op": "ifelse", "args": [{"op": "and", "args": [
+        {"op": "<=", "args": [ix("W", "c"), ix("X", "r")]},
+        {"op": "<", "args": [ix("X", "r"), ix("E", "c")]},
+        {"op": "<=", "args": [ix("S", "c"), ix("Y", "r")]},
+        {"op": "<", "args": [ix("Y", "r"), ix("N", "c")]}]}, 1.0, 0.0]});
+    let doc = json!({
+        "esm": "2.0.0",
+        "metadata": {"name": "gated_scatter", "authors": ["tape tests"]},
+        "index_sets": {"cells": {"kind": "interval", "size": n}, "recs": {"kind": "interval", "size": n}},
+        "models": {"M": {
+            "variables": {
+                "W": {"type": "parameter", "units": "1", "shape": ["cells"], "default": cells_w},
+                "E": {"type": "parameter", "units": "1", "shape": ["cells"], "default": cells_e},
+                "S": {"type": "parameter", "units": "1", "shape": ["cells"], "default": vec![0.0; n]},
+                "N": {"type": "parameter", "units": "1", "shape": ["cells"], "default": vec![1.0; n]},
+                "X": {"type": "parameter", "units": "1", "shape": ["recs"], "default": xs},
+                "Y": {"type": "parameter", "units": "1", "shape": ["recs"], "default": vec![0.5; n]},
+                "lam": {"type": "unknown", "units": "1", "shape": ["cells"], "default": 1.0},
+                "g": {"type": "unknown", "units": "1", "shape": ["recs"], "default": 0.0}
+            },
+            "equations": [
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["c"], "ranges": {"c": {"from": "cells"}},
+                         "expr": {"op": "D", "args": [ix("lam", "c")], "wrt": "t"}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["c"], "ranges": {"c": {"from": "cells"}},
+                         "expr": {"op": "-", "args": [ix("lam", "c")]}}},
+                {"lhs": {"op": "D", "args": ["g"], "wrt": "t"},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["j"],
+                         "ranges": {"j": [1, n], "c": {"from": "cells"}, "r": {"from": "recs"}},
+                         "reduce": "+",
+                         "filter": {"op": "==", "args": ["r", "j"]},
+                         "join": [{"overlap": {"src_env": ["X", "Y"], "tgt_env": ["W", "S", "E", "N"], "eps": 0.0}}],
+                         "expr": {"op": "*", "args": [
+                             {"op": "*", "args": [inside, ix("lam", "c")]}, ix("X", "r")]}}}
+            ]
+        }}
+    });
+    let prog = ab_check(doc, -2.0, 2.0);
+    assert_eq!(opcount(&prog, "SegReduce"), 1);
+    // One candidate per record, two for the record on the edge.
+    let mut rows: Vec<u32> = (0..n as u32).collect();
+    rows.push(n as u32 + 1);
+    assert_eq!(prog.tables.seg_tables[0].rows, rows);
+}

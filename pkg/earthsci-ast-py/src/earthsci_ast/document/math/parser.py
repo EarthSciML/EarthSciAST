@@ -38,6 +38,7 @@ from .printer import (
     tparams,
     unesc_k,
     unesc_t,
+    unlift,
     up_set,
 )
 from .surface import neg_num
@@ -1899,7 +1900,38 @@ def need(level: int, n: int) -> int:
 def parse_toks(sf: str, s: Any, ts: list):
     """``Math.parseToks`` (Induct.lean): read a whole token list; ``(value,)`` or
     ``None``."""
-    r = p_or(Ctx(sf, s), need(1, len(ts)), ts, 0)
-    if r is None or r[1] != len(ts):
+    c = Ctx(sf, s)
+    f = need(1, len(ts))
+    r = p_or(c, f, ts, 0)
+    if r is None:
         return None
-    return (r[0],)
+    if r[1] == len(ts):
+        return (r[0],)
+    if ts[r[1]] != K.COMMA:
+        return None
+    rows = _p_tail(c, f, ts, r[1] + 1)
+    if rows is None:
+        return None
+    parts = _row_parts(rows)
+    if parts is None or parts[1] is not _NOFILTER:
+        return None
+    u = unlift(r[0], parts[0])
+    return None if u is None else (u,)
+
+
+def _p_tail(c: Ctx, f: int, ts: list, i: int):
+    """``Math.pTail``: range rows separated by commas, to the end of the input."""
+    rows = []
+    while True:
+        if f == 0:
+            return None
+        f -= 1
+        r = _p_row(c, f, lambda t: t == K.COMMA, ts, i)
+        if r is None:
+            return None
+        rows.append(r[0])
+        if r[1] == len(ts):
+            return rows
+        if ts[r[1]] != K.COMMA:
+            return None
+        i = r[1] + 1

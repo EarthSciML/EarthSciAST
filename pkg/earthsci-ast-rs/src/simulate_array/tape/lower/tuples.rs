@@ -148,6 +148,27 @@ pub(super) struct BuiltGate {
     in_filter: bool,
 }
 
+/// The plan of `gates` when it is the same for every output cell, as a
+/// [`GatePlan`] over `contract_names`: `None` when a gate's symbol is an
+/// output index, which pins or tests a cell. The equality scatter walks such
+/// a plan once for the whole output box ([`TapeBuilder::lower_equality_scatter`]).
+pub(super) fn cell_free_gate_plan<'g>(
+    gates: &'g [BuiltGate],
+    idx_names: &[String],
+    contract_names: &[String],
+) -> Option<GatePlan<'g>> {
+    let axis = |s: &str| crate::simulate_array::eval::gate_axis(s, idx_names, contract_names);
+    let mut placed = Vec::with_capacity(gates.len());
+    for g in gates {
+        let (src, tgt) = (axis(&g.sym_src), axis(&g.sym_tgt));
+        if matches!(src, GateAxis::Output) || matches!(tgt, GateAxis::Output) {
+            return None;
+        }
+        placed.push((&g.index, src, tgt));
+    }
+    Some(GatePlan::new(contract_names.len(), placed))
+}
+
 /// The build-time value of one observed a folded tuple-list contraction
 /// reads ([`TapeBuilder::tuple_fold_inputs`]): its shape (empty for a scalar)
 /// and row-major values, shared by every chunk's tape.
@@ -359,40 +380,61 @@ impl TapeBuilder<'_> {
             filter,
             init: reduce.identity(),
         };
-        // One walk lists the tuples while they fit what is left of the
-        // program's budget and, once they outgrow it, folds them a chunk at a
-        // time as it goes ([`Self::walk_tuple_contraction`]): a list that fits
-        // costs one walk, and so does one that is folded.
-        let budget = tuple_list_budget() as u64;
-        let room = budget
-            .saturating_sub(self.tuples_held)
-            .min(MAX_PROMOTED_ELEMS as u64) as usize;
-        let too_long = || {
-            Bail::new(format!(
-                "contracted: tuple list too long (over {MAX_PROMOTED_ELEMS} tuples)"
-            ))
-        };
-        let list = match self.walk_tuple_contraction(&spec, room, combine_op)? {
-            Walked::Listed(list) => list,
-            Walked::Folded(values) => {
-                log_tuple_walk(&spec, "folded", None);
-                return Ok(if ranges.is_empty() {
-                    LV::Lit(values[0])
-                } else {
-                    LV::Arr(self.emit_const_data(&shape, &lo, Arc::new(values), false)?)
-                });
+        // A filter that pins an output index by equality, under gates that
+        // bind no output index: the gates' candidate tuples are walked once
+        // and each is scattered into the cell its pin names, instead of
+        // walking every candidate once per output cell ([`scatter`]). A
+        // declined scatter hands over to the tuple list below, and its reason
+        // is kept should that refuse too.
+        let mut scatter_decline = None;
+        if filter.is_some() && !gates.is_empty() {
+            match self.attempt(|b| b.lower_equality_scatter(c, &lo, &shape, &gates)) {
+                Ok(Some(v)) => {
+                    log_tuple_walk(&spec, "scattered", None);
+                    return Ok(v);
+                }
+                Ok(None) => {}
+                Err(e) => scatter_decline = Some(e),
             }
-            Walked::TooLong => return Err(too_long()),
-            // A chunk did not fold: list the whole contraction after all.
-            Walked::Declined => {
-                enumerate_tuples(&spec, MAX_PROMOTED_ELEMS)?.ok_or_else(too_long)?
-            }
+        }
+        let listed = |this: &mut Self| -> LResult<LV> {
+            // One walk lists the tuples while they fit what is left of the
+            // program's budget and, once they outgrow it, folds them a chunk
+            // at a time as it goes ([`Self::walk_tuple_contraction`]): a list
+            // that fits costs one walk, and so does one that is folded.
+            let budget = tuple_list_budget() as u64;
+            let room = budget
+                .saturating_sub(this.tuples_held)
+                .min(MAX_PROMOTED_ELEMS as u64) as usize;
+            let too_long = || {
+                Bail::new(format!(
+                    "contracted: tuple list too long (over {MAX_PROMOTED_ELEMS} tuples)"
+                ))
+            };
+            let list = match this.walk_tuple_contraction(&spec, room, combine_op)? {
+                Walked::Listed(list) => list,
+                Walked::Folded(values) => {
+                    log_tuple_walk(&spec, "folded", None);
+                    return Ok(if ranges.is_empty() {
+                        LV::Lit(values[0])
+                    } else {
+                        LV::Arr(this.emit_const_data(&shape, &lo, Arc::new(values), false)?)
+                    });
+                }
+                Walked::TooLong => return Err(too_long()),
+                // A chunk did not fold: list the whole contraction after all.
+                Walked::Declined => {
+                    enumerate_tuples(&spec, MAX_PROMOTED_ELEMS)?.ok_or_else(too_long)?
+                }
+            };
+            log_tuple_walk(&spec, "listed", Some(list.len()));
+            // Charged whether or not the list fit: a list the fold declined is
+            // held all the same.
+            this.tuples_held = this.tuples_held.saturating_add(list.len() as u64);
+            this.lower_tuple_list(&spec, list, &lo, &shape, combine_op)
         };
-        log_tuple_walk(&spec, "listed", Some(list.len()));
-        // Charged whether or not the list fit: a list the fold declined is
-        // held all the same.
-        self.tuples_held = self.tuples_held.saturating_add(list.len() as u64);
-        self.lower_tuple_list(&spec, list, &lo, &shape, combine_op)
+        let r = listed(self);
+        super::after_decline(scatter_decline, r)
     }
 
     /// The tuple-list form itself (module docs): lower the filter and the

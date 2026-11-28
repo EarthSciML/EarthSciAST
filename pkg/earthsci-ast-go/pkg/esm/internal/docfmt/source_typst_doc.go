@@ -12,7 +12,7 @@ import (
 
 // typDocTypOf is `Typ.typOf`: an equation's Typst math under the symbol table
 // s.
-func typDocTypOf(s *Sym, e *Eqn) []rune { return []rune(mathPrintTypst(s, eqnEqExpr(e))) }
+func typDocTypOf(s *Sym, e *Eqn) []rune { return []rune(mathPrintTypstEqn(s, eqnEqExpr(e))) }
 
 // typDocPrT is `Typ.prT`: its `_comment` as a `//` comment line, then the
 // equation.
@@ -23,7 +23,7 @@ func typDocPrT(s *Sym, e *Eqn) string {
 		b.WriteString(e.Comment)
 		b.WriteByte('\n')
 	}
-	b.WriteString(mathPrintTypst(s, eqnEqExpr(e)))
+	b.WriteString(mathPrintTypstEqn(s, eqnEqExpr(e)))
 	return b.String()
 }
 

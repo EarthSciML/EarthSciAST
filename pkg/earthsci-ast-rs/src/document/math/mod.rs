@@ -2,7 +2,9 @@
 //!
 //! Port of `formal/Esm/Document/Math/`. One token type ([`token::Tok`]) serves
 //! both surfaces; [`print()`] writes an expression's tokens under a symbol table,
-//! each surface renders and lexes its own spelling, and [`parse_toks`] reads
+//! [`print_latex`] / [`print_typst`] render an expression and
+//! [`print_latex_eqn`] / [`print_typst_eqn`] an equation (in its defining form
+//! when it has one), each surface renders and lexes its own spelling, and [`parse_toks`] reads
 //! the tokens of either surface back.
 //!
 //! | Rust | Lean |
@@ -52,8 +54,18 @@ pub fn parse_toks(sf: Sf, s: &Sym, toks: &[Tok]) -> Option<Json> {
     parse::parse_toks(sf, s, toks)
 }
 
-/// `Math.printLatex` (RoundTripLatex.lean).
+/// `Math.printLatex` (RoundTripLatex.lean): the LaTeX of an expression (an
+/// `==` at its top is a comparison and prints as any expression does).
 pub fn print_latex(s: &Sym, e: &Json) -> String {
+    latex::render(&print::pa(print::Ctx { sf: Sf::Latex, s }, 1, e))
+        .into_iter()
+        .collect()
+}
+
+/// `Math.printLatexEqn` (RoundTripLatex.lean): the LaTeX of an equation's
+/// expression, `==(lhs, rhs)`, in its defining form when it has one
+/// ([`print()`]).
+pub fn print_latex_eqn(s: &Sym, e: &Json) -> String {
     latex::render(&print(Sf::Latex, s, e)).into_iter().collect()
 }
 
@@ -63,8 +75,20 @@ pub fn parse_latex(s: &Sym, text: &str) -> Option<Json> {
     latex::lex(&cs).and_then(|toks| parse_toks(Sf::Latex, s, &toks))
 }
 
-/// `Math.printTypst` (RoundTripTypst.lean).
+/// `Math.printTypst` (RoundTripTypst.lean): the Typst math of an expression
+/// (an `==` at its top is a comparison, as in an event's condition, and prints
+/// as any expression does).
 pub fn print_typst(s: &Sym, e: &Json) -> String {
+    typst::render(&print::pa(print::Ctx { sf: Sf::Typst, s }, 1, e))
+        .into_iter()
+        .collect()
+}
+
+/// `Math.printTypstEqn` (RoundTripTypst.lean): the Typst math of an equation's
+/// expression, `==(lhs, rhs)` (`Source.eqExpr`), an equation `x = faq` with
+/// output indices in its defining form `x_s = …, s ∈ S` when it has one
+/// ([`print()`]).
+pub fn print_typst_eqn(s: &Sym, e: &Json) -> String {
     typst::render(&print(Sf::Typst, s, e)).into_iter().collect()
 }
 
