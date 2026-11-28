@@ -1,0 +1,208 @@
+---
+title: "flattened_variable"
+description: "Stable type · Flatten"
+type: "api"
+api_tabs: true
+---
+
+
+**Tier:** stable · **Kind:** type · **Topic:** [Flatten](/generated/api/topics/flatten)
+
+| Julia | TypeScript | Python | Rust | Go |
+|---|---|---|---|---|
+| not exported | `FlattenedVariable` | `FlattenedVariable` | not exported | `FlattenedVariable` |
+
+
+<div class="api-tabs">
+
+<div class="api-tab" data-lang="julia" data-label="Julia">
+<p class="api-tab-label">Julia</p>
+
+<p class="api-absent">Julia does not export this type.</p>
+
+</div>
+
+<div class="api-tab" data-lang="typescript" data-label="TypeScript">
+<p class="api-tab-label">TypeScript</p>
+
+```typescript
+interface FlattenedVariable {
+    name: string;
+    type: FlattenedVariableRole;
+    units?: string;
+    default?: number;
+    description?: string;
+    sourceSystem?: string;
+    shape?: string[];
+    update?: ParameterUpdateSpec;
+    distribution?: Distribution;
+    lb?: Expression;
+    ub?: Expression;
+}
+```
+
+One variable of the flattened system, carrying the COMPLETE declared metadata
+step 4 requires ("Full metadata, not names"): a consumer must be able to build
+a solver problem from the flattened form alone, without re-reading the source
+document.
+
+**Properties**
+
+- `name` — Dot-namespaced name, e.g. `"OU.theta"`.
+- `type` — The DERIVED role — see [`FlattenedVariableRole`](/generated/api/extension/typescript#x-flattenedvariablerole).
+- `default` — For an unknown, its value at t=0; for a parameter, its constant value.
+- `sourceSystem` — The namespaced prefix of the component that declared it.
+- `shape` — Ordered index-set names for an arrayed variable; absent means scalar.
+- `update` — The declared cadence machinery (parameters only), with its expression
+  slots — a `condition` / `crossing` `when` and the value `expression` —
+  namespaced like any other reference (§4.7.5 step 2).
+- `distribution` — The declared sampling law, carried verbatim (parameters only).
+- `lb` — The declared lower bound (esm-spec §6.3.2). A number is carried unchanged.
+  A reference is rewritten by the renaming the component's equations get
+  (esm-libraries-spec §4.7.5 "Bounds follow the renaming"), so it is a
+  namespaced name, or the replacement expression of a scaled `variable_map`.
+- `ub` — The declared upper bound, carried like `FlattenedVariable.lb`.
+
+[Source](https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/pkg/earthsci-ast-ts/src/flatten.ts#L301)
+
+**Example** (`flatten`)
+
+```typescript
+const doc = loadPath(fixture('coupled.esm'))
+const flat = flatten(doc)
+
+// Variables are namespaced by the system that declared them.
+assert.deepEqual(Object.keys(flat.stateVariables), ['Heater.T', 'Box.T_air'])
+assert.deepEqual(Object.keys(flat.parameters), ['Heater.rate', 'Box.k'])
+assert.equal(flat.stateVariables['Box.T_air'].units, 'K')
+
+// The `param_to_var` variable_map replaces the box's wall-temperature
+// parameter with the heater's temperature: `Box.T_wall` is gone from the
+// parameters above, and the box equation reads `Heater.T` in its place.
+// LaTeX prints the dotted names more readably than Typst does.
+const equations = flat.equations.map((eq) => {
+  const sides = { lhs: eq.lhs, rhs: eq.rhs }
+  return printMath(sides, expressionNames(sides), 'markdown')
+})
+assert.deepEqual(equations, [
+  '\\frac{\\mathrm{d} \\mathit{Heater}.T}{\\mathrm{d} t} = \\mathit{Heater}.\\mathit{rate}',
+  '\\frac{\\mathrm{d} \\mathit{Box}.T_{\\mathrm{air}}}{\\mathrm{d} t} = ' +
+    '\\mathit{Box}.k \\left(\\mathit{Heater}.T - \\mathit{Box}.T_{\\mathrm{air}}\\right)',
+])
+assert.deepEqual(
+  flat.equations.map((eq) => eq.sourceSystem),
+  ['Heater', 'Box'],
+)
+```
+
+<p class="api-src">From <a href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/docs/api/examples/typescript/flatten.ts#L9-L33">docs/api/examples/typescript/flatten.ts</a></p>
+
+</div>
+
+<div class="api-tab" data-lang="python" data-label="Python">
+<p class="api-tab-label">Python</p>
+
+```python
+class FlattenedVariable
+FlattenedVariable(name: str, type: str, units: str | None = None, default: Any = None, description: str | None = None, source_system: str | None = None, shape: list[str] | None = None, update: Any = None, distribution: Any = None, element_type: str | None = None, lb: Any = None, ub: Any = None)
+```
+
+A single variable in the flattened system.
+
+[Source](https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/pkg/earthsci-ast-py/src/earthsci_ast/flatten.py#L302)
+
+**Example** (`flatten`)
+
+```python
+coupled = earthsci_ast.load_path(FIXTURES / "coupled.esm")
+flat = earthsci_ast.flatten(coupled)
+
+# Every name is now qualified by the model it came from.
+assert list(flat.state_variables) == ["Heater.T", "Box.T_air"]
+assert {"Heater.rate", "Box.k"} <= set(flat.parameters)
+for name, var in flat.state_variables.items():
+    print(f"{name}: {var.units}, default {var.default}")
+
+heater, box = flat.equations
+assert heater.lhs == ExprNode(op="D", args=["Heater.T"], wrt="t")
+assert heater.rhs == "Heater.rate"
+
+# The param_to_var variable_map replaced the box's wall-temperature parameter
+# with the heater's temperature: it is gone from the equations AND from the
+# parameters.
+assert box.rhs == ExprNode(op="*", args=["Box.k", ExprNode(op="-", args=["Heater.T", "Box.T_air"])])
+assert "Box.T_wall" not in earthsci_ast.free_variables(box.rhs)
+assert "Box.T_wall" not in flat.parameters
+assert flat.metadata.source_systems == ["Heater", "Box"]
+```
+
+<p class="api-src">From <a href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/docs/api/examples/python/flatten.py#L12-L31">docs/api/examples/python/flatten.py</a></p>
+
+</div>
+
+<div class="api-tab" data-lang="rust" data-label="Rust">
+<p class="api-tab-label">Rust</p>
+
+<p class="api-absent">Rust does not export this type.</p>
+
+</div>
+
+<div class="api-tab" data-lang="go" data-label="Go">
+<p class="api-tab-label">Go</p>
+
+```go
+type FlattenedVariable struct {
+	// Name is the dot-namespaced name ("OU.theta").
+	Name string
+	// Role is the DERIVED role (esm-spec §6.3.1), never a declared type:
+	// "state" (an unknown the solver advances or solves for), "observed" (an
+	// unknown a bare-variable-LHS equation defines, eliminable by inlining),
+	// "parameter", or "species" (a reaction-system state).
+	Role string
+	// SourceSystem is the component the variable came from.
+	SourceSystem string
+	Units        *string
+	Default      any
+	Description  *string
+	// Shape lists the index-set names an arrayed variable is shaped over; nil
+	// for a scalar.
+	Shape []string
+	// Update carries the declared cadence machinery verbatim (one
+	// ParameterUpdate or an ordered []ParameterUpdate); read it through
+	// UpdateRules.
+	Update       any
+	Distribution *Distribution
+	// LB and UB are the variable's bounds (esm-spec §6.3.2): nil when absent,
+	// a float64 for a number, and otherwise the reference as an Expression
+	// carried through the flatten renaming (esm-libraries-spec §4.7.5) — a
+	// namespaced name, or the replacement a scaled `variable_map` substitutes.
+	LB Expression
+	UB Expression
+}
+
+func (fv FlattenedVariable) DeclaredType() string
+
+func (fv FlattenedVariable) UpdateRules() []ParameterUpdate
+```
+
+FlattenedVariable is one variable of the flattened system, carrying the FULL declared metadata step 4 requires ("Full metadata, not names"): a consumer must be able to build a solver problem from the flattened form alone, without re-reading the source document.
+
+**Methods**
+
+```go
+func (fv FlattenedVariable) DeclaredType() string
+```
+
+DeclaredType is the two-type esm 1.0.0 declaration ("unknown" / "parameter") the variable's derived Role was computed from. FlattenedSystem.DeclaredTypes collects it for every variable.
+
+```go
+func (fv FlattenedVariable) UpdateRules() []ParameterUpdate
+```
+
+UpdateRules returns the variable's update rules in declaration order, flattening both spellings of the ParameterUpdateSpec union (esm-spec §5.4).
+
+[Source](https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/pkg/earthsci-ast-go/pkg/esm/flatten.go#L272) · [Go docs](https://pkg.go.dev/github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm#FlattenedVariable)
+
+</div>
+
+</div>

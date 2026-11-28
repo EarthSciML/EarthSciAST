@@ -1,0 +1,1707 @@
+---
+title: "The printer: expressions to tokens"
+type: lean
+lean_module: "Esm.Document.Math.Print"
+weight: 13
+---
+
+<p class="lean-meta">Lean module <code>Esm.Document.Math.Print</code>, <a href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean"><code>formal/Esm/Document/Math/Print.lean</code></a> at <code>9c3b4aa7587e</code><br>Imports <a href="/generated/document-formats/esm-document-math-surface"><code>Esm.Document.Math.Surface</code></a>, <a href="/generated/document-formats/esm-document-notation"><code>Esm.Document.Notation</code></a></p>
+
+`pa c L e` prints the expression `e` for a position that needs precedence level at
+least `L`, adding grouping parentheses when `e`'s own level is lower. The levels,
+loosest first (spec §4.1.1, [`Notation.precedence`](/generated/document-formats/esm-document-notation#Esm.Document.Notation.precedence)):
+
+| level | construct |
+|---|---|
+| 1 | `or` chain |
+| 2 | `and` chain |
+| 3 | a comparison |
+| 4 | `+` chain, binary `-` |
+| 5 | `*` chain (juxtaposition, `\cdot` before a factor that starts with a digit or sign), unary `-` |
+| 6 | `not`; a derivative applied to a parenthesized operand; a `\nabla` form (its operand at level 9) |
+| 7 | Typst fraction `a/b` and Typst `(dif N)/(dif t)`; a negative literal and a quantity (as the base of a power or an index they are parenthesized, and as a Typst fraction operand) |
+| 8 | power |
+| 9 | index (subscript or brackets) |
+| 10 | atoms: names, numbers, groups, function forms, LaTeX fractions, cases, calls, escapes |
+
+Operands of an n-ary chain are printed one level tighter, so a nested chain of the
+same operator keeps its parentheses and the JSON tree is kept exactly (the parser
+flattens a chain into one node). Binary `-` takes its left operand at its own level
+(`a + b - c`), its right operand one tighter.
+
+Which notation a node gets is decided from its exact JSON shape; anything without a
+native or call notation prints in the generic escape form, which every node has.
+
+## Text pieces
+
+<div class="lean-decl" id="Esm.Document.Math.escSet">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.escSet" title="Esm.Document.Math.escSet"><code>escSet</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L41">source</a></div>
+
+```lean
+def escSet (c : Char) : Bool
+```
+
+The characters escaped by a backslash inside `\mathit{}`, `\operatorname{}`,
+`\esm{}` and a name subscript's `\mathrm{}`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.escT">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.escT" title="Esm.Document.Math.escT"><code>escT</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L44-L46">source</a></div>
+
+```lean
+def escT : List Char → List Char
+```
+
+Escape the text of `\mathit{}` and the like.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.unescT">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.unescT" title="Esm.Document.Math.unescT"><code>unescT</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L49-L52">source</a></div>
+
+```lean
+def unescT : List Char → List Char
+```
+
+Undo [`escT`](#Esm.Document.Math.escT).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.keySpecial">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.keySpecial" title="Esm.Document.Math.keySpecial"><code>keySpecial</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L73-L74">source</a></div>
+
+```lean
+def keySpecial (c : Char) : Bool
+```
+
+Characters of a field key written as `{\char NNN}` (three decimal digits) in LaTeX:
+they would end a Markdown math span (`$`), start a comment (`%`), be read as an alignment
+tab (`&`), a macro parameter (`#`), a space (`~`), a superscript (`^`) or a control
+sequence (`\`). With `_`, `{`, `}` written `\_`, `\{`, `\}`, a key is as safe inside
+`\mathrm{}` as a JSON string value is (`Esm.Document.Math.Latex.quoteL`).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.dig3">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.dig3" title="Esm.Document.Math.dig3"><code>dig3</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L77-L78">source</a></div>
+
+```lean
+def dig3 (n : Nat) : List Char
+```
+
+Three decimal digits.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.escK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.escK" title="Esm.Document.Math.escK"><code>escK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L81-L85">source</a></div>
+
+```lean
+def escK : List Char → List Char
+```
+
+Escape a field key for `\mathrm{}`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.unescK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.unescK" title="Esm.Document.Math.unescK"><code>unescK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L88-L93">source</a></div>
+
+```lean
+def unescK : List Char → List Char
+```
+
+Undo [`escK`](#Esm.Document.Math.escK).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.natChars">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.natChars" title="Esm.Document.Math.natChars"><code>natChars</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L116">source</a></div>
+
+```lean
+def natChars (n : Nat) : List Char
+```
+
+The digits of a natural number.
+
+</div>
+
+## The printing context
+
+<div class="lean-decl" id="Esm.Document.Math.grp">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.grp" title="Esm.Document.Math.grp"><code>grp</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L125-L126">source</a></div>
+
+```lean
+def grp (sf : Sf) (ts : List Tok) : List Tok
+```
+
+Grouping parentheses.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.rpG">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.rpG" title="Esm.Document.Math.rpG"><code>rpG</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L129">source</a></div>
+
+```lean
+def rpG (sf : Sf) : Tok
+```
+
+The closing token of a grouping parenthesis.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.sepBy">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.sepBy" title="Esm.Document.Math.sepBy"><code>sepBy</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L132-L135">source</a></div>
+
+```lean
+def sepBy (sep : List Tok) : List (List Tok) → List Tok
+```
+
+Items joined by a separator.
+
+</div>
+
+## Names
+
+<div class="lean-decl" id="Esm.Document.Math.baseTok">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.baseTok" title="Esm.Document.Math.baseTok"><code>baseTok</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L140-L143">source</a></div>
+
+```lean
+def baseTok (g : List Char) : Tok
+```
+
+A single letter or a Greek name as a token.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.subTxt">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.subTxt" title="Esm.Document.Math.subTxt"><code>subTxt</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L146-L149">source</a></div>
+
+```lean
+def subTxt (sf : Sf) (r : List Char) : List Tok
+```
+
+The subscript text of a name: upright.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.formulaRaw">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.formulaRaw" title="Esm.Document.Math.formulaRaw"><code>formulaRaw</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L152-L153">source</a></div>
+
+```lean
+def formulaRaw (g : List Char) : List Char
+```
+
+The raw `\mathrm{}` content of a formula: counts as `_{n}`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.formTok">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.formTok" title="Esm.Document.Math.formTok"><code>formTok</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L156-L159">source</a></div>
+
+```lean
+def formTok (sf : Sf) (g : List Char) : Tok
+```
+
+A formula name.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.segToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.segToks" title="Esm.Document.Math.segToks"><code>segToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L162-L166">source</a></div>
+
+```lean
+def segToks (sf : Sf) (g : List Char) : List Tok
+```
+
+One segment of a name, by its shape.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.explicitName">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.explicitName" title="Esm.Document.Math.explicitName"><code>explicitName</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L171-L172">source</a></div>
+
+```lean
+def explicitName (S : Sym) (s : String) : Bool
+```
+
+A name never prints bare where the parser would read it otherwise: an undeclared
+`e` (bare `e^{x}` reads as `exp`) and an undeclared `d` (bare `\frac{d N}{d t}` reads
+as a derivative) print in the explicit form.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.plainLast">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.plainLast" title="Esm.Document.Math.plainLast"><code>plainLast</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L180-L183">source</a></div>
+
+```lean
+def plainLast (s : String) : Bool
+```
+
+The last segment of a name prints with no subscript, so an index subscript may
+follow it.
+
+</div>
+
+## JSON inside escape nodes (LaTeX)
+
+## Operator tables
+
+<div class="lean-decl" id="Esm.Document.Math.fnKw">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.fnKw" title="Esm.Document.Math.fnKw"><code>fnKw</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L218-L220">source</a></div>
+
+```lean
+def fnKw : List (String × Kw)
+```
+
+Unary functions with a native spelling, and their keyword.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.cmpKw">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.cmpKw" title="Esm.Document.Math.cmpKw"><code>cmpKw</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L223-L224">source</a></div>
+
+```lean
+def cmpKw : List (String × Kw)
+```
+
+Comparisons and their token.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.callOps">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.callOps" title="Esm.Document.Math.callOps"><code>callOps</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L227">source</a></div>
+
+```lean
+def callOps : List String
+```
+
+Core operators in the call form.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.fieldCallOps">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.fieldCallOps" title="Esm.Document.Math.fieldCallOps"><code>fieldCallOps</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L231">source</a></div>
+
+```lean
+def fieldCallOps : List String
+```
+
+Core operators with no notation of their own that print in the call form, their
+fields as named arguments after `;` (when no field annotates the node).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.reservedOpn">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.reservedOpn" title="Esm.Document.Math.reservedOpn"><code>reservedOpn</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L234">source</a></div>
+
+```lean
+def reservedOpn : List String
+```
+
+Names `\operatorname{…}` never means a template or an open operator by.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.coreOps">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.coreOps" title="Esm.Document.Math.coreOps"><code>coreOps</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L237-L245">source</a></div>
+
+```lean
+def coreOps : List String
+```
+
+`coreOpNames` of `Notation`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.opnOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.opnOK" title="Esm.Document.Math.opnOK"><code>opnOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L248-L251">source</a></div>
+
+```lean
+def opnOK (s : String) : Bool
+```
+
+A name `\operatorname{…}` can carry: identifier characters and dots.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.annotKeys">
+<div class="lean-decl-head"><span class="lean-kind">abbrev</span> <a class="lean-name" href="#Esm.Document.Math.annotKeys" title="Esm.Document.Math.annotKeys"><code>annotKeys</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L254">source</a></div>
+
+```lean
+abbrev annotKeys : List String
+```
+
+The fields that annotate a node.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.callFormOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.callFormOK" title="Esm.Document.Math.callFormOK"><code>callFormOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L258-L259">source</a></div>
+
+```lean
+def callFormOK (o : String) (fs : List (String × Json)) : Bool
+```
+
+An operator prints in the call form: an open operator, or a core operator of
+[`fieldCallOps`](#Esm.Document.Math.fieldCallOps) none of whose fields annotates it.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.mathKeys">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.mathKeys" title="Esm.Document.Math.mathKeys"><code>mathKeys</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L263">source</a></div>
+
+```lean
+def mathKeys : List String
+```
+
+The fields of a core operator in the call form that hold an expression; the others
+print as JSON, even a string that is a name.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.mathField">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.mathField" title="Esm.Document.Math.mathField"><code>mathField</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L268-L269">source</a></div>
+
+```lean
+def mathField (o : String) (kv : String × Json) : Bool
+```
+
+A field of a call-form node prints as math: its value is an expression and, for a
+core operator, the field holds one. An open operator's fields are all read as math when
+they can be.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.keyOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.keyOK" title="Esm.Document.Math.keyOK"><code>keyOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L275">source</a></div>
+
+```lean
+def keyOK (s : String) : Bool
+```
+
+A field key printed upright in a call: an identifier.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.insKV">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.insKV" title="Esm.Document.Math.insKV"><code>insKV</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L278-L280">source</a></div>
+
+```lean
+def insKV (kv : String × Json) : List (String × Json) → List (String × Json)
+```
+
+Sorted insertion by key.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.fieldsOf">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.fieldsOf" title="Esm.Document.Math.fieldsOf"><code>fieldsOf</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L283-L284">source</a></div>
+
+```lean
+def fieldsOf (kvs : List (String × Json)) : List (String × Json)
+```
+
+The fields of a node other than `op` and `args`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.mkNode">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.mkNode" title="Esm.Document.Math.mkNode"><code>mkNode</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L287-L288">source</a></div>
+
+```lean
+def mkNode (o : String) (as : List Json) (fs : List (String × Json)) : Json
+```
+
+A node from its operator, operands and other fields (sorted keys).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.node">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.node" title="Esm.Document.Math.node"><code>node</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L291">source</a></div>
+
+```lean
+def node (o : String) (as : List Json) : Json
+```
+
+The plain two-field node.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.simpleTok">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.simpleTok" title="Esm.Document.Math.simpleTok"><code>simpleTok</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L300-L305">source</a></div>
+
+```lean
+def simpleTok : Tok → Bool
+```
+
+Typst exponent and subscript tokens that need no parentheses: a nonnegative number
+in positional spelling, a letter, a Greek name.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.tparams">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.tparams" title="Esm.Document.Math.tparams"><code>tparams</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L312-L313">source</a></div>
+
+```lean
+def tparams (S : Sym) (n : String) : Option (List String)
+```
+
+The template parameter list, when the symbol table knows it.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.positional">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.positional" title="Esm.Document.Math.positional"><code>positional</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L317-L322">source</a></div>
+
+```lean
+def positional (S : Sym) (n : String) (bs : List (String × Json)) : Option (List String)
+```
+
+Positional template arguments: the table knows the parameters, they are distinct,
+and the bindings bind exactly them.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.rawB">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.rawB" title="Esm.Document.Math.rawB"><code>rawB</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L325-L331">source</a></div>
+
+```lean
+def rawB : Nat → List Char → Option (List Char × List Char)
+```
+
+Balanced text up to the `}` that closes depth 0; `\x` is one unit.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.balOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.balOK" title="Esm.Document.Math.balOK"><code>balOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L335">source</a></div>
+
+```lean
+def balOK (raw : List Char) : Bool
+```
+
+Raw text that [`rawB`](#Esm.Document.Math.rawB) reads back whole (the LaTeX lexer reads `\mathrm{…}` and
+`\text{…}` contents with [`rawB`](#Esm.Document.Math.rawB)).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.factorsOf">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.factorsOf" title="Esm.Document.Math.factorsOf"><code>factorsOf</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L338-L341">source</a></div>
+
+```lean
+def factorsOf (u : String) : List Esm.Units.Factor
+```
+
+The two-sided factor list of a units string (`[]` when it does not parse).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.unitsOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.unitsOK" title="Esm.Document.Math.unitsOK"><code>unitsOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L346-L352">source</a></div>
+
+```lean
+def unitsOK (sf : Sf) (u : String) : Bool
+```
+
+The units of a quantity print typeset when the string is the canonical spelling of
+a non-dimensionless unit whose typeset form reads back (Phase 1: every canonical unit
+does).
+
+</div>
+
+## The printer
+
+<div class="lean-decl" id="Esm.Document.Math.wrap">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.wrap" title="Esm.Document.Math.wrap"><code>wrap</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L357-L358">source</a></div>
+
+```lean
+def wrap (sf : Sf) (L : Nat) (p : Nat × List Tok) : List Tok
+```
+
+Wrap a printed form for a position needing level `L`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.mulToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.mulToks" title="Esm.Document.Math.mulToks"><code>mulToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L361-L363">source</a></div>
+
+```lean
+def mulToks : List (List Tok) → List Tok
+```
+
+A `*` chain: juxtaposition, `\cdot` before a factor that starts with a number.
+
+</div>
+
+<div class="lean-decl lean-theorem" id="Esm.Document.Math.sizeOf_lt_arr">
+<div class="lean-decl-head"><span class="lean-kind">theorem</span> <a class="lean-name" href="#Esm.Document.Math.sizeOf_lt_arr" title="Esm.Document.Math.sizeOf_lt_arr"><code>sizeOf_lt_arr</code></a> <span class="lean-badge lean-badge-proved" title="no sorry or admit in the proof or anywhere in the Lean package, and no axiom">proved</span> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L366-L369">source</a></div>
+
+```lean
+theorem sizeOf_lt_arr {a : Json} {as : List Json} (h : a ∈ as) :
+    sizeOf a < sizeOf (Json.arr as)
+```
+
+Size bookkeeping for the recursion.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.NabK">
+<div class="lean-decl-head"><span class="lean-kind">inductive</span> <a class="lean-name" href="#Esm.Document.Math.NabK" title="Esm.Document.Math.NabK"><code>NabK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L403-L405">source</a></div>
+
+```lean
+inductive NabK where
+  | grad | div | lap | curl
+  deriving DecidableEq
+```
+
+The four defined operators with a `\nabla` form (spec §1.2): `grad`, `div`,
+`laplacian`, `curl`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.OpK">
+<div class="lean-decl-head"><span class="lean-kind">inductive</span> <a class="lean-name" href="#Esm.Document.Math.OpK" title="Esm.Document.Math.OpK"><code>OpK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L408-L411">source</a></div>
+
+```lean
+inductive OpK where
+  | minus | div | pow | lnot | tru | fls | ite | ic | index
+  | cmp (k : Kw) | un (k : Kw) | plus | times | land | lor | mm (k : Kw) | nab (n : NabK) | call | other
+  deriving DecidableEq
+```
+
+How a plain node (`op` and `args` only) prints, by its operator.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.unKw">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.unKw" title="Esm.Document.Math.unKw"><code>unKw</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L414-L415">source</a></div>
+
+```lean
+def unKw : List (String × Kw)
+```
+
+Unary functions with a native spelling: their keyword (`log10` is `\log_{10}`).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.kindTable">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.kindTable" title="Esm.Document.Math.kindTable"><code>kindTable</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L418-L422">source</a></div>
+
+```lean
+def kindTable : List (String × OpK)
+```
+
+The plain-node operators with their own notation.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.Out">
+<div class="lean-decl-head"><span class="lean-kind">structure</span> <a class="lean-name" href="#Esm.Document.Math.Out" title="Esm.Document.Math.Out"><code>Out</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L434-L437">source</a></div>
+
+```lean
+structure Out where
+  lvl : Nat
+  toks : List Tok
+  crow : List Tok
+```
+
+The printed form of an expression and its level. `crow` is the form as the last
+rows of a `cases` block: an `ifelse` chain contributes its rows, anything else is the
+`otherwise` row.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.escToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.escToks" title="Esm.Document.Math.escToks"><code>escToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L446-L452">source</a></div>
+
+```lean
+def escToks (sf : Sf) (o : String) (fs : List (String × Json)) (args : List (List Tok)) :
+    List Tok
+```
+
+The escape form: LaTeX `\esm{op}{fields}{args}` with the fields as JSON, Typst
+`esm.node("op", #(fields), args)`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.lpC">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.lpC" title="Esm.Document.Math.lpC"><code>lpC</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L455">source</a></div>
+
+```lean
+def lpC (_sf : Sf) : Tok
+```
+
+The call parenthesis `(` (LaTeX `(`, Typst `(` right after a name).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.callToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.callToks" title="Esm.Document.Math.callToks"><code>callToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L458-L459">source</a></div>
+
+```lean
+def callToks (sf : Sf) (head : List Tok) (args : List (List Tok)) : List Tok
+```
+
+A call: `name(args)` with call parentheses.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.unToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.unToks" title="Esm.Document.Math.unToks"><code>unToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L462-L470">source</a></div>
+
+```lean
+def unToks (sf : Sf) (k : Kw) (t : List Tok) : List Tok
+```
+
+A unary function applied to the printed operand `t`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.caseRow">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.caseRow" title="Esm.Document.Math.caseRow"><code>caseRow</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L473-L474">source</a></div>
+
+```lean
+def caseRow (sf : Sf) (v cnd : List Tok) : List Tok
+```
+
+One cases row, `value & \text{if } condition`, then the row break.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.icTail">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.icTail" title="Esm.Document.Math.icTail"><code>icTail</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L482-L485">source</a></div>
+
+```lean
+def icTail (sf : Sf) : List Tok
+```
+
+`t_{0}` in an initial condition `N(t_{0})`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.subList">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.subList" title="Esm.Document.Math.subList"><code>subList</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L488-L494">source</a></div>
+
+```lean
+def subList (sf : Sf) (simp : Option Tok) (args : List (List Tok)) : List Tok
+```
+
+A subscript list: LaTeX `_{a, b}`; Typst `_a` for one simple token, else `_(a, b)`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.simpleE">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.simpleE" title="Esm.Document.Math.simpleE"><code>simpleE</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L499-L505">source</a></div>
+
+```lean
+def simpleE (c : Ctx) : Json → Option Tok
+```
+
+The one token a Typst exponent or subscript may be written as without
+parentheses: a nonnegative number in positional spelling, or a one-letter or Greek
+name.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.subOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.subOK" title="Esm.Document.Math.subOK"><code>subOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L515-L523">source</a></div>
+
+```lean
+def subOK (S : Sym) (base : Json) (is : List Json) : Bool
+```
+
+The index prints with a subscript unless the base is not a plain name, or the
+subscript would collide with a name: one formula-shaped name (it would read as the
+upright subscript of a name), or one digit literal `n` when `base_n` is declared
+(`k_{1}` would look like the name `k_1`; decision 5).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.subPat4">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.subPat4" title="Esm.Document.Math.subPat4"><code>subPat4</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L526-L529">source</a></div>
+
+```lean
+def subPat4 (sf : Sf) : Tok → Tok → Tok → Tok → Bool
+```
+
+Four tokens of an upright name subscript.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.subPat">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.subPat" title="Esm.Document.Math.subPat"><code>subPat</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L532-L534">source</a></div>
+
+```lean
+def subPat (sf : Sf) : List Tok → Bool
+```
+
+An upright name subscript: a name before it would read it as part of the name.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.inlineD">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.inlineD" title="Esm.Document.Math.inlineD"><code>inlineD</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L538">source</a></div>
+
+```lean
+def inlineD (o : Out) : Bool
+```
+
+Derivative operand printed inline (`\frac{\mathrm{d} N}{\mathrm{d} t}`) when it is
+postfix-level or tighter, and not a negative literal.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.keyToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.keyToks" title="Esm.Document.Math.keyToks"><code>keyToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L541-L544">source</a></div>
+
+```lean
+def keyToks (sf : Sf) (k : String) : List Tok
+```
+
+A field key, upright.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.jsonVal">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.jsonVal" title="Esm.Document.Math.jsonVal"><code>jsonVal</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L547-L550">source</a></div>
+
+```lean
+def jsonVal (sf : Sf) (v : Json) : List Tok
+```
+
+A field value that is not an expression, as JSON.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.openToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.openToks" title="Esm.Document.Math.openToks"><code>openToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L553-L555">source</a></div>
+
+```lean
+def openToks (sf : Sf) (o : String) (args fields : List (List Tok)) : List Tok
+```
+
+The open-operator call: positional operands, then `;` and the fields.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.dTime">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.dTime" title="Esm.Document.Math.dTime"><code>dTime</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L558-L569">source</a></div>
+
+```lean
+def dTime (sf : Sf) (a : Out) : Out
+```
+
+The time derivative.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.dSpace">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.dSpace" title="Esm.Document.Math.dSpace"><code>dSpace</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L572-L583">source</a></div>
+
+```lean
+def dSpace (sf : Sf) (w : List Tok) (a : Out) : Out
+```
+
+The spatial derivative along the axis printed `w`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.dCall">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.dCall" title="Esm.Document.Math.dCall"><code>dCall</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L586-L589">source</a></div>
+
+```lean
+def dCall (sf : Sf) (w : List Tok) (args : List (List Tok)) : List Tok
+```
+
+`partial` with trailing operands: `\partial_{x}(u, a, b)` / `partial_(x)(u, a, b)`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.nabName">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.nabName" title="Esm.Document.Math.nabName"><code>nabName</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L592-L596">source</a></div>
+
+```lean
+def nabName : NabK → String
+```
+
+The operator a `\nabla` form stands for.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.nabHead">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.nabHead" title="Esm.Document.Math.nabHead"><code>nabHead</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L600-L607">source</a></div>
+
+```lean
+def nabHead (sf : Sf) : NabK → List Tok
+```
+
+What a `\nabla` form writes before its operand: `\nabla`, `\nabla \cdot`,
+`\nabla^{2}`, `\nabla \times` (Typst `nabla`, `nabla dot`, `nabla^2`, `nabla times`).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.nabArg9">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.nabArg9" title="Esm.Document.Math.nabArg9"><code>nabArg9</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L611-L612">source</a></div>
+
+```lean
+def nabArg9 (sf : Sf) (n : NabK) (t : List Tok) : List Tok
+```
+
+An operand printed at the level of a power base, `t`; after the `\times` of a curl, one
+that starts with a number in parentheses.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.startsNabla">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.startsNabla" title="Esm.Document.Math.startsNabla"><code>startsNabla</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L615-L617">source</a></div>
+
+```lean
+def startsNabla : List Tok → Bool
+```
+
+The printed form starts with `\nabla`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.nabArg">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.nabArg" title="Esm.Document.Math.nabArg"><code>nabArg</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L623-L624">source</a></div>
+
+```lean
+def nabArg (sf : Sf) (n : NabK) (o : Out) : List Tok
+```
+
+The operand of a `\nabla` form: another `\nabla` form as it is (`\nabla \cdot \nabla u`
+is `div(grad(u))`), anything else at the level of a power base. After `\times` an operand
+that starts with a number is parenthesized too, so that no `\times 10^{…}` follows a token
+(the lexers read a number's scientific tail there).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.qtyToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.qtyToks" title="Esm.Document.Math.qtyToks"><code>qtyToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L628">source</a></div>
+
+```lean
+def qtyToks (n : JNum) (l : List Esm.Units.Factor) : List Tok
+```
+
+The quantity `3\,\mathrm{m/s}` / `3 thin upright("m") thin upright("s")^(-1)`: the
+number, then the unit as one token.
+
+</div>
+
+## Constant arrays
+
+<div class="lean-decl" id="Esm.Document.Math.numsOf">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.numsOf" title="Esm.Document.Math.numsOf"><code>numsOf</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L633-L636">source</a></div>
+
+```lean
+def numsOf : List Json → Option (List JNum)
+```
+
+The entries of a list that are all well-formed numbers.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.rowsOf">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.rowsOf" title="Esm.Document.Math.rowsOf"><code>rowsOf</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L639-L645">source</a></div>
+
+```lean
+def rowsOf : List Json → Option (List (List JNum))
+```
+
+The rows of a list of number lists.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.AForm">
+<div class="lean-decl-head"><span class="lean-kind">inductive</span> <a class="lean-name" href="#Esm.Document.Math.AForm" title="Esm.Document.Math.AForm"><code>AForm</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L648-L650">source</a></div>
+
+```lean
+inductive AForm where
+  | col (ns : List JNum)
+  | mat (rs : List (List JNum))
+```
+
+The two array shapes with a native spelling.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.arrForm">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.arrForm" title="Esm.Document.Math.arrForm"><code>arrForm</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L655-L666">source</a></div>
+
+```lean
+def arrForm : Json → Option AForm
+```
+
+A constant array printed natively: a column for rank 1, or a matrix of at least
+two columns (a single-column matrix would print like a column), of any size, every entry
+a well-formed number.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.bmatCols">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.bmatCols" title="Esm.Document.Math.bmatCols"><code>bmatCols</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L675">source</a></div>
+
+```lean
+def bmatCols : Nat
+```
+
+The most columns a LaTeX `bmatrix` takes (amsmath's `MaxMatrixCols`).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.arrToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.arrToks" title="Esm.Document.Math.arrToks"><code>arrToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L679-L692">source</a></div>
+
+```lean
+def arrToks (sf : Sf) : AForm → List Tok
+```
+
+The array: LaTeX `bmatrix`, or for a matrix wider than [`bmatCols`](#Esm.Document.Math.bmatCols)
+`\left[\begin{array}{c…c} … \end{array}\right]`; Typst `vec(…)` / `mat(…)`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.unitToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.unitToks" title="Esm.Document.Math.unitToks"><code>unitToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L695">source</a></div>
+
+```lean
+def unitToks (l : List Esm.Units.Factor) : List Tok
+```
+
+The unit after a number or an array.
+
+</div>
+
+## Reductions (`faq`)
+
+<div class="lean-decl" id="Esm.Document.Math.jbeq">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.jbeq" title="Esm.Document.Math.jbeq"><code>jbeq</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L701-L709">source</a></div>
+
+```lean
+def jbeq : Json → Json → Bool
+```
+
+Equality of JSON values as a check.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.idxBase">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.idxBase" title="Esm.Document.Math.idxBase"><code>idxBase</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L723-L726">source</a></div>
+
+```lean
+def idxBase (kvs : List (String × Json)) : Option String
+```
+
+The array an `index` node reads, when it names one.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.basesJ">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.basesJ" title="Esm.Document.Math.basesJ"><code>basesJ</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L730-L736">source</a></div>
+
+```lean
+def basesJ : Json → List String → List String
+```
+
+The arrays an expression indexes, in first-use order (appended to `acc`).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.RedK">
+<div class="lean-decl-head"><span class="lean-kind">inductive</span> <a class="lean-name" href="#Esm.Document.Math.RedK" title="Esm.Document.Math.RedK"><code>RedK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L750-L752">source</a></div>
+
+```lean
+inductive RedK where
+  | sum | prod | max | min
+  deriving DecidableEq
+```
+
+The reductions with a native spelling.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.FaqForm">
+<div class="lean-decl-head"><span class="lean-kind">structure</span> <a class="lean-name" href="#Esm.Document.Math.FaqForm" title="Esm.Document.Math.FaqForm"><code>FaqForm</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L766-L773">source</a></div>
+
+```lean
+structure FaqForm where
+  red : RedK
+  marked : Bool
+  out : List Json
+  ranges : List (String × Json)
+  expr : Json
+  filter : Option Json
+  set : List String
+```
+
+A `faq` node with a native spelling, by its parts. `marked`: `args` lists the arrays
+the body indexes; otherwise `args` is `set` (empty, or names printed as a superscript
+set).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.FaqForm.args">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.FaqForm.args" title="Esm.Document.Math.FaqForm.args"><code>FaqForm.args</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L776-L777">source</a></div>
+
+```lean
+def FaqForm.args (F : FaqForm) : List Json
+```
+
+The `args` of a native `faq`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.FaqForm.sup">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.FaqForm.sup" title="Esm.Document.Math.FaqForm.sup"><code>FaqForm.sup</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L780">source</a></div>
+
+```lean
+def FaqForm.sup (F : FaqForm) : List String
+```
+
+The names a superscript set shows: `set` when `args` is not the body's arrays.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.strsOf">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.strsOf" title="Esm.Document.Math.strsOf"><code>strsOf</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L789-L792">source</a></div>
+
+```lean
+def strsOf : List Json → Option (List String)
+```
+
+The strings of a list of JSON values, when they are all strings.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.faqCand">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.faqCand" title="Esm.Document.Math.faqCand"><code>faqCand</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L795-L815">source</a></div>
+
+```lean
+def faqCand (kvs : List (String × Json)) : Option FaqForm
+```
+
+The parts a `faq` node would have.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.faqForm">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.faqForm" title="Esm.Document.Math.faqForm"><code>faqForm</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L820-L823">source</a></div>
+
+```lean
+def faqForm (kvs : List (String × Json)) : Option FaqForm
+```
+
+The parts of a `faq` node, when it is exactly the node they rebuild: no semiring,
+join, distinct or key, `reduce` absent or `*`, `max`, `min`, `ranges` absent or not
+empty, `args` empty, the arrays the body indexes, or other names.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.rangeOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.rangeOK" title="Esm.Document.Math.rangeOK"><code>rangeOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L826-L831">source</a></div>
+
+```lean
+def rangeOK : Json → Bool
+```
+
+A range a row can spell: `[a, b]`, `{"from": S}` or `{"from": S, "of": [i, …]}`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.outOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.outOK" title="Esm.Document.Math.outOK"><code>outOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L837-L841">source</a></div>
+
+```lean
+def outOK (j : Json) : Bool
+```
+
+An output entry: a name, or the singleton dimension `1`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.occursJ">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.occursJ" title="Esm.Document.Math.occursJ"><code>occursJ</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L845-L849">source</a></div>
+
+```lean
+def occursJ (k : String) : Json → Bool
+```
+
+A bare name occurs in an expression.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.faqOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.faqOK" title="Esm.Document.Math.faqOK"><code>faqOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L861-L867">source</a></div>
+
+```lean
+def faqOK (F : FaqForm) : Bool
+```
+
+The conditions under which the native spelling reads back.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.upSet">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.upSet" title="Esm.Document.Math.upSet"><code>upSet</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L877-L878">source</a></div>
+
+```lean
+def upSet (sf : Sf) (g : List Char) : Bool
+```
+
+A segment of an index set's name that a Typst range row sets upright, `k in
+upright("lev")`: a set is named, as a function's name is (`upright("op")`), not a
+quantity, and an italic `lev` reads as the product l·e·v (decided 2026-11-26). It is
+exactly a segment that would otherwise print `italic("…")`: an identifier that is neither
+a letter, a Greek name, the `x_i` shape nor a formula. Each segment of a scoped set name
+follows the rule on its own (`upright("lev")"."upright("top")`, `a"."upright("bins")`), so
+those other segments print as in any name, and LaTeX prints every set name as a name. The reader accepts an upright set segment only when this holds, so
+the upright spelling of a set is unique.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.setSegToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.setSegToks" title="Esm.Document.Math.setSegToks"><code>setSegToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L881-L882">source</a></div>
+
+```lean
+def setSegToks (sf : Sf) (g : List Char) : List Tok
+```
+
+One segment of an index set's name.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.setToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.setToks" title="Esm.Document.Math.setToks"><code>setToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L886-L888">source</a></div>
+
+```lean
+def setToks (c : Ctx) (s : String) : List Tok
+```
+
+The tokens of an index set's name in a range row: `nameToks` with [`setSegToks`](#Esm.Document.Math.setSegToks) for
+each segment.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.rowToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.rowToks" title="Esm.Document.Math.rowToks"><code>rowToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L891-L898">source</a></div>
+
+```lean
+def rowToks (c : Ctx) (P : Json → Out) (kv : String × Json) : List Tok
+```
+
+A range row: `a \le k \le b`, `k \in S`, `k \in S(i, j)`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.redRanges">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.redRanges" title="Esm.Document.Math.redRanges"><code>redRanges</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L901-L902">source</a></div>
+
+```lean
+def redRanges (F : FaqForm) : List (String × Json)
+```
+
+The reduced ranges: those of indices that are not output indices.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.subRows">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.subRows" title="Esm.Document.Math.subRows"><code>subRows</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L905-L906">source</a></div>
+
+```lean
+def subRows (c : Ctx) (P : Json → Out) (F : FaqForm) : List (List Tok)
+```
+
+The rows of the subscript: the reduced ranges, then the filter.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.headToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.headToks" title="Esm.Document.Math.headToks"><code>headToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L909-L912">source</a></div>
+
+```lean
+def headToks (sf : Sf) (F : FaqForm) : List Tok
+```
+
+The operator, marked when `args` is listed.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.subToksL">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.subToksL" title="Esm.Document.Math.subToksL"><code>subToksL</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L916-L925">source</a></div>
+
+```lean
+def subToksL (c : Ctx) (P : Json → Out) (F : FaqForm) : List Tok
+```
+
+The LaTeX subscript: none, one row, a lone dense range `_{k=a}^{b}` (not when `args`
+is a superscript set), or `\substack`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.subToksT">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.subToksT" title="Esm.Document.Math.subToksT"><code>subToksT</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L928-L931">source</a></div>
+
+```lean
+def subToksT (c : Ctx) (P : Json → Out) (F : FaqForm) : List Tok
+```
+
+The Typst subscript: rows in `_( … )`, stacked with `\`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.supToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.supToks" title="Esm.Document.Math.supToks"><code>supToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L939-L942">source</a></div>
+
+```lean
+def supToks (c : Ctx) (ns : List String) : List Tok
+```
+
+The superscript set of names: LaTeX `^{\{f, g\}}`, Typst `^({f, g})`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.supT">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.supT" title="Esm.Document.Math.supT"><code>supT</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L945-L946">source</a></div>
+
+```lean
+def supT (c : Ctx) (F : FaqForm) : List Tok
+```
+
+The `args` set of a `faq`, as a superscript, when it is one.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.redToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.redToks" title="Esm.Document.Math.redToks"><code>redToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L950-L951">source</a></div>
+
+```lean
+def redToks (c : Ctx) (P : Json → Out) (F : FaqForm) : List Tok
+```
+
+The reduction: operator, subscript, the superscript set (on the operator only when
+there are no output indices), body at level 5.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.entryToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.entryToks" title="Esm.Document.Math.entryToks"><code>entryToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L954-L960">source</a></div>
+
+```lean
+def entryToks (c : Ctx) (P : Json → Out) (F : FaqForm) (j : Json) : List Tok
+```
+
+An output entry: its range row when it has one.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.faqOut">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.faqOut" title="Esm.Document.Math.faqOut"><code>faqOut</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L966-L975">source</a></div>
+
+```lean
+def faqOut (c : Ctx) (P : Json → Out) (F : FaqForm) : Out
+```
+
+The native `faq`: the reduction, wrapped with its output indices when it has some.
+A superscript set goes on the bracket, before its subscript (it renders the same either
+way; written first, a reader meets it right after the bracket); the form is then a power's
+level (a power of it, or an index into it, is parenthesized: no double superscript).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.faqSubs">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.faqSubs" title="Esm.Document.Math.faqSubs"><code>faqSubs</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L978-L980">source</a></div>
+
+```lean
+def faqSubs (F : FaqForm) : List Json
+```
+
+The sub-expressions a native `faq` prints.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.tableP">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.tableP" title="Esm.Document.Math.tableP"><code>tableP</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L983-L986">source</a></div>
+
+```lean
+def tableP (t : List (Json × Out)) (x : Json) : Out
+```
+
+A printer given by a table of printed sub-expressions.
+
+</div>
+
+## Block assembly (`makearray`)
+
+<div class="lean-decl" id="Esm.Document.Math.MkForm">
+<div class="lean-decl-head"><span class="lean-kind">structure</span> <a class="lean-name" href="#Esm.Document.Math.MkForm" title="Esm.Document.Math.MkForm"><code>MkForm</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1094-L1097">source</a></div>
+
+```lean
+structure MkForm where
+  out : List String
+  regions : List (List (Json × Json))
+  values : List Json
+```
+
+A `makearray` node with a native spelling, by its parts: the output indices (empty
+when the node has no `output_idx`), and the regions with their values.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.pairsOf">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.pairsOf" title="Esm.Document.Math.pairsOf"><code>pairsOf</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1109-L1112">source</a></div>
+
+```lean
+def pairsOf : List Json → Option (List (Json × Json))
+```
+
+The bound pairs of a region.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.regionsOf">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.regionsOf" title="Esm.Document.Math.regionsOf"><code>regionsOf</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1115-L1121">source</a></div>
+
+```lean
+def regionsOf : List Json → Option (List (List (Json × Json)))
+```
+
+The regions of a `regions` list.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.mkCand">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.mkCand" title="Esm.Document.Math.mkCand"><code>mkCand</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1124-L1135">source</a></div>
+
+```lean
+def mkCand (kvs : List (String × Json)) : Option MkForm
+```
+
+The parts a `makearray` node would have.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.mkForm">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.mkForm" title="Esm.Document.Math.mkForm"><code>mkForm</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1139-L1142">source</a></div>
+
+```lean
+def mkForm (kvs : List (String × Json)) : Option MkForm
+```
+
+The parts of a `makearray` node, when it is exactly the node they rebuild: `args`
+empty, `regions` and `values`, and an `output_idx` of names or none.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.mkOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.mkOK" title="Esm.Document.Math.mkOK"><code>mkOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1147-L1150">source</a></div>
+
+```lean
+def mkOK (M : MkForm) : Bool
+```
+
+The conditions under which the native spelling reads back: one value per region, at
+least one region, each region a nonempty list of bound pairs, values and bounds
+expressions, output indices names.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.mkSubs">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.mkSubs" title="Esm.Document.Math.mkSubs"><code>mkSubs</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1153-L1154">source</a></div>
+
+```lean
+def mkSubs (M : MkForm) : List Json
+```
+
+The sub-expressions a native `makearray` prints.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.cellSep">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.cellSep" title="Esm.Document.Math.cellSep"><code>cellSep</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1157-L1159">source</a></div>
+
+```lean
+def cellSep : Sf → Kw
+```
+
+The cell separator, the row separator and the closing token of the table.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.pairToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.pairToks" title="Esm.Document.Math.pairToks"><code>pairToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1165-L1166">source</a></div>
+
+```lean
+def pairToks (c : Ctx) (P : Json → Out) (p : Json × Json) : List Tok
+```
+
+A bound pair: `a, b` (its brackets are written around it).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.regToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.regToks" title="Esm.Document.Math.regToks"><code>regToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1169-L1172">source</a></div>
+
+```lean
+def regToks (c : Ctx) (P : Json → Out) : List (Json × Json) → List Tok
+```
+
+A region: `[a, b] \times [c, d]`, one bound pair per dimension.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.mkRow">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.mkRow" title="Esm.Document.Math.mkRow"><code>mkRow</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1175-L1176">source</a></div>
+
+```lean
+def mkRow (c : Ctx) (P : Json → Out) (vr : Json × List (Json × Json)) : List Tok
+```
+
+A row of the table: the value, then the region it fills.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.matHead">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.matHead" title="Esm.Document.Math.matHead"><code>matHead</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1179-L1181">source</a></div>
+
+```lean
+def matHead : List Tok
+```
+
+The Typst table head: `mat(delim: "[", augment: #1,`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.mkSub">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.mkSub" title="Esm.Document.Math.mkSub"><code>mkSub</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1184-L1188">source</a></div>
+
+```lean
+def mkSub (c : Ctx) (out : List String) : List Tok
+```
+
+The output indices as the bracket's subscript.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.mkOutT">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.mkOutT" title="Esm.Document.Math.mkOutT"><code>mkOutT</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1193-L1197">source</a></div>
+
+```lean
+def mkOutT (c : Ctx) (P : Json → Out) (M : MkForm) : Out
+```
+
+The native `makearray`: a bracketed two-column table, value then region, one row per
+region in order; LaTeX `\left[\begin{array}{l|l} v & [a, b] \\ … \end{array}\right]`, Typst
+`mat(delim: "[", augment: #1, v, [a, b]; …)`; the output indices as its subscript.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.tnameOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.tnameOK" title="Esm.Document.Math.tnameOK"><code>tnameOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1245">source</a></div>
+
+```lean
+def tnameOK (n : String) : Bool
+```
+
+A template the call form can name: an identifier that is not a reserved operator
+name.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.bareOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.bareOK" title="Esm.Document.Math.bareOK"><code>bareOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1249">source</a></div>
+
+```lean
+def bareOK (S : Sym) (n : String) : Bool
+```
+
+A bare `\operatorname{n}` is a template applied with no bindings, unless a template
+`n` with no parameters is in scope (that application prints `\operatorname{n}()`).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.nativeK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.nativeK" title="Esm.Document.Math.nativeK"><code>nativeK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1253-L1261">source</a></div>
+
+```lean
+def nativeK (sf : Sf) (kvs : List (String × Json)) : Bool
+```
+
+The node has a native spelling the printer writes before the call form: a `faq`,
+a `makearray`, a constant array or a quantity.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.fieldsOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.fieldsOK" title="Esm.Document.Math.fieldsOK"><code>fieldsOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1264-L1265">source</a></div>
+
+```lean
+def fieldsOK (fs : List (String × Json)) : Bool
+```
+
+Fields a node can carry: distinct keys, none of them `op` or `args`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.callCond">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.callCond" title="Esm.Document.Math.callCond"><code>callCond</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1271-L1272">source</a></div>
+
+```lean
+def callCond (c : Ctx) (o : String) (kvs : List (String × Json)) : Bool
+```
+
+The node with operator `o` prints in the call form (its field keys aside): the call
+form fits it ([`callFormOK`](#Esm.Document.Math.callFormOK)), `o` is a name `\operatorname{…}` holds, no template `o`
+is in scope, and it has no native spelling. The reader accepts the call form with
+fields only for such a node.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.pr">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.pr" title="Esm.Document.Math.pr"><code>pr</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1275-L1417">source</a></div>
+
+```lean
+def pr (c : Ctx) (e : Json) : Out
+```
+
+The printer.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.pa">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.pa" title="Esm.Document.Math.pa"><code>pa</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1420">source</a></div>
+
+```lean
+def pa (c : Ctx) (L : Nat) (e : Json) : List Tok
+```
+
+The tokens of an expression for a position needing level `L`.
+
+</div>
+
+## The defining form of an equation
+
+An equation whose right side is a `faq` with output indices, `x = [body]_(s ∈ S)`, prints
+with the output indices on its left side and their ranges after its right side,
+`x_s = body, s ∈ S` (decided 2026-11-27): the usual way to write a family of equations.
+The right side is the reduction over the remaining ranges (`∑_{k ∈ K} …`, a `faq` with no
+output indices), or the body alone when the `faq` reduces nothing and carries nothing
+else. The reader takes a trailing `, rows` after a whole equation back to the `faq`
+([`unlift`](#Esm.Document.Math.unlift)); the printer uses the form only when that gives back exactly the equation
+([`liftOK`](#Esm.Document.Math.liftOK)), and the bracket form otherwise.
+
+<div class="lean-decl" id="Esm.Document.Math.sortKVs">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.sortKVs" title="Esm.Document.Math.sortKVs"><code>sortKVs</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1434-L1436">source</a></div>
+
+```lean
+def sortKVs : List (String × Json) → List (String × Json)
+```
+
+Sort bindings by key (insertion).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.isRedNode">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.isRedNode" title="Esm.Document.Math.isRedNode"><code>isRedNode</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1439-L1444">source</a></div>
+
+```lean
+def isRedNode : Json → Bool
+```
+
+A `faq` node with no output indices.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.distinctNames">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.distinctNames" title="Esm.Document.Math.distinctNames"><code>distinctNames</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1447-L1449">source</a></div>
+
+```lean
+def distinctNames : List String → Bool
+```
+
+No name occurs twice.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.defOutsOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.defOutsOK" title="Esm.Document.Math.defOutsOK"><code>defOutsOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1456-L1458">source</a></div>
+
+```lean
+def defOutsOK (os : List Json) (rows : List (String × Json)) : Bool
+```
+
+The left side's subscripts `os` and the ranges `rows` after the right side are those
+of a defining form: each subscript a name or `1` ([`outOK`](#Esm.Document.Math.outOK), as the bracket form's entries,
+[`entryParts`](/generated/document-formats/esm-document-math-parse#Esm.Document.Math.entryParts)), no name twice, and each row the range of one of the subscripts, at most
+once. A subscript with no row is an output index with no range, as in the bracket
+form.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.unlift">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.unlift" title="Esm.Document.Math.unlift"><code>unlift</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1467-L1487">source</a></div>
+
+```lean
+def unlift (q : Json) (rows : List (String × Json)) : Option Json
+```
+
+The equation `x_(os) = rhs` with the ranges `rows` of its output indices, as the
+equation it writes: `x = faq` with the output indices `os` and the rows' ranges, over
+`rhs` read as the reduction (a `faq` with no output indices that ranges over at least one
+index, none of them an output index) or as the body. Nothing else is a defining form: a
+reduction with no range of its own (`sum v_j`, `limits(sum) v_j`, `sum_(j > 1) v_j`)
+would read as reducing what it does not, and the printer writes the bracket form for
+it.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.liftParts">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.liftParts" title="Esm.Document.Math.liftParts"><code>liftParts</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1492-L1517">source</a></div>
+
+```lean
+def liftParts (e : Json) : Option (Json × List (String × Json))
+```
+
+The parts of the defining form of an equation `x = faq`: the equation `x_(os) = rhs`
+and the ranges of the output indices, when the left side is a name that takes a
+subscript and the `faq` has output indices.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.liftOK">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.liftOK" title="Esm.Document.Math.liftOK"><code>liftOK</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1520-L1526">source</a></div>
+
+```lean
+def liftOK (e q : Json) (rows : List (String × Json)) : Bool
+```
+
+The defining form is used: it reads back as exactly `e`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.defRowsToks">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.defRowsToks" title="Esm.Document.Math.defRowsToks"><code>defRowsToks</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1529-L1530">source</a></div>
+
+```lean
+def defRowsToks (c : Ctx) (rows : List (String × Json)) : List Tok
+```
+
+The range rows after a defining equation, separated by commas.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Math.print">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Math.print" title="Esm.Document.Math.print"><code>print</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean#L1534-L1539">source</a></div>
+
+```lean
+def print (sf : Sf) (S : Sym) (e : Json) : List Tok
+```
+
+The tokens of a whole expression: an equation `x = faq` with output indices in its
+defining form when that reads back, otherwise as any expression.
+
+</div>
+
+<p class="lean-meta">This module also proves 22 lemmas without doc comments; they are in <a href="https://github.com/EarthSciML/EarthSciAST/blob/9c3b4aa7587e650335b61c9c6c286eeeaab7f644/formal/Esm/Document/Math/Print.lean">the source</a>.</p>

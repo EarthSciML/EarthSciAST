@@ -1,0 +1,526 @@
+---
+title: "Document notation: the Phase 0 tables, as data"
+type: lean
+lean_module: "Esm.Document.Notation"
+weight: 1
+---
+
+<p class="lean-meta">Lean module <code>Esm.Document.Notation</code>, <a href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean"><code>formal/Esm/Document/Notation.lean</code></a> at <code>86bed77c797f</code><br>Imports <code>Mathlib.Data.List.Nodup</code></p>
+
+The signed-off notation for ESM source documents (`.md` with LaTeX math, `.typ` with
+Typst math). This module is DATA ONLY: the operator tiers, the precedence levels, the
+name rules, where each schema field lives in a document, and the accepted variants.
+The printers, parsers and round-trip theorems of the later phases are stated against
+these tables, so a notation change is a change here first.
+
+"Lossless" for documents means equality after the canonical form (key order, number
+spelling, unit spelling). Numbers follow CONFORMANCE §5.5.3.1: a literal's type is
+fixed by its value, so an integral `Int64`-representable `1.0` IS the integer `1`. The canonical
+form gains spelling rules for the redundant spellings listed in `spellingRules`; each
+gets a meaning-preservation proof when it lands.
+
+Decisions of record (2026-11-13):
+
+* Redundant spellings are normalized in the canonical form, not kept apart in notation.
+* `neg` and `pow` are deprecated: loaders warn and rewrite them to unary `-` and `^`;
+  the §5.4 algebraic canonicalizer emits `-x` instead of `neg(x)`.
+* Chemical-formula-shaped names print as formulas everywhere, with no package.
+* Reactions print with the rate over the arrow, one line per reaction, `id` as its
+  label. There is no reaction-table form, on output or input.
+* Template arguments are positional when the parameter list is known, named otherwise.
+* Index subscripts are italic expressions; the subscript part of a name is upright;
+  an ambiguous digit subscript prints the index in brackets (`k[1]`).
+* Expression-valued fields inside blocks are math strings (spelled 2026-11-20: a math
+  leaf `$…$`, see "Expressions inside path blocks"); an equation's `_comment` is a comment
+  line inside its math.
+* Models and reaction systems keep separate directives.
+
+Decisions of record (2026-11-15), array notation:
+
+* `makearray` prints as a bracketed two-column table, value then region, rows in JSON
+  order; a region is its bound pairs joined by `\times`; a lifted `makearray` carries its
+  `output_idx` as the bracket's subscript.
+* A `faq` whose `args` are names other than the arrays its body indexes carries them as a
+  superscript set; with it a lone dense range uses the one-row subscript.
+* An array `const` of any size prints as a matrix (rank 1 or 2); the named reference into
+  a data block is no longer planned for printing.
+* A template applied with no bindings and no known parameter list is its bare name.
+* `broadcast`, `reshape`, `transpose`, `concat` and every `faq`, `makearray` or `const`
+  without a native shape use the call form with named fields; the escape form is left for
+  annotated nodes, non-identifier field keys and shapes no notation covers.
+
+Operators in the source formats (esm-spec §1.2, esm 2.4.0; "one operator type", §9.6.12):
+
+* `D` is only the time derivative. The spatial derivative is the defined operator `partial`
+  (spec §4.2): `\frac{\partial u}{\partial x}` / `(partial u)/(partial x)`, and with trailing
+  operands `\partial_{x}(u, a, b)` / `partial_(x)(u, a, b)`. A fraction of differentials along an
+  axis other than `t` reads as `partial`; along `t`, with `\mathrm{d}` / `dif` (or the
+  `\partial` variant), as `D`. The earlier trailing-operand form `\operatorname{D}_{x}(…)` /
+  `op("D")_(x)(…)` is read as `partial` and never printed. A `D` node whose `wrt` is not `t`
+  (which a loader reads as `partial`, `Adapter.Doc.spellRules`) prints in the escape form.
+* The defined operators `grad`, `div`, `laplacian`, `curl` with one operand and no field print
+  `\nabla f`, `\nabla \cdot F`, `\nabla^{2} u`, `\nabla \times F` / `nabla f`, `nabla dot F`,
+  `nabla^2 u`, `nabla times F`, at the level of `not`, the operand at the level of a power
+  base (parenthesized unless it is a postfix form or an atom), except that an operand which
+  is itself a `\nabla` form is written as it is. They are trees, not identities:
+  `\nabla \cdot \nabla u` is `div(grad(u))`, not `laplacian(u)`. A `\nabla` form as the base of a
+  power or an index is parenthesized (`\left(\nabla f\right)^{2}`); `\nabla f^{2}` is refused
+  on input. After the
+  `\times` of a curl an operand that starts with a number is parenthesized too
+  (`\nabla \times \left(2\right)`), so that no `\times 10^{…}` follows a token: the lexers read
+  that as a number's scientific tail.
+* Any other call of a defined operator prints in the call form. A call whose operator name is
+  also the key of a definition with known `params` prints in the escape form, since the call
+  form would read back as a reference to that definition (`callCond` in
+  [`Esm.Document.Math.Print`](/generated/document-formats/esm-document-math-print) requires the symbol table to have no parameters for the name).
+* The reference is `apply_operator` (the old `apply_expression_template` is read as it by a
+  loader, `Adapter.Doc.spellRules`, never printed).
+
+## Operators (spec §4.2)
+
+<div class="lean-decl" id="Esm.Document.Notation.Tier">
+<div class="lean-decl-head"><span class="lean-kind">inductive</span> <a class="lean-name" href="#Esm.Document.Notation.Tier" title="Esm.Document.Notation.Tier"><code>Tier</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L110-L115">source</a></div>
+
+```lean
+inductive Tier where
+  | native
+  | call
+  | escape
+  | deprecated
+  deriving DecidableEq, Repr
+```
+
+How an operator is written.
+
+* `native`: conventional notation.
+* `call`: `\operatorname{name}(…)` in LaTeX, `op("name")(…)` in Typst. Every open
+  (rewrite-target) operator and every template application also uses this form,
+  with node fields such as `dim` as named arguments after a semicolon. The core
+  operators of `fieldCallOps` (`broadcast`, `reshape`, `transpose`, `concat`, and a
+  `faq`, `makearray` or `const` with no native shape) use it too when no field annotates
+  the node: `\operatorname{reshape}(A; \mathrm{shape} = [2, 3])`. Their expression-valued
+  fields (`expr`, `filter`, `key`) print as math, every other field as JSON, a string as
+  `\text{"…"}` even when it is a name (decided 2026-11-15); an open operator's fields print
+  as math whenever they are expressions. Core operator names are
+  never template or open-operator names in this form, so it reads back as the core node.
+  A template applied with no bindings and no known parameter list is its bare name,
+  `\operatorname{n}` / `op("n")`, at the level of a product (so a product with it, a
+  power or an index of it, parenthesizes it); `\operatorname{n}()` is an open operator
+  with no operands.
+* `escape`: the generic node form, `\esm{op}{fields}{args}` / `esm.node("op", fields)[args]`,
+  whose arguments are still ordinary math. Since 2026-11-15 it is left for what has no
+  other notation: a node annotated with `id` or `expect_cadence` (outside the open
+  operators), a field key that is not an identifier, and shapes no notation covers (an
+  `index` with one argument, a `D` with no `wrt`, an `ic` of a non-name, …).
+
+A JSON string among a node's fields prints in LaTeX as `\text{"…"}` (decided 2026-11-13, so
+that KaTeX in strict mode renders it): printable ASCII as itself, `_`, `{`, `}` as `\_`,
+`\{`, `\}`, and every other character as `{\char NNN}` (three decimal digits below 1000,
+seven above), so no `$` or line break reaches the LaTeX. The earlier spelling, the string
+double-quoted with JSON escapes in math mode, is still read. In Typst the string is a code
+string, `#"…"`, which Typst sets whatever it holds.
+* `deprecated`: read on input with a warning, rewritten, never printed.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Notation.OpRow">
+<div class="lean-decl-head"><span class="lean-kind">structure</span> <a class="lean-name" href="#Esm.Document.Notation.OpRow" title="Esm.Document.Notation.OpRow"><code>OpRow</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L120-L127">source</a></div>
+
+```lean
+structure OpRow where
+  op : String
+  /-- Which nodes with this `op` the row covers; empty when it covers all of them. -/
+  shape : String := ""
+  tier : Tier
+  latex : String
+  typst : String
+  deriving Repr
+```
+
+One core operator, or one shape of a core operator when its notation depends on
+its fields (`D` with `wrt: "t"` vs a spatial `wrt`, `faq` with the plain semirings vs
+the rest, a small vs a large array `const`).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Notation.coreOps">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Notation.coreOps" title="Esm.Document.Notation.coreOps"><code>coreOps</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L131-L223">source</a></div>
+
+```lean
+def coreOps : List OpRow
+```
+
+Every evaluable-core operator of spec §4.2, by notation tier.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Notation.coreOpNames">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Notation.coreOpNames" title="Esm.Document.Notation.coreOpNames"><code>coreOpNames</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L230-L238">source</a></div>
+
+```lean
+def coreOpNames : List String
+```
+
+The evaluable-core operator names (spec §4.2). `scripts/formal-audit.py notation`
+checks this list against the operator tables of spec §4.2, so an operator added to the
+spec fails that audit until it is listed here, and then [`coreOps_covers`](#Esm.Document.Notation.coreOps_covers) fails until it
+has a row.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Notation.definedOps">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Notation.definedOps" title="Esm.Document.Notation.definedOps"><code>definedOps</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L245-L260">source</a></div>
+
+```lean
+def definedOps : List OpRow
+```
+
+The defined operators (spec §9.6.12) with a notation of their own (spec §1.2). Every other
+call of a defined operator, and these outside the shapes listed, use the call form; a call
+named like a definition key with known parameters uses the escape form.
+
+</div>
+
+<div class="lean-decl lean-theorem" id="Esm.Document.Notation.definedOps_not_core">
+<div class="lean-decl-head"><span class="lean-kind">theorem</span> <a class="lean-name" href="#Esm.Document.Notation.definedOps_not_core" title="Esm.Document.Notation.definedOps_not_core"><code>definedOps_not_core</code></a> <span class="lean-badge lean-badge-proved" title="no sorry or admit in the proof or anywhere in the Lean package, and no axiom">proved</span> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L264">source</a></div>
+
+```lean
+theorem definedOps_not_core : ∀ r ∈ definedOps, r.op ∉ coreOpNames
+```
+
+No defined operator with a notation of its own is a core operator.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Notation.annotatedNodeFields">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Notation.annotatedNodeFields" title="Esm.Document.Notation.annotatedNodeFields"><code>annotatedNodeFields</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L268">source</a></div>
+
+```lean
+def annotatedNodeFields : List String
+```
+
+Any node carrying `id` or `expect_cadence` prints in its normal notation wrapped
+in an annotation (the escape tier's wrapper), whatever its operator.
+
+</div>
+
+<div class="lean-decl lean-theorem" id="Esm.Document.Notation.coreOps_covers">
+<div class="lean-decl-head"><span class="lean-kind">theorem</span> <a class="lean-name" href="#Esm.Document.Notation.coreOps_covers" title="Esm.Document.Notation.coreOps_covers"><code>coreOps_covers</code></a> <span class="lean-badge lean-badge-proved" title="no sorry or admit in the proof or anywhere in the Lean package, and no axiom">proved</span> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L273">source</a></div>
+
+```lean
+theorem coreOps_covers : ∀ o ∈ coreOpNames, ∃ r ∈ coreOps, r.op = o
+```
+
+Every core operator has at least one notation row.
+
+</div>
+
+<div class="lean-decl lean-theorem" id="Esm.Document.Notation.coreOps_sound">
+<div class="lean-decl-head"><span class="lean-kind">theorem</span> <a class="lean-name" href="#Esm.Document.Notation.coreOps_sound" title="Esm.Document.Notation.coreOps_sound"><code>coreOps_sound</code></a> <span class="lean-badge lean-badge-proved" title="no sorry or admit in the proof or anywhere in the Lean package, and no axiom">proved</span> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L276">source</a></div>
+
+```lean
+theorem coreOps_sound : ∀ r ∈ coreOps, r.op ∈ coreOpNames
+```
+
+Every row is for a core operator.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Notation.deprecatedOps">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Notation.deprecatedOps" title="Esm.Document.Notation.deprecatedOps"><code>deprecatedOps</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L279-L280">source</a></div>
+
+```lean
+def deprecatedOps : List String
+```
+
+A deprecated operator has exactly one row, and it is never printed.
+
+</div>
+
+## Precedence (spec §4.1.1), loosest first
+
+Fractions, roots, subscripts, `cases` and big operators are atoms. A right operand at
+the same level is parenthesized unless it is the same n-ary `+`, `*`, `and` or `or`.
+A negated sum or difference keeps its parentheses.
+
+<div class="lean-decl" id="Esm.Document.Notation.precedence">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Notation.precedence" title="Esm.Document.Notation.precedence"><code>precedence</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L303-L310">source</a></div>
+
+```lean
+def precedence : List PrecLevel
+```
+
+`"unary -"` names negation, to keep it apart from binary `-`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Notation.flattening">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Notation.flattening" title="Esm.Document.Notation.flattening"><code>flattening</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L314">source</a></div>
+
+```lean
+def flattening : List String
+```
+
+Operators a parser flattens into one n-ary node.
+
+</div>
+
+## Names
+
+<div class="lean-decl" id="Esm.Document.Notation.NameShape">
+<div class="lean-decl-head"><span class="lean-kind">inductive</span> <a class="lean-name" href="#Esm.Document.Notation.NameShape" title="Esm.Document.Notation.NameShape"><code>NameShape</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L325-L344">source</a></div>
+
+```lean
+inductive NameShape where
+  /-- One letter, or a Greek letter name: `T`, `lambda`. Prints italic. -/
+  | single
+  /-- A single letter or Greek name, `_`, then the rest: `T_air`, `k_1`. The rest is
+  an upright subscript. -/
+  | subscripted
+  /-- A sequence of at least two element-symbol and count tokens: `NO2`, `CH2O`.
+  Prints upright with subscripted counts. -/
+  | formula
+  /-- Any other multi-letter name: `half_life`, `RT`, `k1`. Prints italic as one word
+  (ISO 80000-2). -/
+  | word
+  /-- The literal name in full, `\mathit{…}` / `italic("…")`, accepted on input for ANY
+  name and read as that name. It is how an author resolves a juxtaposition the parser
+  rejects: with `R`, `T` and `RT` all declared, bare `RT` is refused, and the author
+  writes `\mathit{RT}` for the name or `R T` for the product. For a `word` name it is the
+  same text as the printed form; for the other shapes it differs (`T_air` prints
+  `T_{\mathrm{air}}`, and `\mathit{T\_air}` reads back as the same name). -/
+  | explicit
+  deriving DecidableEq, Repr
+```
+
+The shapes a declared name can take. The printer decides the shape from the name
+alone. `single`, `subscripted`, `formula` and `word` partition the names and each keeps
+every character of the name, so two distinct names never print alike (a Phase 2 lemma);
+the printer never needs `explicit`.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Notation.indexCollisionForm">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Notation.indexCollisionForm" title="Esm.Document.Notation.indexCollisionForm"><code>indexCollisionForm</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L367">source</a></div>
+
+```lean
+def indexCollisionForm : String
+```
+
+A scoped reference (`Chem.O3`) prints each segment by its own rule, joined by `.`.
+Index subscripts are italic expressions (`A_{i, j}`); the subscript of a name is upright
+text. A digit subscript that could be either (`k_{1}` for the name `k_1` or index 1 of
+an arrayed `k`) prints the index in brackets, `k[1]`.
+
+</div>
+
+## Literals and units
+
+<div class="lean-decl" id="Esm.Document.Notation.scientificLatex">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Notation.scientificLatex" title="Esm.Document.Notation.scientificLatex"><code>scientificLatex</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L382">source</a></div>
+
+```lean
+def scientificLatex : String
+```
+
+Numbers print in the CONFORMANCE §5.5.3.1 canonical spelling: an integral
+`Int64`-representable value is an integer with no point (`1.0` prints as `1`); any other
+finite value prints its shortest round-trip digits, positional for decimal exponents
+-4 to 5 and scientific otherwise. In math, scientific notation is exactly
+`<decimal> \times 10^{<integer>}`, read back as one literal (with any spacing, and from an
+integer mantissa too); a real product with a power of ten prints with `\cdot`. A negative literal prints as `-3`; unary minus on a
+positive literal prints as `-(3)`. A `const` with units prints as the number, a thin
+space, then the canonical unit spelling upright: LaTeX `3\,\mathrm{m/s}`, Typst one
+`upright("sym")^(exp)` per unit factor, factors separated by `thin` (Typst sets adjacent
+`upright` texts with no space), positive exponents first. No unit package is used.
+The forms, their parsers and round-trip theorems are [`Esm.Units.Typeset`](/generated/document-formats/esm-units-typeset).
+
+</div>
+
+## Reactions
+
+mhchem `\ce{…}` in Markdown, typsium `#ce[…]` in Typst, the rate over the arrow. The
+printer writes a restricted spelling both packages read correctly: every
+stoichiometric coefficient and every non-formula species name is quoted as math, and
+an empty side is the empty-set symbol. Names inside the quoted math follow the name rules
+(the rate `k_1` is `k_{\mathrm{1}}`, the word name `SO4_aer` is `\mathit{SO4\_aer}`); a
+formula-shaped species such as `NO2` is left to the package.
+
+The line ([`Esm.Document.Source.Reaction`](/generated/document-formats/esm-document-source-reaction), decided 2026-11-13 with the native surfaces):
+
+* Markdown: `$$\ce{…}$$ {#id key=value …}` on one line. To remark-math this is a
+  paragraph holding inline math with a two-dollar fence (not display math, which needs
+  `$$` on lines of its own), and a renderer that does not know the label shows
+  `{#id …}` as text. The fence is two dollars because single `$…$` would close at the
+  first `$` of a quoted piece. The arrow
+  label is braced, `->[{$k$}]`, since mhchem ends the label at the first `]` (an index
+  `k[1]` or a `\left[`). The label holds the `id` and the reaction's other fields as
+  attributes, in the declaration attribute syntax.
+* Typst: `#ce[…] <id>`; a reaction with other fields is `#reaction(key: value, …)[#ce[…]] <id>`.
+* A coefficient of 1 is left out. A term without `stoichiometry`, a side `[]`, a reaction
+  without `id`, `substrates`, `products` or `rate`, or an id outside letters, digits,
+  `_`, `-`, `.` and `:` keeps the whole `reactions` field a path block.
+* The id is part of the reaction line, not a skipped label: removing it changes the
+  parse.
+* What the packages would misread keeps the field a block: an escaped brace `\{` or `\}`
+  anywhere inside `\ce{…}` (mhchem matches braces by character), and `//` or `/*` anywhere
+  inside `#ce[…]` (a Typst comment would swallow the rest of the line).
+
+<div class="lean-decl" id="Esm.Document.Notation.typstVersion">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Notation.typstVersion" title="Esm.Document.Notation.typstVersion"><code>typstVersion</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L419">source</a></div>
+
+```lean
+def typstVersion : String
+```
+
+Pinned with the format version.
+
+</div>
+
+## Document skeleton
+
+Every schema field has exactly one home. A field with no row falls back to a block
+keyed by its JSON path, so a field added to the schema later round-trips with no
+grammar change.
+
+## Expressions inside path blocks
+
+Decided 2026-11-13 ("expression-valued fields inside blocks are math strings"), spelled
+2026-11-20: a field of a path block whose schema type is `Expression` holds math when its
+value is a well-formed expression whose math text the container can delimit: `$…$` in a
+Typst dictionary (Typst math content) for text that is [`Json.mathOK`](/generated/document-formats/esm-document-json#Esm.Document.Json.mathOK), and the plain
+scalar `$…$` in YAML (where a string is always double-quoted) for text that is
+[`Yaml.plainMathOK`](/generated/document-formats/esm-document-yaml#Esm.Document.Yaml.plainMathOK) (no `: ` or ` #`, which a YAML parser would read as a mapping or a
+comment). Every other value there stays as it is. The math is printed under the section's symbol table (a component's, or the
+document's for a top-level block). The reader reads every math leaf back under the same
+table, wherever it is ([`Source.cookBlocks`](/generated/document-formats/esm-document-source-items#Esm.Document.Source.cookBlocks)); a math leaf anywhere else is refused (the
+document read back is not canonical).
+
+The fields are listed as paths from the block's key: `Seg.key k` steps into the entry
+`k` of an object, `Seg.any` into every element of an array and every value of an object,
+and `Seg.elem` into every element of an array only (a field that is either one object or
+an array of them, `ParameterUpdateSpec`, whose object form's own keys are not elements).
+Fields with a surface of their own (equations, reactions, templates and rules, which fall
+back to a block only when their math cannot be printed natively) are not listed.
+
+<div class="lean-decl" id="Esm.Document.Notation.Seg">
+<div class="lean-decl-head"><span class="lean-kind">inductive</span> <a class="lean-name" href="#Esm.Document.Notation.Seg" title="Esm.Document.Notation.Seg"><code>Seg</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L514-L518">source</a></div>
+
+```lean
+inductive Seg where
+  | key (k : String)
+  | any
+  | elem
+  deriving DecidableEq, Repr
+```
+
+One step of a path inside a block value.
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Notation.compExprPaths">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Notation.compExprPaths" title="Esm.Document.Notation.compExprPaths"><code>compExprPaths</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L526-L545">source</a></div>
+
+```lean
+def compExprPaths : List (List Seg)
+```
+
+The expression-valued fields of a component's path blocks (esm-schema.json:
+`Assertion.reference`, `ContinuousEvent.conditions`, `AffectEquation.rhs`,
+`DiscreteEventTrigger.expression`, `Model.guesses`, `ParameterUpdate.expression` and
+`.when`, `DataSourceBinding.unit_conversion` under `ParameterUpdate.from`; an update is
+one rule or an array of them, `ParameterUpdateSpec`).
+
+</div>
+
+<div class="lean-decl" id="Esm.Document.Notation.topExprPaths">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Notation.topExprPaths" title="Esm.Document.Notation.topExprPaths"><code>topExprPaths</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L551-L556">source</a></div>
+
+```lean
+def topExprPaths : List (List Seg)
+```
+
+The expression-valued fields of the document's top-level path blocks (the coupling
+entries' events and connector equations).
+
+</div>
+
+## Templates and rules
+
+[`Esm.Document.Source.Skeleton`](/generated/document-formats/esm-document-source-skeleton) (`Tm`), decided 2026-11-13 with the native surfaces:
+
+* A template is a display whose math is its header, then `\coloneqq` (`:=` in Typst), then
+  its body. The header is `\operatorname{name}(p, q)`: the name as in a template
+  application (`\operatorname{}` with `escT`), the parameters as names under the empty
+  symbol table, separated by `, `, `()` when there are none. Typst: `op("name")(p, q)`, the
+  name a quoted string.
+* A rule is `\text{rule } \operatorname{name}: \; lhs \Rightarrow rhs` in a Markdown display;
+  in Typst `#rule("name", $lhs$, $rhs$, key: value, …)`. Its parameters are not in the header:
+  `params` is an attribute like `where` and `priority`.
+* The lexer reads the header (and splits a rule at its first ` \Rightarrow `); only the body
+  and the left-hand side are math, read under the component's symbol table (or, at the top
+  level of a library file, the document's index sets and templates) with the parameters
+  declared. A rule's left-hand side (its `match`) is read with no templates in the
+  table: a pattern never applies a template (spec §9.7.3), and an operator in it named like
+  a template in scope (the rule itself is in scope under its own name) is then the
+  operator, in the call form `\operatorname{r}(f)`, not the escape form (decided
+  2026-11-15). The symbol table takes each template's parameter list from its header, never
+  from its math.
+* Every other field is an attribute. Markdown: the display sits in a container directive,
+  `:::template{description="…"}` or `:::rule{params='["u"]' priority=1}`, then the display,
+  then a line `:::` (attributes after the closing `$$` would keep remark-math from closing
+  the display). Typst: named arguments (a template with fields is `#template(…)[$ … $]`).
+* A template or rule prints natively only when its header reads back as written (checked
+  by printing it and reading it back) and its math has no `$` or line break; otherwise the
+  whole `operators` field is one path block. A display whose math would read as
+  a template header is never printed as an equation (the equations field falls back).
+
+<div class="lean-decl" id="Esm.Document.Notation.skippedConstructs">
+<div class="lean-decl-head"><span class="lean-kind">def</span> <a class="lean-name" href="#Esm.Document.Notation.skippedConstructs" title="Esm.Document.Notation.skippedConstructs"><code>skippedConstructs</code></a> <a class="lean-src" href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean#L596">source</a></div>
+
+```lean
+def skippedConstructs : List String
+```
+
+Skipped by the parser: prose outside these constructs, Typst `<labels>` and `@refs`,
+Markdown `{#id}` after an equation. The Phase 3 theorem says inserting or removing them
+never changes the parse. A reaction's id label (`{#id}` after its `$$\ce{…}$$`, `<id>`
+after its `#ce[…]`) is not skipped: it is part of the reaction line.
+
+</div>
+
+## Accepted variants
+
+Spellings the parser reads and normalizes; the printer never writes them. Each math
+variant has a Phase 2 lemma in [`Esm.Document.Math.Variants`](/generated/document-formats/esm-document-math-variants) (the variant parses to the
+same JSON as the canonical spelling) and hand-written checks in
+[`Esm.Document.Math.HandWritten`](/generated/document-formats/esm-document-math-handwritten). The document-layer rows have theirs in the Phase 3
+document layer: the declarations table in [`Esm.Document.Source.Markdown`](/generated/document-formats/esm-document-source-markdown) (`lex_table`),
+and aligned blocks, continuation rows and row breaks nested in a delimiter in
+[`Esm.Document.Source.MultiLine`](/generated/document-formats/esm-document-source-multiline) (`cookRows_layout`; `ckMd_aligned` in
+[`Esm.Document.Source.MarkdownDoc`](/generated/document-formats/esm-document-source-markdowndoc) for a Markdown `aligned` display); the reaction rows in
+[`Esm.Document.Source.Reaction`](/generated/document-formats/esm-document-source-reaction) (`pTerm_coef`, `pSpecies_math`), and the container row in
+[`Esm.Document.Source.Markdown`](/generated/document-formats/esm-document-source-markdown) (`contBody_many`). Unquoted `upright(e)` lexes to the token of
+`upright("e")` (`variant_upright_e`); named template arguments in any order read sorted
+(`variant_named_args`); a native operator in the call form reads as its native node
+(`variant_native_call`). Each gets a Phase 4 fixture. `rejected` rows pin spellings the
+parser refuses (the reaction table: `rateTable` in [`Esm.Document.Source.Markdown`](/generated/document-formats/esm-document-source-markdown)).
+
+## Canonical-form spelling rules
+
+Redundant spellings the canonical form merges (landing with the canonical unit spelling).
+`esm-lean canon` (`spellRules` in `Adapter/Doc.lean`) applies the `neg` and `pow` rules and
+respells every `units` and `default_units` string ([`Esm.Units.canon`](/generated/document-formats/esm-units-canonical#Esm.Units.canon), under which `""`,
+`"1"` and `"dimensionless"` are all `"1"`); a `const` node whose units spell `"1"` drops
+them, so one whose value is a number is that bare number, whatever other fields it has
+(ruling 2026-11-14; a declaration keeps `units: "1"`).
+
+Only the unit respelling is proved: [`Esm.Units.canon`](/generated/document-formats/esm-units-canonical#Esm.Units.canon) keeps the unit a string resolves to
+(`resolve_canon`, `resolve_of_canon` in [`Esm.Units.Canonical`](/generated/document-formats/esm-units-canonical)). The other rules, and the
+walk that decides which fields are units strings and which objects are name-keyed maps or
+free-form (key lists copied from esm-schema.json), are adapter code with no proof that they
+preserve meaning. They are pinned instead by the golden files every binding and `esm-lean`
+are checked against: `tests/conformance/canonical_document/` and
+`tests/conformance/document_format/`.
+
+<p class="lean-meta">This module also proves 3 lemmas without doc comments; they are in <a href="https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/formal/Esm/Document/Notation.lean">the source</a>.</p>

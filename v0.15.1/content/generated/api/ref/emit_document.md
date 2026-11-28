@@ -1,0 +1,95 @@
+---
+title: "emit_document"
+description: "Stable function · Document I/O"
+type: "api"
+api_tabs: true
+---
+
+
+**Tier:** stable · **Kind:** function · **Topic:** [Document I/O](/generated/api/topics/document-io)
+
+| Julia | TypeScript | Python | Rust | Go |
+|---|---|---|---|---|
+| not exported | `emitDocument` | `emit_document` | not exported | not exported |
+
+
+<div class="api-tabs">
+
+<div class="api-tab" data-lang="julia" data-label="Julia">
+<p class="api-tab-label">Julia</p>
+
+<p class="api-absent">Julia does not export this function.</p>
+
+</div>
+
+<div class="api-tab" data-lang="typescript" data-label="TypeScript">
+<p class="api-tab-label">TypeScript</p>
+
+```typescript
+function emitDocument(rawSource: unknown, basePath: string, options?: TemplateResolveOptions): JsonObject
+```
+
+Produce the reference-preserving, self-contained emitted document (esm-spec
+§9.6.4 rule 5, RFC out-of-line-expression-templates §7.5) from a source
+document `rawSource` (a fixture, or an already-emitted document for the
+idempotency property; relative import refs resolve against `basePath`). Loads
+`rawSource` under Option B, then materializes each component's surviving
+reference closure into its `operators` block, drops consumed
+imports, and version-stamps `esm: 2.4.0` when any reference or `operators` block
+remains (§9.6.4 rule 8). `emitEsmString ∘ emitDocument` is a byte-wise fixed
+point under reload. Mirrors the Julia reference `emit_document`.
+
+`rawSource` passes the same wire boundary a load applies
+(`prepareDocumentOps`), on a copy: a removed op is refused, and a
+deprecated `neg` / `pow` is rewritten with the `deprecated_op` warning, so
+neither spelling survives into the emitted document (esm-spec §4.2).
+
+[Source](https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/pkg/earthsci-ast-ts/src/template-imports.ts#L2395)
+
+</div>
+
+<div class="api-tab" data-lang="python" data-label="Python">
+<p class="api-tab-label">Python</p>
+
+```python
+emit_document(raw_source: Any, base_path: str) -> dict
+```
+
+Produce the reference-preserving, self-contained emitted document
+(esm-spec §9.6.4 rule 5, RFC out-of-line-expression-templates §7.5) from a
+source document (a fixture, or an already-emitted document for the
+idempotency property). Loads `raw_source` under Option B, then for every
+component builds its emitted `expression_templates` block — authored
+entries first in authored order (a `match` rule only once a firing
+referenced it and rule 3 materialized it match-less), then the materialized
+transitive closure of its surviving references (match-less), sorted —
+drops consumed `expression_template_imports`, and version-stamps
+`esm: 0.9.0` when any surviving reference or materialized entry remains
+(§9.6.4 rule 8). `emit_esm_string ∘ emit_document` is a byte-wise fixed
+point under reload.
+
+`raw_source` passes the same wire boundary a load applies
+(`earthsci_ast.parse.prepare_document_ops`), on a copy: a removed op
+is refused, and a deprecated `neg` / `pow` is rewritten with the
+`deprecated_op` warning, so neither spelling survives into the emitted
+document (esm-spec §4.2).
+
+[Source](https://github.com/EarthSciML/EarthSciAST/blob/86bed77c797f79bad4895e685007ce09e6451cf7/pkg/earthsci-ast-py/src/earthsci_ast/lower_expression_templates.py#L1971)
+
+</div>
+
+<div class="api-tab" data-lang="rust" data-label="Rust">
+<p class="api-tab-label">Rust</p>
+
+<p class="api-absent">Rust does not export this function.</p>
+
+</div>
+
+<div class="api-tab" data-lang="go" data-label="Go">
+<p class="api-tab-label">Go</p>
+
+<p class="api-absent">Go does not export this function.</p>
+
+</div>
+
+</div>

@@ -1,0 +1,10 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "VectorCalculus",
+    "description": "esm 2.4.0 (esm-spec §9.8.5, §9.6.12). Documents the operator names grad(f), div(F), laplacian(u) and curl(F): one operand each, the continuous operator of that name, no scalar fields, no unit expression. It holds no definitions; a discretization library defines each per grid (for example an MPAS finite-volume `div` with `where F: [edges]`, a lat-lon Laplace-Beltrami `laplacian` with `where u: [lon, lat]`). Until a definition is in scope each name is a placeholder.",
+    "authors": ["EarthSciML"],
+    "tags": ["standard-library", "operators", "vector-calculus"]
+  },
+  "operators": {}
+}
