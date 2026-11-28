@@ -313,7 +313,15 @@ class Gen:
         return text
 
     def variant(
-        self, area, cid, description, doc, surface, edits=(), text=None, reads_as=None,
+        self,
+        area,
+        cid,
+        description,
+        doc,
+        surface,
+        edits=(),
+        text=None,
+        reads_as=None,
         read_unmigrated=False,
     ):
         """A hand-written spelling: the printed text with `edits` applied (or `text`), which
@@ -2001,9 +2009,7 @@ def documents(g):
                     ],
                 )
             },
-            reaction_systems={
-                "R": {"species": {"NO": {"default": 0}}, "reactions": []}
-            },
+            reaction_systems={"R": {"species": {"NO": {"default": 0}}, "reactions": []}},
             index_sets={"x": {"kind": "interval", "size": 2}},
         ),
         written=True,
