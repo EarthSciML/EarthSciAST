@@ -45,7 +45,13 @@ function _icy_problem(c, compiler::Symbol)
 end
 
 function _icy_check_state(prob, expected, rtol, atol)
-    @test Set(String(k) for k in keys(expected)) == Set(String(k) for k in keys(prob.var_map))
+    # Julia's Problem keeps a stripped algebraic unknown as a held slot of its
+    # own state vector; the state of API_SPEC §5.8 (`state_layout`) leaves it
+    # out, as the manifest's `expected` does.
+    z = Set{String}(b.name for b in stripped(prob).z_layout)
+    held(k) = (br = findfirst('[', k); (br === nothing ? k : k[1:prevind(k, br)]) in z)
+    @test Set(String(k) for k in keys(expected)) ==
+        Set(String(k) for k in keys(prob.var_map) if !held(String(k)))
     for (k, v) in pairs(expected)
         i = get(prob.var_map, String(k), 0)
         @test i != 0

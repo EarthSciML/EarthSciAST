@@ -209,8 +209,8 @@ function _stripped_init_from_build(took, flat::FlattenedSystem)
     took === nothing && return si
     counters = Dict{String, Int}()
     for eq in took.equations
-        names = _ic_names(eq.lhs)
-        isempty(names) && (names = _ic_names(eq.rhs))
+        names = String[first(r) for r in _ic_reads(eq.lhs)]
+        isempty(names) && (names = String[first(r) for r in _ic_reads(eq.rhs)])
         first_name = isempty(names) ? "" : first(names)
         k = findlast('.', first_name)
         prefix = k === nothing ? "" : first_name[1:prevind(first_name, k)]

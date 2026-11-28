@@ -704,7 +704,8 @@ function _build_compile_evaluator(
         eq_ics = parts.eq_ics, field_ics = parts.field_ics,
         initial_conditions = initial_conditions, caller_u0 = caller_u0,
         index_sets = index_sets,
-        params = Dict{String, Float64}(String(k) => Float64(v) for (k, v) in pairs(p))
+        params = p === nothing ? Dict{String, Float64}() :
+            Dict{String, Float64}(String(k) => Float64(v) for (k, v) in pairs(p) if v isa Real)
     )
     products === nothing || (products.ic_stripped = ic_stripped)
     caller_slots = _apply_caller_u0!(u0, layout.var_map, ic_seeds, caller_u0)
