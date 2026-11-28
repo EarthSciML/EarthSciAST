@@ -1726,7 +1726,9 @@ fn an_observed_of_t_with_no_lane_form_builds_one_time_lanes() {
     let cells = [1, 2];
     let mixed = |r: Result<(), RhsError>| match r {
         Err(e @ RhsError::MixedTimes { .. }) => {
-            assert!(e.to_string().contains("M.f"), "{e}")
+            let msg = e.to_string();
+            assert!(msg.contains("the observed `M.f`"), "{msg}");
+            assert!(!msg.contains("state derivative"), "{msg}");
         }
         other => panic!("expected a mixed-times error, got {other:?}"),
     };

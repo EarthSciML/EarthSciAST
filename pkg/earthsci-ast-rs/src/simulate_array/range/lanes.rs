@@ -1676,7 +1676,7 @@ fn rewrite(
         match lane {
             Ok(r) => observed.push(r),
             Err(why) if timing.timed && !timing.state.contains(var) => {
-                fallen.push((var.clone(), why.to_string()));
+                fallen.push((var.clone(), observed_has_no_lane_form(var, &why)));
                 observed.push(rule.clone());
             }
             Err(e) => return Err(e),
@@ -1768,6 +1768,29 @@ fn lane_dependent(compiled: &ProgramModel) -> HashSet<String> {
     dep
 }
 
+/// The reason a lane rewrite refused, without the `compiler_refused_rule`
+/// framing (which names a state derivative and suggests another compiler):
+/// as a [`RhsError::MixedTimes`] detail it says why a batch must share one
+/// time, not why a build failed.
+fn refusal_reason(e: &SimulateError) -> String {
+    match e {
+        SimulateError::Compile(crate::compile_error::CompileError::CompilerRefusedRule {
+            reason,
+            ..
+        }) => reason.clone(),
+        e => e.to_string(),
+    }
+}
+
+/// Why the observed `var` of `t` has no lane form, naming it as an observed.
+fn observed_has_no_lane_form(var: &str, e: &SimulateError) -> String {
+    let reason = refusal_reason(e);
+    match reason.strip_prefix(&format!("lane: rule `{var}` ")) {
+        Some(why) => format!("the observed `{var}` {why}"),
+        None => format!("the observed `{var}` has no lane form: {reason}"),
+    }
+}
+
 /// The per-lane-times rewrite (U19), run again with each state-free
 /// observed of `t` it finds no lane form for whole-domain, together with
 /// every observed of `t` that one reads (a whole-domain rule reads whole
@@ -1805,7 +1828,7 @@ fn per_lane_times(
         }
     };
     loop {
-        let rw = rewrite_with(&whole).map_err(|e| e.to_string())?;
+        let rw = rewrite_with(&whole).map_err(|e| refusal_reason(&e))?;
         if rw.fallen.is_empty() {
             let timing = if whole.is_empty() {
                 LaneTime::PerLane
