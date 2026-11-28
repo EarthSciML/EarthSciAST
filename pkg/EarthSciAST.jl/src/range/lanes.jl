@@ -338,6 +338,12 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
         n = (target::VarExpr).name
         sh = haskey(spec.shapes, n) ? spec.shapes[n] : spec.obs_shapes[n]
         length(sh) == length(subs) || return o
+        # A lane array holds lane `l` at `l` on its first lane-set axis and at
+        # 1 on its other lane-set axes (`_lane_box_dim`), whichever of the
+        # scope's loop variables reads that axis: a read aligned by index-set
+        # name (esm-spec §4.3.4), whose lane-set axes come in another order
+        # than the scope's, still reads the lane's own cell.
+        lane_axis = findfirst(s -> s in spec.sets, sh)
         new = ASTExpr[target]
         for d in eachindex(subs)
             s = subs[d]
@@ -348,7 +354,7 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
                         "along the lane set '$(sh[d])', which leaves the " *
                         (spec.kind === :cells ? "cell" : "column")
                 )
-                push!(new, s)
+                push!(new, d == lane_axis ? VarExpr(sc.first) : IntExpr(1))
             else
                 push!(new, _lane_rewrite(spec, ctx, s, sc, rule))
             end
