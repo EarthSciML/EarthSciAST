@@ -384,6 +384,39 @@
    "note": "a supplied ODE state is a known: two equations, one unknown"
   },
   {
+   "id": "rhs_solved_form",
+   "fixture": "fixtures/rhs_solved.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "expected": {
+    "M.x": 3.0,
+    "M.z": 4.0
+   },
+   "note": "3 ~ ic(x) is explicit; ic(x) + 1 ~ ic(z) is solved for z"
+  },
+  {
+   "id": "sum_with_a_known_is_implicit",
+   "fixture": "fixtures/sum_with_known.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "error_code": "unsupported_construct",
+   "solved": {
+    "M.a": 3.0,
+    "M.b": 7.0
+   },
+   "note": "ic(a) + ic(b) ~ total stays implicit although ic(a) is known"
+  },
+  {
    "id": "under_determined",
    "fixture": "fixtures/under_determined.esm",
    "tspan": [
@@ -797,8 +830,8 @@
   {
    "id": "element_spelling",
    "fixture": "fixtures/element_spelling.esm",
-   "load_error": "ic",
-   "note": "ic(index(u, 1)) is malformed (esm-spec 4.2). The spec names no code; the error text mentions ic"
+   "load_error": "ic_invalid_argument",
+   "note": "ic(index(u, 1)) is malformed (esm-spec 4.2): refused at load with ic_invalid_argument"
   },
   {
    "id": "over_determined_validate",
