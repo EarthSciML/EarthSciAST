@@ -206,6 +206,12 @@ function _geometry_setup_vars(
     # F_src is unbound.
     tainted = _readers_of(g, live_params)
     dynamic = _dynamic_names(g, state_var_names)
+    # Whether a name moves at run time: a state, or a definition that reads
+    # one (or `t`) through any chain of observed. A setup var is evaluated
+    # once, so it may read neither — a direct-reads-only test would let an
+    # observed that reads a state-dependent observed into setup, where that
+    # observed is unbound ("unbound name … in setup-time geometry").
+    moves(f) = f in state_var_names || f in dynamic
     setup = Set{String}()
     for (n, _) in defs
         (is_arr_obs(n) && !(n in tainted) && haskey(defs, n)) || continue
@@ -214,7 +220,7 @@ function _geometry_setup_vars(
         n in refs_of(n) && continue
         # The pure-AST overlap area, or a rank table, over inputs that read no state.
         _is_setup_join_reduction(defs[n]) &&
-            !_anyof(f -> f in state_var_names, refs_of(n)) &&
+            !_anyof(moves, refs_of(n)) &&
             push!(setup, n)
         _is_setup_const_reduction(defs[n], index_sets, scalar_params) && !(n in dynamic) &&
             push!(setup, n)
@@ -268,7 +274,7 @@ function _geometry_setup_vars(
             ) || continue
             refs = intersect(refs_of(n), mvars)
             if any(f -> f in setup, refs) &&
-                    !any(f -> f in state_var_names, refs)
+                    !any(moves, refs)
                 push!(setup, n); changed = true
             end
         end
@@ -299,7 +305,7 @@ function _geometry_setup_vars(
                         !_is_const_op(defs[r]) && !(defs[r] isa VarExpr)
                 ) || continue
                 rrefs = intersect(refs_of(r), mvars)
-                any(f -> f in state_var_names, rrefs) && continue
+                any(moves, rrefs) && continue
                 push!(setup, r); changed = true
             end
         end
