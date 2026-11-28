@@ -685,11 +685,30 @@ def _strip_and_build(classes: list[str], chosen: str, input: Any, tspan, **kw) -
         from .serialize import _serialize_esm_file
 
         doc = _serialize_esm_file(doc)
+    caller_u0 = dict(kw.get("u0") or {})
+    if "algebraic" in classes and caller_u0:
+        # A `u0` entry of an algebraic unknown is a starting guess, never a
+        # constraint (esm-spec §11.4.3, "Precedence"): with the algebraic
+        # equations stripped the unknown leaves the state, and its entry is the
+        # warm start `z0` reports, not a key the build refuses.
+        alg = set(flat.algebraic_variables)
+
+        def names_algebraic(key: str) -> bool:
+            base = str(key).split("[", 1)[0]
+            return base in alg or any(a.endswith("." + base) for a in alg)
+
+        kw["u0"] = {k: v for k, v in caller_u0.items() if not names_algebraic(k)}
     token = _strip.STRIP_TAKEN.set(tuple(classes))
     try:
         prob = esm_problem(doc, tspan, **kw)
     finally:
         _strip.STRIP_TAKEN.reset(token)
+    if "initialization" in classes:
+        member = getattr(prob.build, "init_stripped", None) or getattr(
+            getattr(prob.segment_seed, "build", None), "init_stripped", None
+        )
+        if member:
+            sobj.initialization = member
     if "algebraic" in classes:
         params = {
             k: float(v.default)
@@ -700,7 +719,7 @@ def _strip_and_build(classes: list[str], chosen: str, input: Any, tspan, **kw) -
         for k, v in (kw.get("p") or {}).items():
             if k in params:
                 params[k] = float(v)
-        _strip.collect_algebraic(flat, sobj, float(tspan[0]), params)
+        _strip.collect_algebraic(flat, sobj, float(tspan[0]), params, caller_u0)
     prob.stripped = sobj
     return prob
 
