@@ -38,15 +38,6 @@
           "lhs": {
             "op": "ic",
             "args": [
-              "global_time"
-            ]
-          },
-          "rhs": 0.0
-        },
-        {
-          "lhs": {
-            "op": "ic",
-            "args": [
               "Atmosphere.temperature_mean"
             ]
           },

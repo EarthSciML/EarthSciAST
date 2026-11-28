@@ -31,10 +31,11 @@
  },
  "checks": {
   "expected": "the Problem built from the case's tspan, p, u0 and strip starts from `expected`, every state element by flattened name, and the map covers the whole state",
-  "error_code": "building the Problem raises an error whose text carries `error_code`",
+  "error_code": "building the Problem raises an error whose machine-readable code (the binding's error code field, not its message text) equals `error_code`",
   "stripped": "with `strip`, the members named here of the stripped object (canonical JSON, parsed) equal the ones given; numbers compare by value",
   "solved": "a binding with a nonlinear initialization solve (Julia compiler = mtk) starts from these values instead of refusing",
-  "not_solvable": "solve on the stripped Problem raises stripped_problem_not_solvable"
+  "not_solvable": "solve on the stripped Problem raises stripped_problem_not_solvable",
+  "parameter_defaults": "(loads) after load, each named parameter of `model` has this `default`"
  },
  "tolerances": {
   "rtol": 1e-14,
@@ -1130,6 +1131,21 @@
    "strip": [],
    "error_code": "ic_system_unbalanced",
    "note": "3 scalar equations, 2 unknowns"
+  },
+  {
+   "id": "legacy_parameter_ic",
+   "fixture": "fixtures/legacy_parameter_ic.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "expected": {
+    "M.u": 7.0
+   },
+   "note": "the migrated parameter defaults p = 5, q = 2 are read by ic(u) ~ p + q"
   }
  ],
  "loads": [
@@ -1414,6 +1430,21 @@
    "fixture": "fixtures/duplicate_explicit.esm",
    "validate_errors": [],
    "note": "a conflict is the build's"
+  },
+  {
+   "id": "legacy_parameter_ic",
+   "fixture": "fixtures/legacy_parameter_ic.esm",
+   "warnings": [
+    "deprecated_field"
+   ],
+   "model": "M",
+   "parameter_defaults": {
+    "p": 5.0,
+    "q": 2.0
+   },
+   "equations_count": 2,
+   "no_field": "initialization_equations",
+   "note": "an old initial condition of a parameter becomes its default (the old value wins over a different default); the equations ic(q) ~ 2 and p ~ 5 are removed"
   }
  ]
 }
