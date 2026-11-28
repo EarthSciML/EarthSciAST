@@ -1057,39 +1057,30 @@ impl TapeBuilder<'_> {
         }
         // Few candidate cells (the pairs a join matches, of a source x target
         // box): the body runs over those only (`lower_pointwise_compacted`),
-        // when that lowers.
+        // when that lowers. The candidates are listed from the gates' pairs,
+        // never by a pass over the box.
+        let n_cells: usize = shape.iter().product();
         let candidates = if ranges.is_empty() {
             None
         } else {
-            pointwise_keep(idx_names, ranges, &gates, true)?.map(Arc::new)
+            pointwise_kept(ranges, idx_names, &gates)?
         };
         let mut compact_decline = None;
-        if let Some(cand) = &candidates {
-            let kept = cand.iter().filter(|&&k| k != 0.0).count();
-            if kept > 0 && kept * COMPACT_KEEP_DENOM <= cand.len() {
-                match self.attempt(|b| {
-                    b.lower_pointwise_compacted(
-                        idx_names,
-                        ranges,
-                        Arc::clone(cand),
-                        body,
-                        filter,
-                        identity,
-                    )
-                }) {
-                    Ok(v) => return Ok(v),
-                    Err(e) => compact_decline = Some(e),
-                }
+        if let Some(kept) = candidates
+            && !kept.is_empty()
+            && kept.len() * COMPACT_KEEP_DENOM <= n_cells
+        {
+            match self.attempt(|b| {
+                b.lower_pointwise_compacted(idx_names, ranges, &kept, body, filter, identity)
+            }) {
+                Ok(v) => return Ok(v),
+                Err(e) => compact_decline = Some(e),
             }
         }
         let dense = |this: &mut Self| -> LResult<LV> {
             // The dense path leaves gates already tested by the filter to
-            // that filter. Otherwise its mask is the compaction mask.
-            let keep = if ranges.is_empty() || gates.iter().any(|g| g.in_filter) {
-                pointwise_keep(idx_names, ranges, &gates, false)?.map(Arc::new)
-            } else {
-                candidates
-            };
+            // that filter.
+            let keep = pointwise_keep(idx_names, ranges, &gates)?.map(Arc::new);
             if keep.as_ref().is_some_and(|k| k.iter().all(|&k| k == 0.0)) {
                 return Ok(if ranges.is_empty() {
                     LV::Lit(identity)
@@ -1124,22 +1115,23 @@ impl TapeBuilder<'_> {
     }
 
     /// A join-gated pointwise `faq` whose gate keeps few cells, with the body
-    /// evaluated at the kept cells only, as the oracle evaluates it. The kept
-    /// cells are listed in row-major order as a 1-D box over `PW_SYM`; each
-    /// output index becomes a read of its column, an inline literal, so
-    /// `src[i]` reads `src[index([i at each kept cell], k)]`. The body and the
-    /// filter are lowered once over that box, then every output cell gathers
-    /// its own position in the list and the gate's mask selects the identity
-    /// at the others: each kept cell holds the body's own value, bit for bit,
-    /// and the work and the program grow with the kept cells, not the box
-    /// (a conservative regrid's overlap areas: the candidate pairs, not
-    /// source x target). The substituted body keeps the body's sharing: a
-    /// node reached twice maps to one node.
+    /// evaluated at the kept cells only, as the oracle evaluates it. `kept`
+    /// is the kept cells' ascending row-major positions in the box. They are
+    /// listed as a 1-D box over `PW_SYM`; each output index becomes a read of
+    /// its column, so `src[i]` reads `src[index(i_col, k)]`. The body and the
+    /// filter are lowered once over that box. Every output cell then finds
+    /// its own position in the list when the program runs: a binary search
+    /// of the kept positions, a gather of the body's value there, and the
+    /// identity where the cell is not kept. Each kept cell holds the body's
+    /// own value, bit for bit, and the build's work and tables grow with the
+    /// kept cells, not the box (a conservative regrid's overlap areas: the
+    /// candidate pairs, not source x target). The substituted body keeps the
+    /// body's sharing: a node reached twice maps to one node.
     fn lower_pointwise_compacted(
         &mut self,
         idx_names: &[String],
         ranges: &[(i64, i64)],
-        keep: Arc<Vec<f64>>,
+        kept: &[usize],
         body: &Expr,
         filter: Option<&Expr>,
         identity: f64,
@@ -1158,46 +1150,57 @@ impl TapeBuilder<'_> {
         };
         let bx = &bx;
         let nd = bx.shape.len();
+        let n: usize = bx.shape.iter().product();
+        // Each cell's 1-based row-major position is computed in the working
+        // precision: it must be exact there.
+        if crate::precision::active() == crate::precision::Precision::Float32 && n >= 1 << 24 {
+            bail_tape!("faq: a compacted box of {n} cells has positions binary32 cannot hold");
+        }
         let mut strides = vec![1usize; nd];
         for d in (0..nd.saturating_sub(1)).rev() {
             strides[d] = strides[d + 1] * bx.shape[d + 1];
         }
-        let mut cols: Vec<Vec<f64>> = vec![Vec::new(); nd];
-        // Each output cell's 0-based position in the list (the first kept
-        // cell at a dropped one, whose gathered value the mask discards).
-        let mut pos = vec![0u32; keep.len()];
-        let mut m = 0usize;
-        for (p, &k) in keep.iter().enumerate() {
-            if k == 0.0 {
-                continue;
-            }
-            pos[p] = tape_index(m, "compacted cells")?;
-            m += 1;
+        let m = kept.len();
+        if m == 0 {
+            bail_tape!("faq: no kept cell to compact");
+        }
+        let mut cols: Vec<Vec<f64>> = vec![Vec::with_capacity(m); nd];
+        for &p in kept {
             for d in 0..nd {
                 cols[d].push((bx.lo[d] + ((p / strides[d]) % bx.shape[d]) as i64) as f64);
             }
         }
-        if m == 0 {
-            bail_tape!("faq: no kept cell to compact");
-        }
+        // Each output index's column is one array the body reads by name, not
+        // a literal spelled into it: an operator reference the body calls
+        // spells its cell parameters into its instance and passes them on to
+        // the references it calls, and a literal there would be carried,
+        // keyed and compiled once per call site and per function, each time
+        // at the size of the list. The column is not build-time data to the
+        // lowering, so a read through it is a gather the call runs, and a
+        // called function holds no table per kept cell.
         let mut subs: FxHashMap<&str, Expr> = FxHashMap::default();
+        let mut col_names: Vec<String> = Vec::with_capacity(nd);
         for d in 0..nd {
-            let col = Expr::operator(ExpressionNode {
-                op: "const".to_string(),
-                value: Some(crate::ConstValue::from_dense(
-                    &[m],
-                    std::mem::take(&mut cols[d]),
-                )),
-                ..Default::default()
-            });
+            let vals = Arc::new(std::mem::take(&mut cols[d]));
+            let slot = self.emit_const_data(&[m], &[1], vals, true)?;
+            if matches!(self.known.get(&slot), Some(Known::Data(_))) {
+                self.known.remove(&slot);
+            }
+            let name = format!("{PW_COL}{slot}");
+            self.obs_defined
+                .insert(name.clone(), ObsVal::Taped(LV::Arr(slot)));
             subs.insert(
                 bx.syms[d].as_str(),
                 Expr::operator(ExpressionNode {
                     op: "index".to_string(),
-                    args: vec![col, Expr::Variable(PW_SYM.to_string())],
+                    args: vec![
+                        Expr::Variable(name.clone()),
+                        Expr::Variable(PW_SYM.to_string()),
+                    ],
                     ..Default::default()
                 }),
             );
+            col_names.push(name);
         }
         let mut memo: FxHashMap<*const ExpressionNode, Expr> = FxHashMap::default();
         let cbody = subst_shared(body, &subs, &mut memo);
@@ -1207,6 +1210,9 @@ impl TapeBuilder<'_> {
         self.push_scope();
         let term = self.lower_filtered(&cbody, cfilter.as_ref(), &cbx, LV::Lit(identity));
         self.pop_scope();
+        for name in &col_names {
+            self.obs_defined.remove(name);
+        }
         self.held_exprs.push(cbody);
         self.held_exprs.extend(cfilter);
         let term = term?.unwrap_or(LV::Lit(identity));
@@ -1215,40 +1221,68 @@ impl TapeBuilder<'_> {
             Some(_) => bail_tape!("faq: a compacted term is not over the kept cells"),
             None => self.emit_fill(&term, &[m], &[1], Cadence::Const),
         };
-        // Every output cell gathers its position in the list, known at build:
-        // one table gather into the box's cells in row-major order, then the
-        // box's own shape.
-        let n = pos.len();
-        let table = tape_index(self.tables.gather_tables.len(), "gather tables")?;
-        self.tables.gather_tables.push(GatherTable {
+        // Every output cell's 1-based row-major position `f`, the number `c`
+        // of kept cells before it (a binary search of the ascending kept
+        // positions), and the kept position at `c + 1`, which is `f` exactly
+        // when the cell is kept. A cell past the last kept one reads the zero
+        // ghost, which no position equals.
+        let csec = self.placement(Cadence::Const);
+        let mut flat = LV::Lit(1.0);
+        for d in 0..nd {
+            let ramp = self.new_slot(&bx.shape, &bx.lo, false, csec);
+            self.emit(
+                Instr::Ramp {
+                    axis: d as u8,
+                    lo: 0,
+                    out: ramp,
+                },
+                csec,
+            );
+            let scaled = self.emit_bin(BinCode::Mul, LV::Arr(ramp), LV::Lit(strides[d] as f64))?;
+            flat = self.emit_bin(BinCode::Add, flat, scaled)?;
+        }
+        let kept_pos: Vec<f64> = kept.iter().map(|&p| (p + 1) as f64).collect();
+        let kept_slot = self.emit_const_data(&[m], &[1], Arc::new(kept_pos), true)?;
+        let before = self.new_slot(&bx.shape, &bx.lo, false, csec);
+        self.emit(
+            Instr::Count {
+                rel: CountRel::Lt,
+                axis: SrcRef::Slot(kept_slot),
+                lo: 0,
+                n: tape_index(m, "compacted cells")?,
+                sorted: true,
+                x: self.op_of(&flat),
+                out: before,
+            },
+            csec,
+        );
+        let at = self.emit_bin(BinCode::Add, LV::Arr(before), LV::Lit(1.0))?;
+        let found = self.emit_list_gather(&LV::Arr(kept_slot), &at, m, bx)?;
+        let is_kept = self.emit_bin(BinCode::Eq, found, flat)?;
+        let gathered = self.emit_list_gather(&vals, &at, m, bx)?;
+        self.emit_select(is_kept, gathered, LV::Lit(identity))
+    }
+
+    /// `src[at]` over `bx` for the 1-D list `src` of `m` elements and the
+    /// 1-based subscripts `at` over `bx`: an [`Instr::IndexGather`], where a
+    /// subscript past the list reads the zero ghost.
+    fn emit_list_gather(&mut self, src: &LV, at: &LV, m: usize, bx: &LBox) -> LResult<LV> {
+        let sec = self.placement(self.lv_cadence(src).max(self.lv_cadence(at)));
+        let spec = tape_index(self.tables.index_gathers.len(), "index gathers")?;
+        self.tables.index_gathers.push(IndexGatherSpec {
+            axes: smallvec::smallvec![GatherAxis::Data],
             src_shape: DimU::from_elem(m, 1),
-            pos,
+            shape: bx.shape.clone(),
         });
-        let sec = self.placement(self.lv_cadence(&vals));
-        let flat = if nd == 1 {
-            self.new_slot(&bx.shape, &bx.lo, false, sec)
-        } else {
-            self.new_slot(&[n], &[1], false, sec)
-        };
-        let instr = Instr::TableGather {
-            src: self.src_of(&vals),
-            table,
-            out: flat,
+        let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
+        let instr = Instr::IndexGather {
+            src: self.src_of(src),
+            idx: self.op_of(at),
+            spec,
+            out,
         };
         self.emit(instr, sec);
-        let gathered = if nd == 1 {
-            LV::Arr(flat)
-        } else {
-            let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
-            let instr = Instr::Reshape {
-                src: SrcRef::Slot(flat),
-                out,
-            };
-            self.emit(instr, sec);
-            LV::Arr(out)
-        };
-        let mask_slot = self.emit_const_data(&bx.shape, &bx.lo, keep, false)?;
-        self.emit_select(LV::Arr(mask_slot), gathered, LV::Lit(identity))
+        Ok(LV::Arr(out))
     }
 
     /// Resolve each contracted dimension's bound: a static interval as it
@@ -2368,6 +2402,10 @@ const COMPACT_KEEP_DENOM: usize = 4;
 /// The loop symbol of a compacted pointwise box (never an authored name).
 const PW_SYM: &str = "__esm_pw_k";
 
+/// The prefix of a compacted pointwise box's index column, named by its slot
+/// (never an authored name).
+const PW_COL: &str = "__esm_pw_col";
+
 /// `e` with each read of a name in `subs` replaced, a node reached twice
 /// mapping to one node (by address), and a sub-tree with nothing to replace
 /// returned as it stands.
@@ -2411,19 +2449,96 @@ fn same_expr(a: &Expr, b: &Expr) -> bool {
     }
 }
 
+/// The cells every gate over two output symbols admits, as ascending
+/// row-major positions in the box of `ranges`: [`pointwise_keep`]'s kept
+/// cells with every gate applied, listed from each gate's pairs rather than
+/// by a pass over the box. `None` when no gate applies.
+fn pointwise_kept(
+    ranges: &[(i64, i64)],
+    idx_names: &[String],
+    gates: &[BuiltGate],
+) -> LResult<Option<Vec<usize>>> {
+    let shape: Vec<usize> = ranges
+        .iter()
+        .map(|(l, h)| (h - l + 1).max(0) as usize)
+        .collect();
+    let mut strides = vec![1usize; shape.len()];
+    for d in (0..shape.len().saturating_sub(1)).rev() {
+        strides[d] = strides[d + 1] * shape[d + 1];
+    }
+    let mut keep: Option<Vec<usize>> = None;
+    for g in gates {
+        let pos = |s: &str| idx_names.iter().position(|x| x == s);
+        let (Some(a), Some(b)) = (pos(&g.sym_src), pos(&g.sym_tgt)) else {
+            continue;
+        };
+        // Offsets of every combination of the other output axes.
+        let mut offsets = vec![0usize];
+        for d in 0..shape.len() {
+            if d == a || d == b {
+                continue;
+            }
+            let (len, stride) = (shape[d], strides[d]);
+            offsets = offsets
+                .iter()
+                .flat_map(|&o| (0..len).map(move |k| o + k * stride))
+                .collect();
+        }
+        let in_range = |d: usize, v: i64| v >= ranges[d].0 && v <= ranges[d].1;
+        let mut admitted: Vec<usize> = Vec::new();
+        for (s, t) in g.index.pairs() {
+            if !in_range(a, s) || !in_range(b, t) || (a == b && s != t) {
+                continue;
+            }
+            let base = (s - ranges[a].0) as usize * strides[a]
+                + if a == b {
+                    0
+                } else {
+                    (t - ranges[b].0) as usize * strides[b]
+                };
+            admitted.extend(offsets.iter().map(|&o| base + o));
+            if admitted.len() > MAX_PROMOTED_ELEMS {
+                bail_tape!(
+                    "contracted: tuple list too long ({} tuples)",
+                    admitted.len()
+                );
+            }
+        }
+        admitted.sort_unstable();
+        admitted.dedup();
+        keep = Some(match keep {
+            None => admitted,
+            Some(prev) => {
+                let mut both = Vec::with_capacity(prev.len().min(admitted.len()));
+                let (mut x, mut y) = (0, 0);
+                while x < prev.len() && y < admitted.len() {
+                    match prev[x].cmp(&admitted[y]) {
+                        std::cmp::Ordering::Less => x += 1,
+                        std::cmp::Ordering::Greater => y += 1,
+                        std::cmp::Ordering::Equal => {
+                            both.push(prev[x]);
+                            x += 1;
+                            y += 1;
+                        }
+                    }
+                }
+                both
+            }
+        });
+    }
+    Ok(keep)
+}
+
 /// The admitted cells of a gated aggregate with no contracted index, as a
 /// row-major 0/1 mask over the output box: what [`enumerate_tuples`] admits
 /// with nothing contracted (a cell is kept when every gate over two output
 /// symbols holds its pair), built from each gate's pair list rather than by
 /// testing every cell. A gate the aggregate's `filter` already tests is left
-/// to the filter (with `with_filtered`, its pairs narrow the mask too, to a
-/// superset of the admitted cells the filter then decides); `None` when no
-/// gate masks a cell.
+/// to the filter; `None` when no gate masks a cell.
 fn pointwise_keep(
     idx_names: &[String],
     ranges: &[(i64, i64)],
     gates: &[BuiltGate],
-    with_filtered: bool,
 ) -> LResult<Option<Vec<f64>>> {
     let shape: Vec<usize> = ranges
         .iter()
@@ -2437,7 +2552,7 @@ fn pointwise_keep(
     // `None` until a gate applies: then the cells every applicable gate so
     // far admits.
     let mut keep: Option<Vec<f64>> = None;
-    for g in gates.iter().filter(|g| with_filtered || !g.in_filter) {
+    for g in gates.iter().filter(|g| !g.in_filter) {
         let pos = |s: &str| idx_names.iter().position(|x| x == s);
         let (Some(a), Some(b)) = (pos(&g.sym_src), pos(&g.sym_tgt)) else {
             continue;
@@ -2651,7 +2766,7 @@ mod tests {
                 .windows(2)
                 .map(|w| if w[1] > w[0] { 1.0 } else { 0.0 })
                 .collect();
-            let keep = pointwise_keep(&names, &ranges, gates, false)
+            let keep = pointwise_keep(&names, &ranges, gates)
                 .expect("keeps")
                 .unwrap_or_else(|| vec![1.0; walked.len()]);
             assert_eq!(keep, walked);
