@@ -182,14 +182,15 @@ fn a_ragged_range_under_a_free_index_scatters_per_free_cell() {
 
 /// The transposed product of an `overlap`-gated binning, `D(g) = faq_j Σ_{c,
 /// r : r == j} inside(c, r)·λ[c]·X[r]`, as EarthSciASTDiff's vector-Jacobian
-/// product document of a regrid writes it: the gate binds only contracted names and the filter pins the
-/// output index, so the gate's candidate pairs are walked once and scattered
-/// into their cells. The list holds the candidates, one run per record, not
-/// one walk of every candidate per output cell (`|recs| × |candidates|`
-/// tuples before). The output index ranges over a literal `[1, n]`, as the
-/// product documents write it: an `overlap` side resolves by index-set name,
-/// so with `j` drawn from `recs` the gate would bind `j` instead. Record `n` sits on the edge between cells 1 and 2, so the
-/// broad phase admits both and the body keeps one.
+/// product document of a regrid writes it: the gate binds only contracted
+/// names and the filter pins the output index, so the gate's candidate pairs
+/// are walked once and scattered into their cells. The list holds the
+/// candidates, one run per record, not one walk of every candidate per output
+/// cell (`|recs| × |candidates|` tuples before). The output index ranges over
+/// a literal `[1, n]`, as the product documents write it: an `overlap` side
+/// resolves by index-set name, so with `j` drawn from `recs` the gate would
+/// bind `j` instead. Record `n` sits on the edge between cells 1 and 2, so
+/// the broad phase admits both and the body keeps one.
 #[test]
 fn a_gated_scatter_walks_the_gates_candidates_once() {
     let n = 40usize;

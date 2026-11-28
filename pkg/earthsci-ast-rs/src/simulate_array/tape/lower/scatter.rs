@@ -845,8 +845,6 @@ impl TapeBuilder<'_> {
     }
 }
 
-/// `k` when `e` is `i + k`, `k + i`, `i - k` (as `-k`) or `i` (`0`), with
-/// `k` an integer literal.
 /// A [`TupleSink`] handing each admitted contracted tuple to `f`; `false`
 /// from `f` stops the walk.
 struct LeafSink<F>(F);
@@ -861,6 +859,8 @@ impl<F: FnMut(&[i64]) -> bool> TupleSink for LeafSink<F> {
     }
 }
 
+/// `k` when `e` is `i + k`, `k + i`, `i - k` (as `-k`) or `i` (`0`), with
+/// `k` an integer literal.
 fn unit_shift(e: &Expr, i_name: &str) -> Option<i64> {
     let int = |e: &Expr| match e {
         Expr::Integer(n) => Some(*n),
