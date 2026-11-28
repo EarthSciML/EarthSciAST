@@ -763,53 +763,67 @@ function _in_document_order(
 end
 
 """
-    _extract_field_ics!(pool) -> Vector{Pair{String, ASTExpr}}
+    _extract_field_ics!(pool, init; isobserved, sizes) -> Vector{Pair{String, ASTExpr}}
 
-Classify the deferred `ic` equations (esm-spec §11.4.1) OUT of `equations`,
-returning them as ordered `state => rhs` pairs.
+Classify the initialization equations OUT of `equations` ([`_ic_role`](@ref)):
+the explicit initial conditions are returned as ordered `state => rhs` pairs,
+every other initialization equation is appended to `init` (esm-spec §11.4.3).
+`isobserved` names the observeds (`ic(y)` of one is never explicit); `sizes`
+the index-set sizes a `faq` right-hand side's cells are read with, for the
+per-cell conflict check.
 
 §4.7.5 step 4 is normative that these entries are removed: an initial condition
 is a datum, not an equation of motion, so leaving it in `equations` makes that
 list unusable for building a right-hand side without first filtering it and makes
-equation counts incomparable across bindings. The LHS must be `ic(<bare
-variable>)` with exactly one argument — the same shape Rust's `extract_ic_target`
-and Python's `_collect_field_ics` match.
+equation counts incomparable across bindings.
 
 Runs LAST, after the pointwise lift and the independent-variable derivation, so
 every intermediate pass still sees the equation list it always did and only the
 FINAL, observable `equations` differs.
 """
-function _extract_field_ics!(pool::Vector{_FlatEq}, init::Vector{Equation} = Equation[])
+function _extract_field_ics!(
+        pool::Vector{_FlatEq}, init::Vector{Equation} = Equation[];
+        isobserved = _no_observed, sizes::AbstractDict = Dict{String, Int}()
+    )
     ics = Pair{String, ASTExpr}[]
     remaining = _FlatEq[]
     for fe in pool
-        eq = fe.eq
-        target = _is_explicit_ic(eq) ? _ic_lhs_variable(_oriented_ic(eq).lhs) : nothing
-        if target === nothing
-            # Every other initialization equation (esm-spec §11.4.3) leaves
-            # `equations` for `initialization_equations` (esm-libraries-spec
-            # §4.7.5, decision 9 of #818).
-            _is_initialization_equation(eq) ? push!(init, eq) : push!(remaining, fe)
-        else
+        r = _ic_role(fe.eq; isobserved = isobserved)
+        if r.kind === :explicit
             # The entry leaves `equations` and its contributions together;
             # `field_ics` carries none.
-            push!(ics, target => _oriented_ic(eq).rhs)
+            push!(ics, r.target => r.oriented.rhs)
+        elseif r.kind === :system
+            # Every other initialization equation (esm-spec §11.4.3), `ic(y) ~ e`
+            # of an observed `y` included, leaves `equations` for
+            # `initialization_equations` (esm-libraries-spec §4.7.5).
+            push!(init, fe.eq)
+        else
+            push!(remaining, fe)
         end
     end
-    # One initial condition per state (esm-libraries-spec §4.7.5 step 4
-    # `field_ics`). Two leave nothing to say which one holds, so the document is
-    # refused rather than one silently winning.
-    seen = Set{String}()
+    # Two explicit initial conditions that set one cell of a state leave
+    # nothing to say which one holds (esm-spec §11.4.3), so the document is
+    # refused rather than one silently winning; two over disjoint cells (`faq`
+    # right-hand sides over `[1, 1]` and `[2, 3]`) are not a conflict.
+    covered = Dict{String, Any}()
     duplicated = String[]
-    for (target, _) in ics
-        target in seen && !(target in duplicated) && push!(duplicated, target)
-        push!(seen, target)
+    for (target, rhs) in ics
+        cells = _ic_cover_cells(rhs, sizes)
+        prev = get(covered, target, missing)
+        if prev === missing
+            covered[target] = cells === nothing ? nothing : Set(cells)
+        elseif prev === nothing || cells === nothing || any(in(prev), cells)
+            target in duplicated || push!(duplicated, target)
+        else
+            union!(prev, cells)
+        end
     end
     isempty(duplicated) || throw(
         ConflictingDerivativeError(
             duplicated,
-            "states have more than one initial condition `ic(x)` (an authored " *
-                "one and an operator's `ic(_var)` expanded onto it, or two such templates)"
+            "states have more than one initial condition `ic(x)` setting the same cell " *
+                "(two authored ones, or an operator's `ic(_var)` expanded onto an authored one)"
         )
     )
     length(remaining) == length(pool) || append!(empty!(pool), remaining)
@@ -1311,7 +1325,10 @@ function _finish_flatten(st::FlattenState, pointwise)
     discrete = discrete_parameters(view)
     # The deferred `ic` equations leave `equations` (§4.7.5 step 4, normative);
     # last, so every pass above saw the list it always did.
-    st.field_ics = _extract_field_ics!(st.equations, st.init_equations)
+    st.field_ics = _extract_field_ics!(
+        st.equations, st.init_equations;
+        isobserved = n -> haskey(st.observeds, n), sizes = _index_set_sizes(st.index_sets)
+    )
     # A scaled angle argument of `sin`/`cos`/`tan` to radians (esm-spec §4.8.3).
     _normalize_angle_arguments!(st)
     # Each elementwise template application (esm-spec §9.6.11) as its per-cell

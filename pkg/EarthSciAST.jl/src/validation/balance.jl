@@ -212,56 +212,71 @@ end
 """
     _validate_ic_overdetermination(model, path, sizes) -> Vector{StructuralError}
 
-esm-spec §11.4.3 "What `validate` reports": the over-determination a document
-shows by itself, before any supplied value. The initialization equations of
-`model` that are not explicit initial conditions count at least one scalar
-equation each; the distinct starting values they mention that no explicit
-initial condition of the model sets count their declared element count. More
-equations than starting values is reported as `ic_system_unbalanced`. A
-starting value whose count the document does not settle (an observed's or a
-tendency's, which expand at build; a scoped one; an unresolved shape) counts
-as unbounded, so nothing is reported for it. Everything else in the balance is
-the build's.
+esm-spec §11.4.3 "What `validate` reports": the over-determination one model's
+initialization equations show by themselves, before any supplied value. Its
+equations that are not explicit initial conditions ([`_ic_role`](@ref), with no
+name read as an observed; the target a plain name) count their scalar equations
+([`_ic_equation_count`](@ref) with no variable shapes: a `faq` side with output
+indices one per cell, anything else one); the starting values they mention
+count all their cells, unless the model's explicit initial conditions set every
+one of them. More equations than cells is reported as `ic_system_unbalanced`.
+No finding when an extent cannot be read (an index set without a size, a scoped
+name, `ic(D(x))`). Everything else in the balance is the build's.
 """
 function _validate_ic_overdetermination(
         model::Model, path::String, sizes::AbstractDict
     )::Vector{StructuralError}
     errors = StructuralError[]
-    sys = Equation[eq for eq in model.equations if _is_initialization_equation(eq) && !_is_explicit_ic(eq)]
+    sys = Equation[]
+    covered = Dict{String, Any}()   # explicit target => nothing (all) or its cells
+    for eq in model.equations
+        r = _ic_role(eq)
+        r.kind === :dynamics && continue
+        if r.kind === :explicit && !occursin('.', r.target)
+            cells = _ic_cover_cells(r.oriented.rhs, sizes)
+            prev = get(covered, r.target, missing)
+            covered[r.target] = (cells === nothing || prev === nothing) ? nothing :
+                union(prev === missing ? Set{Vector{Int}}() : prev, cells)
+        else
+            push!(sys, eq)
+        end
+    end
     isempty(sys) && return errors
-    explicit = Set{String}(
-        _ic_lhs_variable(_oriented_ic(eq).lhs) for eq in model.equations if _is_explicit_ic(eq)
-    )
-    obs = keys(observed_definitions(model))
+    n_eqs = 0
     names = String[]
-    for eq in sys, side in (eq.lhs, eq.rhs), (n, is_d) in _ic_reads(side)
-        (is_d || n in obs || occursin('.', n)) && return errors
-        n in explicit || n in names || push!(names, n)
+    for eq in sys
+        c = _ic_equation_count(eq, sizes, Dict{String, Vector{String}}())
+        c === nothing && return errors
+        n_eqs += c
+        for side in (eq.lhs, eq.rhs), (n, is_d) in _ic_reads(side)
+            (is_d || occursin('.', n)) && return errors
+            n in names || push!(names, n)
+        end
     end
     n_values = 0
+    free = String[]
     for n in names
         v = get(model.variables, n, nothing)
         v === nothing && return errors
-        if v.shape === nothing || isempty(v.shape)
-            n_values += 1
-        else
-            c = 1
-            for s in v.shape
-                sz = get(sizes, String(s), nothing)
-                sz === nothing && return errors
-                c *= sz
-            end
-            n_values += c
+        cells = 1
+        for s in (v.shape === nothing ? () : v.shape)
+            sz = get(sizes, String(s), nothing)
+            sz === nothing && return errors
+            cells *= sz
         end
+        c = get(covered, n, missing)
+        (c === nothing || (c !== missing && length(c) >= cells)) && continue
+        n_values += cells
+        push!(free, n)
     end
-    length(sys) > n_values || return errors
+    n_eqs > n_values || return errors
     _report!(
         errors, ERROR_CODES.IC_SYSTEM_UNBALANCED, path,
-        "The initialization system is over-determined: $(length(sys)) initialization " *
-            "equation(s) that are not explicit initial conditions mention " *
-            "$(n_values) starting value(s) that no explicit initial condition sets " *
-            "(esm-spec §11.4.3)",
-        Dict{String, Any}("equations" => length(sys), "starting_values" => names)
+        "The initialization system is over-determined: the initialization equations " *
+            "that are not explicit initial conditions stand for $(n_eqs) scalar " *
+            "equation(s), and the starting values they mention that no explicit initial " *
+            "condition sets have $(n_values) cell(s) (esm-spec §11.4.3)",
+        Dict{String, Any}("equations" => n_eqs, "starting_values" => free)
     )
     return errors
 end

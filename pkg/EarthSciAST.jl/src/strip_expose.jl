@@ -422,10 +422,10 @@ function _strip_reaction_system(
 end
 
 """
-    _strip_document(file::EsmFile, classes) -> (stripped::EsmFile, constructs::StrippedConstructs)
+    _strip_document(file::EsmFile, classes) -> (stripped::EsmFile, constructs::StrippedConstructs, flat)
 
 `file` with `classes`' constructs removed, and what was removed, read off the
-flattened original (API_SPEC §5.8). One walk of the component tree decides both
+flattened original `flat` (API_SPEC §5.8), which is returned too. One walk of the component tree decides both
 what is reported and what is removed. Coupling-level events stay in the
 document: no build lowers one, and keeping them keeps the coupling indices of
 the stripped document's provenance the original's.
@@ -476,7 +476,7 @@ function _strip_document(file::EsmFile, classes::Vector{String})
     if "algebraic" in classes && any(eq -> _strippable_implicit(eq.lhs), flat.equations)
         _collect_algebraic!(s, flat)
     end
-    return reconstruct(file; models = models, reaction_systems = rsystems), s
+    return reconstruct(file; models = models, reaction_systems = rsystems), s, flat
 end
 
 function _set_sizes(sets, flat::FlattenedSystem)
@@ -633,7 +633,7 @@ function _z_starting_values(
                     rest = _z_fallback(flat, b, guesses, params)
                     vals = Float64[
                         x === nothing ? (rest === nothing ? NaN : rest[min(i, length(rest))]) : x
-                        for (i, x) in enumerate(vals)
+                            for (i, x) in enumerate(vals)
                     ]
                 end
             end

@@ -268,7 +268,8 @@ function _build_partition_and_materialize(
     # here; its explicit equations' seeds are resolved below with the
     # initialization equations, in dependency order.
     ic_struct = _ic_system_structure(model, model.initialization_equations)
-    ic_seeds = Equation[ic_struct.eqs[i].seed for i in ic_struct.order]
+    seed_at = Int[i for (i, e) in enumerate(ic_struct.eqs) if e.seed !== nothing]
+    ic_seeds = Equation[ic_struct.eqs[i].seed for i in seed_at]
     # A key column computed from scalar parameters folds their values into the
     # match set, so each one it reads is recorded as read at build
     # (`:structural`: a `remake` that changes it is refused).
@@ -326,10 +327,15 @@ function _build_partition_and_materialize(
             eq for eq in equations
                 if !(_vi_typed_lhs_base(eq.lhs) in vi_vars)
         ]
-        init_equations = Equation[
-            eq for eq in init_equations
-                if !(_vi_typed_lhs_base(eq.lhs) in vi_vars)
-        ]
+        for eq in init_equations
+            _vi_typed_lhs_base(eq.lhs) in vi_vars && throw(
+                TreeWalkError(
+                    ERROR_CODES.UNSUPPORTED_CONSTRUCT,
+                    "the initialization equation $(_ic_text(eq)) sets a value-invention " *
+                        "variable, which is materialized at setup, not given a starting value"
+                )
+            )
+        end
     end
 
     # ---- Extract discrete-cadence materialize defs (RANGE-RESOLVED) + drop them ----
@@ -373,15 +379,15 @@ function _build_partition_and_materialize(
         (plan, _ic_evaluate(plan, ic_t0, ic_data)...)
     end
 
-    # The resolved seeds back on their equations.
+    # The resolved seeds back on their equations, one for one (every pass
+    # above maps the seed list position by position).
+    length(init_equations) == length(seed_at) || error(
+        "internal: the initialization system's seeds were not resolved one for one"
+    )
     ic_eqs = copy(ic_struct.eqs)
-    if length(init_equations) == length(ic_struct.order)
-        for (k, i) in enumerate(ic_struct.order)
-            e = ic_eqs[i]
-            ic_eqs[i] = _IcSysEq(e.authored, e.target, e.reads, e.mentions, init_equations[k])
-        end
+    for (k, i) in enumerate(seed_at)
+        ic_eqs[i] = _with_seed(ic_eqs[i], init_equations[k])
     end
-    ic_order = copy(ic_struct.order)
     # An explicit `faq` initial condition over some of its target's cells is
     # seeded first, before the system (`_ic_partial_faq`).
     partial = Tuple{String, ASTExpr}[
@@ -390,23 +396,19 @@ function _build_partition_and_materialize(
     if !isempty(partial)
         gone = Set{String}(first(p) for p in partial)
         field_ics = Tuple{String, ASTExpr}[p for p in field_ics if !(first(p) in gone)]
-        pre = Int[]
-        for (t, r) in partial
-            push!(
-                ic_eqs, _IcSysEq(
-                    Equation(OpExpr("ic", ASTExpr[VarExpr(t)]), r), t, String[], String[t],
-                    Equation(VarExpr(t), r), true
-                )
-            )
-            push!(pre, length(ic_eqs))
-        end
-        ic_order = vcat(pre, ic_order)
+        pre = _IcSysEq[
+            _IcSysEq(
+                Equation(OpExpr("ic", ASTExpr[VarExpr(t)]), r), t, String[], String[t],
+                Equation(VarExpr(t), r), true
+            ) for (t, r) in partial
+        ]
+        ic_eqs = vcat(pre, ic_eqs)
     end
-    ic_system = _IcSystem(ic_eqs, ic_order, ic_struct.implicit)
+    ic_system = _IcSystem(ic_eqs)
 
     return _EquationPartition(
         param_names, observed_names, state_var_names, param_scope,
-        geom_setup_arrays, derived_extents, equations, Equation[],
+        geom_setup_arrays, derived_extents, equations,
         discrete_defs, eq_ics, field_ics, ic_start, ic_plan, ic_system
     )
 end

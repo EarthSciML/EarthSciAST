@@ -551,22 +551,22 @@ function _mtk_ics_to_guesses!(system)
     return String[string(var) for (var, _) in moved]
 end
 
-# esm-spec §11.4.3 "Precedence": a `default` is never an equation of the
-# initialization system, only the starting point of its solve. ModelingToolkit
-# files a variable's default as an initial condition, which its initialization
-# holds fixed; so the default of each unknown whose starting value an
-# initialization equation that is not an explicit initial condition mentions
-# (and no explicit one sets) moves to `guesses`.
+# esm-spec §11.4.3 "Declared defaults": the default of an ODE state is its
+# known starting value, which ModelingToolkit holds fixed as an initial
+# condition, UNLESS an equation of the initialization system is in solved form
+# for that state (`_ic_role`): then the default yields, and it moves to
+# `guesses`, the starting point of the solve. An explicit initial condition is
+# never overridden: an equation solved for its target is not explicit in it.
 function _mtk_init_defaults_to_guesses!(system, flat::FlattenedSystem, handles)
     isempty(flat.initialization_equations) && return String[]
     ics = getfield(system, :initial_conditions)
     (ics isa AbstractDict && !isempty(ics)) || return String[]
     explicit = Set{String}(first(p) for p in flat.field_ics)
     names = Set{String}()
-    for eq in flat.initialization_equations, side in (eq.lhs, eq.rhs)
-        for (n, _) in EarthSciAST._ic_reads(side)
-            n in explicit || push!(names, n)
-        end
+    isobs = n -> haskey(flat.observed_variables, n)
+    for eq in flat.initialization_equations
+        t = EarthSciAST._ic_role(eq; isobserved = isobs).target
+        t === nothing || t in explicit || push!(names, t)
     end
     targets = Set{Any}(
         Symbolics.unwrap(handles[n]) for n in names if haskey(handles, n)
@@ -870,8 +870,8 @@ function _mtk_problem_impl(input, req::EarthSciAST._ProblemRequest)
     # An `ic` on a variable the compile solved away is a GUESS, not a
     # constraint (see `_mtk_ics_to_guesses!`).
     _mtk_ics_to_guesses!(system)
-    # A declared default of an unknown the initialization system determines is
-    # a starting point, never a constraint (esm-spec §11.4.3, "Precedence").
+    # A declared default of a state an initialization equation is solved for
+    # is a starting point, never a constraint (esm-spec §11.4.3).
     _mtk_init_defaults_to_guesses!(system, flat, _mtk_handles(system, rev))
 
     # The parameter overrides bind here: `op` is ModelingToolkit's merged

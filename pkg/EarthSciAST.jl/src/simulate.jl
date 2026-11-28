@@ -1422,14 +1422,20 @@ function _stripped_problem(input, req::_ProblemRequest, classes::Vector{String})
         input isa AbstractDict ?
         load_document(input; base_path = req.base_path, metaparameters = found.metaparameters) :
         _load_run_path(String(input), found.metaparameters)
-    sfile, sobj = _strip_document(file, classes)
+    sfile, sobj, flat = _strip_document(file, classes)
     # A `u0` entry of an algebraic unknown the strip moved to `z` is that
     # unknown's warm start, never a state element (esm-spec §11.4.3
     # "Precedence"): a full `u0` is not refused for naming it.
-    state_u0, z_u0 = _split_z_u0(req.u0, String[b.name for b in sobj.z_layout])
+    znames = String[b.name for b in sobj.z_layout]
+    state_u0, z_u0 = _split_z_u0(req.u0, znames, keys(flat.state_variables))
     sreq = state_u0 === req.u0 ? req : _with_u0(req, state_u0)
+    # The build reads both: the implicit part of the initialization system is
+    # handed back, and the stripped algebraic unknowns' starting values are the
+    # caller's (`_ic_system_finish`).
     prob = task_local_storage(:esm_strip_initialization, "initialization" in classes) do
-        _esm_problem(sfile, sreq; strip_taken = classes, found = found)
+        task_local_storage(:esm_strip_algebraic, znames) do
+            _esm_problem(sfile, sreq; strip_taken = classes, found = found)
+        end
     end
     sflat = prob.build.seed.prep.flat
     si = _stripped_init_from_build(prob.build.products.ic_stripped, sflat)
@@ -1459,11 +1465,15 @@ _with_u0(req::_ProblemRequest, u0) = _ProblemRequest(
 )
 
 # A caller `u0` split into the part naming state elements and the part naming
-# the stripped algebraic unknowns `znames` (by flattened element name). A key
-# names a `z` unknown when its base (before any `[…]`) is the unknown's
-# flattened name or its local, last-segment name.
-function _split_z_u0(u0, znames::Vector{String})
+# the stripped algebraic unknowns `znames` (by flattened element name). A key's
+# base (before any `[…]`) is resolved over every state name `states` of the
+# flattened original by the one caller-key resolver (`resolve_key`, esm-spec
+# §6.6.2): exact, qualified, or a unique suffix. It names a `z` unknown when it
+# resolves to one; a key whose base is ambiguous is refused, never guessed at.
+function _split_z_u0(u0, znames::Vector{String}, states)
     (u0 isa AbstractDict && !isempty(znames)) || return u0, Dict{String, Float64}()
+    table = NameTable(union(Set{String}(znames), Set{String}(String(n) for n in states)))
+    zset = Set{String}(znames)
     state = empty(u0)
     z = Dict{String, Float64}()
     for (k, v) in u0
@@ -1471,11 +1481,17 @@ function _split_z_u0(u0, znames::Vector{String})
         br = findfirst('[', key)
         base = br === nothing ? key : key[1:prevind(key, br)]
         suffix = br === nothing ? "" : key[br:end]
-        hit = findfirst(n -> n == base || endswith(n, "." * base), znames)
-        if hit === nothing
-            state[k] = v
+        r = resolve_key(table, base)
+        r.how === :ambiguous && throw(
+            SimulateError(
+                _override_ambiguous_message("u0", key, r.candidates; kind = "state"),
+                ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS
+            )
+        )
+        if r.name !== nothing && r.name in zset
+            z[r.name * suffix] = Float64(v)
         else
-            z[znames[hit] * suffix] = Float64(v)
+            state[k] = v
         end
     end
     return (isempty(z) ? u0 : state), z

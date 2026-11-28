@@ -1,32 +1,36 @@
 # tree_walk/build_ic_system.jl — the initialization system (esm 2.5.0,
 # esm-spec §11.4.2–§11.4.3) in the tree-walk build.
 #
-# Three stages, one per build phase that has what it needs:
+# Every equation is classified once, by `_ic_role` (initialization_system.jl),
+# the classification flatten, `validate` and the strip share. Three stages, one
+# per build phase that has what it needs:
 #
 #   * build entry (`_split_initialization_system`): every initialization
 #     equation that is not an explicit initial condition leaves the equation
 #     stream for `model.initialization_equations`, before any pass that reads
-#     equations as dynamics sees one.
-#   * phase 2 (`_ic_system_structure`): the equations' trajectory reads are
-#     refused (`ic_reads_state`), their observed and tendency starting values
-#     are expanded (§11.4.2 item 8), each is classified as explicit in one
-#     unknown (`ic(u) ~ e`) or implicit, and the explicit ones are ordered by
-#     what they read. Each explicit one becomes a SEED, `u ~ e′` with every
-#     `ic(w)` read as `w`: the build's initialization-equation seed evaluates
-#     it against the state built so far (`_seed_init_u0!`).
+#     equations as dynamics sees one, and its trajectory reads are refused
+#     (`ic_reads_state`).
+#   * phase 2 (`_ic_system_structure`): the starting values of observeds and
+#     tendencies are expanded (§11.4.2 item 8) and each equation in solved form
+#     (`ic(u) ~ e`) gets its SEED, `u ~ e′` with every `ic(w)` read as `w`: the
+#     build's initialization-equation seed evaluates it against the state built
+#     so far (`_seed_faq_init_u0!`).
 #   * phase 4 (`_ic_system_finish`): with the state layout, the explicit
-#     initial conditions and the supplied values in hand, the balance is
-#     checked (`ic_system_unbalanced`), then the implicit part — the implicit
-#     equations, those on a dependency cycle, and every equation that reads one
-#     of their unknowns — is refused (`unsupported_construct`) or, under the
-#     strip class `initialization`, left at its starting point and handed back.
-#     The seeds that remain are returned in order.
+#     initial conditions and the supplied values in hand, the knowns are fixed
+#     (explicit initial conditions, supplied ODE values, then the declared
+#     defaults of the ODE states no solved-form equation is left for), the
+#     balance is checked (`ic_system_unbalanced`), the solved-form equations are
+#     ordered by what they read, and the implicit part — the equations not in
+#     solved form, those on a dependency cycle, and every solved-form one that
+#     reads one of their undetermined starting values — is refused
+#     (`unsupported_construct`) or, under the strip class `initialization`,
+#     handed back. The seeds that remain are returned in order.
 
 # One equation of the initialization system.
 struct _IcSysEq
     # As authored (flattened), for diagnostics and the stripped residual.
     authored::Equation
-    # The target of an equation explicit in one unknown (`ic(u) ~ e`), else
+    # The unknown the equation is in solved form for (`ic(u) ~ e`), else
     # `nothing`.
     target::Union{Nothing, String}
     # The unknowns whose starting value the equation reads, the target
@@ -35,7 +39,7 @@ struct _IcSysEq
     # Every variable the equation mentions as a starting value (the target
     # included), for the balance.
     mentions::Vector{String}
-    # The seed (`u ~ e′`), for an explicit one.
+    # The seed (`u ~ e′`), for an equation in solved form.
     seed::Union{Nothing, Equation}
     # An explicit initial condition evaluated by the seed rather than the field
     # fold (a `faq` over some of its target's cells, `_ic_partial_faq`): not an
@@ -43,51 +47,47 @@ struct _IcSysEq
     explicit::Bool
 end
 _IcSysEq(a, t, r, m, s) = _IcSysEq(a, t, r, m, s, false)
+_with_seed(e::_IcSysEq, seed::Equation) = _IcSysEq(e.authored, e.target, e.reads, e.mentions, seed, e.explicit)
 
 struct _IcSystem
     eqs::Vector{_IcSysEq}
-    # The explicit equations in dependency order (indices into `eqs`).
-    order::Vector{Int}
-    # The implicit ones: not explicit in one unknown, or on a cycle.
-    implicit::Vector{Int}
 end
 
-const _EMPTY_IC_SYSTEM = _IcSystem(_IcSysEq[], Int[], Int[])
+const _EMPTY_IC_SYSTEM = _IcSystem(_IcSysEq[])
 
 """
     _split_initialization_system(model) -> Model
 
 `model` with every initialization equation that is not an explicit initial
-condition (esm-spec §11.4.3) moved out of `equations` into
+condition (esm-spec §11.4.3, [`_ic_role`](@ref)) moved out of `equations` into
 `initialization_equations`, after a typed model's deprecated block is read as
-the loader reads it (§11.4.4). The same object when there is nothing to move.
+the loader reads it (§11.4.4). An explicit `e ~ ic(u)` is filed as
+`ic(u) ~ e`. The trajectory reads of the moved equations are refused
+(`ic_reads_state`). The same object when there is nothing to change.
 """
 function _split_initialization_system(model::Model)
     migrated, guesses = _migrate_typed_initialization(model)
-    any(
-        eq -> _is_initialization_equation(eq) && (
-            !_is_explicit_ic(eq) || _ic_lhs_variable(eq.lhs) === nothing ||
-                _ic_needs_alignment(eq, model) !== nothing
-        ),
-        model.equations
-    ) || !isempty(model.initialization_equations) || return model
+    obs = observed_definitions(model)
+    isobs = n -> haskey(obs, n)
+    changed = !isempty(model.initialization_equations)
     kept = Equation[]
     sys = Equation[]
     for eq in Iterators.flatten((model.equations, migrated))
-        if _is_initialization_equation(eq) && !_is_explicit_ic(eq)
+        r = _ic_role(eq; isobserved = isobs)
+        if r.kind === :system
             push!(sys, eq)
+            changed = true
+        elseif r.kind === :explicit
+            lifted = _ic_needs_alignment(r.oriented, model)
+            e = lifted === nothing ? r.oriented : lifted
+            e === eq || (changed = true)
+            push!(kept, e)
         else
-            # An explicit `e ~ ic(u)` is filed as `ic(u) ~ e`.
-            eq = _is_explicit_ic(eq) ? _oriented_ic(eq) : eq
-            lifted = _is_explicit_ic(eq) ? _ic_needs_alignment(eq, model) : nothing
-            push!(kept, lifted === nothing ? eq : lifted)
+            push!(kept, eq)
         end
     end
-    # The trajectory reads are judged on the model as written, whose
-    # classification still sees the equation a refused one would have been.
-    _refuse_ic_trajectory_reads(
-        sys, Set{String}(solver_unknowns(model)), observed_definitions(model)
-    )
+    changed || return model
+    _refuse_ic_trajectory_reads(sys, Set{String}(solver_unknowns(model)), obs)
     g = isempty(guesses) ? model.guesses : merge(model.guesses, guesses)
     return reconstruct(model; equations = kept, initialization_equations = sys, guesses = g)
 end
@@ -120,58 +120,6 @@ function _ic_aligned_rhs(t::String, rhs::ASTExpr, variables::AbstractDict)
     arrayvars = Set{String}(n for (n, w) in variables if _is_array_shape(w.shape))
     any(n -> n in arrayvars && var_shapes[n] != shape, _referenced_var_names(rhs)) || return nothing
     return _lift_to_faq(rhs, shape, arrayvars, var_shapes)
-end
-
-# esm-spec §11.4.2: an equation that mentions `ic` holds at t0 only, so one
-# that also reads a state's trajectory (`D(x) ~ -(x - ic(x))/tau`) is refused.
-function _refuse_ic_trajectory_reads(sys, states::AbstractSet{String}, obs::AbstractDict)
-    for eq in sys, side in (eq.lhs, eq.rhs)
-        hit = _ic_trajectory_read(side, states, obs)
-        hit === nothing && continue
-        state, chain = hit
-        label = first(string(eq), 200)
-        reads = isempty(chain) ? "reads '$(state)', a state" :
-            "reads '" * join(chain, "', which reads '") * "', which reads '$(state)', a state"
-        throw(
-            TreeWalkError(
-                ERROR_CODES.IC_READS_STATE,
-                "the initialization equation $(label) $(reads), outside `ic`. An " *
-                    "equation that mentions `ic` holds at the start of the run only, so " *
-                    "it reads starting values `ic(w)`, never a state's trajectory " *
-                    "(esm-spec §11.4.2)"
-            )
-        )
-    end
-    return nothing
-end
-
-# The first state an expression reads outside its `ic` terms, directly or
-# through a chain of observeds: `(state, chain)`, or `nothing`.
-function _ic_trajectory_read(e::ASTExpr, states::AbstractSet{String}, obs::AbstractDict)
-    rest = _without_ic(e)
-    dnode = Ref{Any}(nothing)
-    foreach_subexpr(rest) do x
-        if dnode[] === nothing && x isa OpExpr && (x::OpExpr).op == "D"
-            dnode[] = x
-        end
-    end
-    if dnode[] !== nothing
-        r = _referenced_var_names(dnode[])
-        return (isempty(r) ? "D(…)" : "D($(first(sort!(collect(r)))))", String[])
-    end
-    seen = Set{String}()
-    function walk(names, chain)
-        for m in sort!(collect(names))
-            m in states && return (m, chain)
-            if haskey(obs, m) && !(m in seen)
-                push!(seen, m)
-                hit = walk(_referenced_var_names(_without_ic(obs[m])), String[chain; m])
-                hit === nothing || return hit
-            end
-        end
-        return nothing
-    end
-    return walk(_referenced_var_names(rest), String[])
 end
 
 # `e` with every starting value of an observed `ic(y)` replaced by `y`'s
@@ -214,14 +162,28 @@ function _ic_expand(e::ASTExpr, obs::AbstractDict, tend::AbstractDict, isunk, de
     return changed[] ? _ic_expand(out, obs, tend, isunk, depth + 1) : out
 end
 
+# `e` with every observed it reads replaced by its definition, to a fixed point.
+function _ic_inline_observeds(e::ASTExpr, obs::AbstractDict, depth::Int = 0)
+    depth > 64 && throw(
+        TreeWalkError(
+            ERROR_CODES.UNSUPPORTED_CONSTRUCT,
+            "the initialization system: an observed's definition expands without end " *
+                "(a definition cycle) in $(first(_ic_text(e), 200))"
+        )
+    )
+    e isa VarExpr && haskey(obs, (e::VarExpr).name) &&
+        return _ic_inline_observeds(obs[(e::VarExpr).name], obs, depth + 1)
+    return map_children(x -> _ic_inline_observeds(x, obs, depth), e)
+end
+
 _ic_names(e::ASTExpr) = String[n for (n, d) in _ic_reads(e) if !d]
 
 """
-    _ic_system_structure(model, sys; index_sets) -> _IcSystem
+    _ic_system_structure(model, sys) -> _IcSystem
 
-Phase 2 of the initialization system (see the file header): trajectory reads
-refused, starting values of observeds and tendencies expanded, each equation
-classified, the explicit ones ordered and given their seed.
+Phase 2 of the initialization system (see the file header): the starting
+values of observeds and tendencies expanded, each equation classified
+([`_ic_role`](@ref)) and, in solved form for a state, given its seed.
 """
 function _ic_system_structure(model::Model, sys::Vector{Equation})
     isempty(sys) && return _EMPTY_IC_SYSTEM
@@ -236,31 +198,30 @@ function _ic_system_structure(model::Model, sys::Vector{Equation})
             haskey(tend, n) || (tend[n] = eq.rhs)
         end
     end
-    isunk(n) = (v = get(model.variables, n, nothing); v !== nothing && v.type == UnknownVariable)
+    isunk = _is_unknown_of(model)
     arrayvars = Set{String}(n for (n, v) in model.variables if _is_array_shape(v.shape))
     var_shapes = Dict{String, Vector{String}}(
         n => String[String(s) for s in v.shape] for (n, v) in model.variables if v.shape !== nothing
     )
     eqs = _IcSysEq[]
-    _refuse_ic_trajectory_reads(sys, states, obs)
     for eq in sys
-        # `e ~ ic(u)` is classified as `ic(u) ~ e`; the authored equation is
-        # what a diagnostic or a stripped residual shows.
-        o = _oriented_ic(eq)
-        lhs = _ic_expand(o.lhs, obs, tend, isunk)
-        rhs = _ic_expand(o.rhs, obs, tend, isunk)
-        t = _ic_lhs_variable(lhs)
-        rnames = _ic_names(rhs)
-        mentions = unique!(vcat(_ic_names(lhs), rnames))
-        if t !== nothing && !haskey(obs, t) && !(t in rnames) && t in states
-            body = _ic_as_state(rhs)
-            if t in arrayvars && !(body isa OpExpr && _is_faq_op((body::OpExpr).op) &&
-                    !isempty(_output_idx_strings(body::OpExpr)))
+        # The authored equation is what a diagnostic or a stripped residual
+        # shows; the classification reads it with the item-8 expansions.
+        x = Equation(_ic_expand(eq.lhs, obs, tend, isunk), _ic_expand(eq.rhs, obs, tend, isunk))
+        r = _ic_role(x; isobserved = n -> haskey(obs, n))
+        mentions = unique!(vcat(_ic_names(x.lhs), _ic_names(x.rhs)))
+        t = r.target
+        if t !== nothing && t in states
+            # The seed reads the state built so far, where an observed has no
+            # slot: a bare read of one (`ic(z) ~ ic(x) + g`) is its definition,
+            # evaluated at the start like any other start-of-run read.
+            body = _ic_inline_observeds(_ic_as_state(r.oriented.rhs), obs)
+            if t in arrayvars && !_is_cell_faq(body)
                 body = _lift_to_faq(body, var_shapes[t], arrayvars, var_shapes)
             end
             push!(
                 eqs, _IcSysEq(
-                    eq, t, String[n for n in rnames if n != t], mentions,
+                    eq, t, String[n for n in mentions if n != t], mentions,
                     Equation(VarExpr(t), body; _comment = eq._comment)
                 )
             )
@@ -268,27 +229,26 @@ function _ic_system_structure(model::Model, sys::Vector{Equation})
             push!(eqs, _IcSysEq(eq, nothing, mentions, mentions, nothing))
         end
     end
-    # Kahn's order over the explicit equations: one reading another's target
-    # comes after it. What stays on a cycle is implicit.
+    return _IcSystem(eqs)
+end
+
+# The equations `idx` of `eqs` (each in solved form) in dependency order: one
+# reading another's target comes after it (Kahn's order). Returns
+# `(order, cyclic)`, `cyclic` the ones left on a dependency cycle.
+function _ic_seed_order(eqs::Vector{_IcSysEq}, idx::Vector{Int})
     by_target = Dict{String, Vector{Int}}()
-    for (i, e) in enumerate(eqs)
-        e.target === nothing || push!(get!(by_target, e.target, Int[]), i)
+    for i in idx
+        push!(get!(by_target, eqs[i].target, Int[]), i)
     end
-    deps = Dict{Int, Set{Int}}()
-    for (i, e) in enumerate(eqs)
-        e.target === nothing && continue
-        d = Set{Int}()
-        for r in e.reads, j in get(by_target, r, Int[])
-            push!(d, j)
-        end
-        deps[i] = d
-    end
+    deps = Dict{Int, Set{Int}}(
+        i => Set{Int}(j for r in eqs[i].reads for j in get(by_target, r, Int[])) for i in idx
+    )
     order = Int[]
     done = Set{Int}()
     progress = true
     while progress
         progress = false
-        for i in sort!(collect(keys(deps)))
+        for i in idx
             i in done && continue
             if issubset(deps[i], done)
                 push!(order, i)
@@ -297,8 +257,7 @@ function _ic_system_structure(model::Model, sys::Vector{Equation})
             end
         end
     end
-    implicit = Int[i for i in eachindex(eqs) if !(i in done)]
-    return _IcSystem(eqs, order, implicit)
+    return order, Int[i for i in idx if !(i in done)]
 end
 
 # Whether the explicit initial condition `ic(t) ~ rhs` (ranges resolved) is a
@@ -340,18 +299,6 @@ function _ic_var_slots(layout::StateLayout, name::String)
     b = _layout_block(layout, name)
     b === nothing && return Int[]
     return collect((b.base):(b.base + b.len - 1))
-end
-
-# The slots of `name` a cell-assigning faq right-hand side covers, else all.
-function _ic_cover_slots(layout::StateLayout, name::String, rhs::ASTExpr, sizes)
-    if rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) && !isempty(_output_idx_strings(rhs::OpExpr))
-        cells = _faq_range_cells(rhs::OpExpr, sizes)
-        if cells !== nothing
-            b = _layout_block(layout, name)
-            b === nothing || return Int[s for s in (_block_slot(b, c) for c in cells) if s != 0]
-        end
-    end
-    return _ic_var_slots(layout, name)
 end
 
 # The slots a supplied-value map names (`initial_conditions`, the caller's `u0`).
@@ -427,27 +374,6 @@ function _ic_assignment(eq_cap::Vector{Int}, var_cap::Vector{Int}, adj::Vector{V
     return flow, Int[cap[S, i] for i in 1:ne], Int[cap[ne + v, T] for v in 1:nv]
 end
 
-# The scalar equation count of an implicit equation: a top-level cell-assigning
-# `faq`'s cells, else the product of the index sets its array operands range
-# over (elementwise, aligned by name: §11.4.3 "Arrays"), else 1.
-function _ic_eq_count(eq::Equation, model::Model, sizes)
-    for side in (eq.lhs, eq.rhs)
-        if side isa OpExpr && _is_faq_op((side::OpExpr).op) && !isempty(_output_idx_strings(side::OpExpr))
-            c = _faq_range_cells(side::OpExpr, sizes)
-            c === nothing || return length(c)
-        end
-    end
-    sets = String[]
-    for n in union(_referenced_var_names(eq.lhs), _referenced_var_names(eq.rhs))
-        v = get(model.variables, n, nothing)
-        (v === nothing || !_is_array_shape(v.shape)) && continue
-        for s in v.shape
-            String(s) in sets || push!(sets, String(s))
-        end
-    end
-    return prod((get(sizes, s, 1) for s in sets); init = 1)
-end
-
 # What the strip class `initialization` hands back (API_SPEC §5.8): the removed
 # equations, their unknowns as element names in state-layout order and each
 # unknown's starting point. PR #820's draft shape; kept in this one record.
@@ -456,10 +382,6 @@ struct _StrippedInitialization
     unknowns::Vector{String}
     x0::Vector{Float64}
 end
-
-# Whether the current Problem construction asked for the strip class
-# `initialization` (`esm_problem(…; strip)`, set by `_stripped_problem`).
-_strip_initialization_requested() = get(task_local_storage(), :esm_strip_initialization, false)::Bool
 
 # A starting point of an element of the removed implicit part (API_SPEC §5.8,
 # PR #820's draft): the supplied value of an algebraic unknown, else its
@@ -477,6 +399,26 @@ function _ic_starting_point(model::Model, name::String, slot::Int, u0, algebraic
     return 0.0
 end
 
+# The slots of `name` an explicit initial condition or a seed with right-hand
+# side `rhs` sets (`_ic_cover_cells`): a cell-assigning `faq`'s cells, else all.
+function _ic_cover_slots(layout::StateLayout, name::String, rhs::ASTExpr, sizes)
+    cells = _ic_cover_cells(rhs, sizes)
+    if cells !== nothing
+        b = _layout_block(layout, name)
+        b === nothing || return Int[s for s in (_block_slot(b, c) for c in cells) if s != 0]
+    end
+    return _ic_var_slots(layout, name)
+end
+
+# Whether the current Problem construction asked for the strip class
+# `initialization` (`esm_problem(…; strip)`, set by `_stripped_problem`).
+_strip_initialization_requested() = get(task_local_storage(), :esm_strip_initialization, false)::Bool
+
+# The algebraic unknowns the strip class `algebraic` handed to the caller (by
+# flattened name; set by `_stripped_problem`): their starting values are the
+# caller's to find (esm-spec §11.4.3).
+_strip_algebraic_names() = get(task_local_storage(), :esm_strip_algebraic, String[])::Vector{String}
+
 """
     _ic_system_finish(sys, model, layout, u0; …) -> (seeds, stripped)
 
@@ -491,16 +433,19 @@ function _ic_system_finish(
     )
     isempty(sys.eqs) && return Equation[], nothing
     n = length(u0)
-    sizes = Dict{String, Int}(
-        String(k) => v.size for (k, v) in index_sets if v isa IndexSet && v.size !== nothing
+    sizes = _index_set_sizes(index_sets)
+    var_sets = Dict{String, Vector{String}}(
+        k => String[String(s) for s in v.shape] for (k, v) in model.variables if _is_array_shape(v.shape)
     )
     ode = Set{String}(ode_states(model))
+    slots(v) = _ic_var_slots(layout, v)
+    cover(e::_IcSysEq) = _ic_cover_slots(layout, e.target, e.seed.rhs, sizes)
     slotvar(s) = s <= length(_layout_scalar_names(layout)) ? _layout_scalar_names(layout)[s] :
         _layout_block_name(layout, s)
     # ---- known: explicit initial conditions, then supplied ODE-state values ----
     known = Set{Int}()
     for k in keys(eq_ics)
-        union!(known, _ic_var_slots(layout, String(k)))
+        union!(known, slots(String(k)))
     end
     for (t, r) in field_ics
         union!(known, _ic_cover_slots(layout, t, r, sizes))
@@ -512,29 +457,66 @@ function _ic_system_finish(
     supplied_ode = Set{Int}(s for s in supplied if slotvar(s) in ode)
     algebraic_supplied = setdiff(supplied, supplied_ode)
     union!(known, supplied_ode)
+    explicit_seeds = Equation[]
     for e in sys.eqs
-        e.explicit && union!(known, _ic_cover_slots(layout, e.target, e.seed.rhs, sizes))
+        e.explicit || continue
+        union!(known, cover(e))
+        push!(explicit_seeds, e.seed)
     end
     members = Int[i for i in eachindex(sys.eqs) if !sys.eqs[i].explicit]
-    if isempty(members)
-        return Equation[sys.eqs[i].seed for i in sys.order], nothing
+    isempty(members) && return explicit_seeds, nothing
+    # ---- an equation solved for a known is not explicit in it (§11.4.3) ----
+    eqs = copy(sys.eqs)
+    why = String[]
+    for i in members
+        e = eqs[i]
+        e.target === nothing && continue
+        hit = intersect(Set{Int}(cover(e)), known)
+        isempty(hit) && continue
+        eqs[i] = _IcSysEq(e.authored, nothing, e.mentions, e.mentions, nothing)
+        push!(
+            why, "$(join(sort!([_slot_key(layout, s) for s in hit]), ", ")) is already known " *
+                (
+                isempty(intersect(hit, supplied_ode)) ? "from an explicit initial condition" :
+                    "from its supplied value"
+            ) * ", so $(_ic_text(e.authored)) is not solved for it"
+        )
     end
-    # ---- unknowns and the balance ----
+    # ---- the declared defaults of ODE states (§11.4.3 "Declared defaults") ----
+    # A known, unless an equation in solved form is left for the state; a
+    # stripped algebraic unknown's starting value is the caller's.
+    yielded = Set{Int}()
+    for i in members
+        eqs[i].target === nothing || union!(yielded, cover(eqs[i]))
+    end
+    caller = Set{Int}()
+    for z in _strip_algebraic_names()
+        union!(caller, setdiff(slots(z), known))
+    end
     vars = String[]
-    for i in members, m in sys.eqs[i].mentions
+    for i in members, m in eqs[i].mentions
         m in vars || push!(vars, m)
     end
+    for v in vars
+        d = get(model.variables, v, nothing)
+        (v in ode && d !== nothing && d.default !== nothing) || continue
+        for s in slots(v)
+            s in yielded || s in caller || push!(known, s)
+        end
+    end
+    # ---- unknowns and the balance ----
     var_unknown = Dict{String, Vector{Int}}(
-        v => Int[s for s in _ic_var_slots(layout, v) if !(s in known)] for v in vars
+        v => Int[s for s in slots(v) if !(s in known) && !(s in caller)] for v in vars
     )
     eq_cap = Int[
-        (e = sys.eqs[i]; e.target !== nothing ?
-            length(_ic_cover_slots(layout, e.target, e.seed.rhs, sizes)) :
-            _ic_eq_count(e.authored, model, sizes))
-        for i in members
+        (
+            e = eqs[i]; e.target !== nothing ? length(cover(e)) :
+                something(_ic_equation_count(e.authored, sizes, var_sets), 1)
+        )
+            for i in members
     ]
     vidx = Dict{String, Int}(v => i for (i, v) in enumerate(vars))
-    adj = Vector{Int}[Int[vidx[m] for m in sys.eqs[i].mentions] for i in members]
+    adj = Vector{Int}[Int[vidx[m] for m in eqs[i].mentions] for i in members]
     var_cap = Int[length(var_unknown[v]) for v in vars]
     flow, eq_left, var_left = _ic_assignment(eq_cap, var_cap, adj)
     n_eq, n_unk = sum(eq_cap; init = 0), sum(var_cap; init = 0)
@@ -543,18 +525,8 @@ function _ic_system_finish(
             "without an assignment of one equation to each unknown"
         undetermined = String[vars[v] for v in eachindex(vars) if var_left[v] > 0]
         spare = String[
-            first(string(sys.eqs[members[k]].authored), 160) for k in eachindex(members) if eq_left[k] > 0
+            first(_ic_text(eqs[members[k]].authored), 160) for k in eachindex(members) if eq_left[k] > 0
         ]
-        why = String[]
-        for i in members
-            e = sys.eqs[i]
-            e.target === nothing && continue
-            hit = intersect(Set(_ic_var_slots(layout, e.target)), supplied_ode)
-            isempty(hit) || push!(
-                why, "the supplied value of " * join(sort!([_slot_key(layout, s) for s in hit]), ", ") *
-                    " makes it a known of the system"
-            )
-        end
         throw(
             TreeWalkError(
                 ERROR_CODES.IC_SYSTEM_UNBALANCED,
@@ -565,58 +537,67 @@ function _ic_system_finish(
                     "Equations no unknown is left for: " *
                     (isempty(spare) ? "none" : join(spare, "; ")) * "." *
                     (isempty(why) ? "" : " " * join(why, "; ") * ".") *
-                    " A declared default is a starting point, never an equation of the system."
+                    " The declared default of a state is a known starting value unless an " *
+                    "equation in solved form is left for that state; an algebraic unknown's " *
+                    "default is only a starting guess."
             )
         )
     end
-    # ---- the implicit part, and everything that reads one of its unknowns ----
-    removed = Set{Int}(sys.implicit)
-    if !isempty(removed)
-        grew = true
-        while grew
-            grew = false
-            cut = Set{String}()
-            for i in removed, m in sys.eqs[i].mentions
-                isempty(var_unknown[m]) || push!(cut, m)
-            end
-            for i in sys.order
-                i in removed && continue
-                if any(r -> r in cut, sys.eqs[i].reads)
-                    push!(removed, i)
-                    grew = true
-                end
-            end
+    # ---- the solved-form equations in order; the implicit part ----
+    order, cyclic = _ic_seed_order(eqs, Int[i for i in members if eqs[i].target !== nothing])
+    implicit = vcat(Int[i for i in members if eqs[i].target === nothing], cyclic)
+    # A starting value the implicit part has to determine (one its equations
+    # mention that no ordered solved-form equation gives), or a stripped
+    # algebraic unknown's, is undetermined; a solved-form equation that reads
+    # one joins the implicit part, and its target is then undetermined too.
+    solved = Set{Int}()
+    for i in order
+        union!(solved, cover(eqs[i]))
+    end
+    undetermined = copy(caller)
+    for i in implicit, m in eqs[i].mentions, s in var_unknown[m]
+        s in solved || push!(undetermined, s)
+    end
+    removed = Set{Int}(implicit)
+    for i in order
+        e = eqs[i]
+        if any(r -> any(in(undetermined), slots(r)), e.reads)
+            push!(removed, i)
+            union!(undetermined, cover(e))
         end
     end
-    stripped = nothing
-    if !isempty(removed)
-        labels = String[first(string(sys.eqs[i].authored), 160) for i in sort!(collect(removed))]
-        _strip_initialization_requested() || throw(
-            TreeWalkError(
-                ERROR_CODES.UNSUPPORTED_CONSTRUCT,
-                "the initialization system is truly implicit (esm-spec §11.4.3): " *
-                    join(labels, "; ") * " must be solved for their unknowns, and the " *
-                    "tree-walk evaluator has no nonlinear solver. It does not start the " *
-                    "run from the guesses instead. Build with compiler = :mtk to solve it, " *
-                    "or pass `strip = (:initialization,)` to esm_problem to take it over"
-            )
+    kept = Int[i for i in order if !(i in removed)]
+    seeds = vcat(explicit_seeds, Equation[eqs[i].seed for i in kept])
+    isempty(removed) && return seeds, nothing
+    rem = sort!(collect(removed))
+    _strip_initialization_requested() || throw(
+        TreeWalkError(
+            ERROR_CODES.UNSUPPORTED_CONSTRUCT,
+            "the initialization system is truly implicit (esm-spec §11.4.3): " *
+                join((first(_ic_text(eqs[i].authored), 160) for i in rem), "; ") *
+                " must be solved for their unknowns, and the tree-walk evaluator has no " *
+                "nonlinear solver. It does not start the run from the guesses instead. " *
+                "Build with compiler = :mtk to solve it, or pass " *
+                "`strip = (:initialization,)` to esm_problem to take it over"
         )
-        slots = Set{Int}()
-        for i in removed, m in sys.eqs[i].mentions
-            union!(slots, var_unknown[m])
-        end
-        ord = sort!(collect(slots))
-        x0 = Float64[]
-        for s in ord
-            v = _ic_starting_point(model, slotvar(s), s, u0, algebraic_supplied, params)
-            u0[s] = v
-            push!(x0, v)
-        end
-        stripped = _StrippedInitialization(
-            Equation[sys.eqs[i].authored for i in sort!(collect(removed))],
-            String[_slot_key(layout, s) for s in ord], x0
-        )
+    )
+    given = Set{Int}()
+    for i in kept
+        union!(given, cover(eqs[i]))
     end
-    seeds = Equation[sys.eqs[i].seed for i in sys.order if !(i in removed)]
+    unk = Set{Int}()
+    for i in rem, m in eqs[i].mentions, s in var_unknown[m]
+        s in given || push!(unk, s)
+    end
+    ord = sort!(collect(unk))
+    x0 = Float64[]
+    for s in ord
+        v = _ic_starting_point(model, slotvar(s), s, u0, algebraic_supplied, params)
+        u0[s] = v
+        push!(x0, v)
+    end
+    stripped = _StrippedInitialization(
+        Equation[eqs[i].authored for i in rem], String[_slot_key(layout, s) for s in ord], x0
+    )
     return seeds, stripped
 end

@@ -107,6 +107,11 @@ function _resolve_field_ic(
             )
         catch err
             _is_resource_error(err) && rethrow()
+            # A cell-assigning `faq` is only ever a coordinate expression: its
+            # own refusal (an out-of-range gather, say) is the document's error,
+            # code and all, not a reason to report the forms that never applied.
+            _is_cell_faq(rhs) && err isa TreeWalkError &&
+                err.code != "E_TREEWALK_UNSUPPORTED_EQUATION" && rethrow()
             push!(_errs, "as coordinate expression: $(sprint(showerror, err))")
             nothing
         end
