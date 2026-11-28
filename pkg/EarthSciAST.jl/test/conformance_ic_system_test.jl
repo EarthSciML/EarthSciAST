@@ -137,7 +137,7 @@ end
             end
             isempty(warns) && @test isempty(msgs)
         end
-        emitted = JSON3.read(JSON3.write(serialize_esm_file(file)))
+        emitted = JSON3.read(JSON3.write(EarthSciAST.serialize_esm_file(file)))
         m = get(l, :model, nothing)
         if m !== nothing
             model = emitted.models[Symbol(m)]

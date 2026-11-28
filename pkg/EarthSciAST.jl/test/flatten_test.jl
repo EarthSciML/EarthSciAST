@@ -1310,13 +1310,16 @@ end
       "coupling": [{"type": "variable_map", "from": "B.q", "to": "A.p", "transform": "param_to_var"}]
     }
     """
+    # The deprecated block is read as the explicit initial condition
+    # `ic(x) ~ p * 3` (esm-spec §11.4.4), which flatten files in `field_ics`.
     flat = EarthSciAST.flatten(EarthSciAST.load_string(doc))
-    init = only(flat.initialization_equations)
-    @test init.lhs == _V("A.x")
+    @test isempty(flat.initialization_equations)
+    init = only(flat.field_ics)
+    @test first(init) == "A.x"
     # Namespaced, then substituted by the `variable_map` as the equations are.
-    @test EarthSciAST.free_variables(init.rhs) == Set(["B.q"])
+    @test EarthSciAST.free_variables(last(init)) == Set(["B.q"])
     # Kept by a copy.
-    @test only(EarthSciAST.FlattenedSystem(flat; domain = nothing).initialization_equations) === init
+    @test only(EarthSciAST.FlattenedSystem(flat; domain = nothing).field_ics) === init
 end
 
 @testset "the subset maps are read off their parents" begin

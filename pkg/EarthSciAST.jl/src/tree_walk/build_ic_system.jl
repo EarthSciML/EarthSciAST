@@ -37,7 +37,12 @@ struct _IcSysEq
     mentions::Vector{String}
     # The seed (`u ~ e′`), for an explicit one.
     seed::Union{Nothing, Equation}
+    # An explicit initial condition evaluated by the seed rather than the field
+    # fold (a `faq` over some of its target's cells, `_ic_partial_faq`): not an
+    # equation of the system, its cells are knowns of it.
+    explicit::Bool
 end
+_IcSysEq(a, t, r, m, s) = _IcSysEq(a, t, r, m, s, false)
 
 struct _IcSystem
     eqs::Vector{_IcSysEq}
@@ -282,6 +287,36 @@ function _ic_system_structure(model::Model, sys::Vector{Equation})
     return _IcSystem(eqs, order, implicit)
 end
 
+# Whether the explicit initial condition `ic(t) ~ rhs` (ranges resolved) is a
+# cell-assigning `faq` that sets only some of `t`'s cells — a partial range, or
+# a pointwise filter whose excluded cells take the semiring's 0. The field fold
+# writes every cell of its target, so such an initial condition is evaluated by
+# the initialization-equation seed, which writes the cells of its ranges only
+# and leaves the rest at their default.
+function _ic_partial_faq(t::String, rhs::ASTExpr, model::Model, index_sets, derived_extents)
+    (rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op)) || return false
+    op = rhs::OpExpr
+    names = _output_idx_strings(op)
+    isempty(names) && return false
+    op.filter === nothing || return true
+    v = get(model.variables, t, nothing)
+    (v === nothing || !_is_array_shape(v.shape)) && return false
+    exts = _declared_shape_extents(v.shape, index_sets, derived_extents)
+    (exts === nothing || length(exts) != length(names)) && return false
+    rd = _ranges_dict(op)
+    for (d, n) in enumerate(names)
+        r = get(rd, n, nothing)
+        r isa AbstractVector || return false
+        rr = try
+            collect(_expand_int_range(r))
+        catch
+            return false
+        end
+        (isempty(rr) || first(rr) != 1 || last(rr) != exts[d] || length(rr) != exts[d]) && return true
+    end
+    return false
+end
+
 # ---- phase 4 -----------------------------------------------------------------
 
 # The slots of state variable `name` in `layout`, or empty.
@@ -463,22 +498,29 @@ function _ic_system_finish(
     supplied_ode = Set{Int}(s for s in supplied if slotvar(s) in ode)
     algebraic_supplied = setdiff(supplied, supplied_ode)
     union!(known, supplied_ode)
+    for e in sys.eqs
+        e.explicit && union!(known, _ic_cover_slots(layout, e.target, e.seed.rhs, sizes))
+    end
+    members = Int[i for i in eachindex(sys.eqs) if !sys.eqs[i].explicit]
+    if isempty(members)
+        return Equation[sys.eqs[i].seed for i in sys.order], nothing
+    end
     # ---- unknowns and the balance ----
     vars = String[]
-    for e in sys.eqs, m in e.mentions
+    for i in members, m in sys.eqs[i].mentions
         m in vars || push!(vars, m)
     end
     var_unknown = Dict{String, Vector{Int}}(
         v => Int[s for s in _ic_var_slots(layout, v) if !(s in known)] for v in vars
     )
     eq_cap = Int[
-        e.target !== nothing ?
+        (e = sys.eqs[i]; e.target !== nothing ?
             length(_ic_cover_slots(layout, e.target, e.seed.rhs, sizes)) :
-            _ic_eq_count(e.authored, model, sizes)
-        for e in sys.eqs
+            _ic_eq_count(e.authored, model, sizes))
+        for i in members
     ]
     vidx = Dict{String, Int}(v => i for (i, v) in enumerate(vars))
-    adj = Vector{Int}[Int[vidx[m] for m in e.mentions] for e in sys.eqs]
+    adj = Vector{Int}[Int[vidx[m] for m in sys.eqs[i].mentions] for i in members]
     var_cap = Int[length(var_unknown[v]) for v in vars]
     flow, eq_left, var_left = _ic_assignment(eq_cap, var_cap, adj)
     n_eq, n_unk = sum(eq_cap; init = 0), sum(var_cap; init = 0)
@@ -486,9 +528,12 @@ function _ic_system_finish(
         dir = n_eq > n_unk ? "over-determined" : n_eq < n_unk ? "under-determined" :
             "without an assignment of one equation to each unknown"
         undetermined = String[vars[v] for v in eachindex(vars) if var_left[v] > 0]
-        spare = String[first(string(sys.eqs[i].authored), 160) for i in eachindex(sys.eqs) if eq_left[i] > 0]
+        spare = String[
+            first(string(sys.eqs[members[k]].authored), 160) for k in eachindex(members) if eq_left[k] > 0
+        ]
         why = String[]
-        for e in sys.eqs
+        for i in members
+            e = sys.eqs[i]
             e.target === nothing && continue
             hit = intersect(Set(_ic_var_slots(layout, e.target)), supplied_ode)
             isempty(hit) || push!(

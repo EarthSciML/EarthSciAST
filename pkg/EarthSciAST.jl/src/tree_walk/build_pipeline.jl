@@ -381,7 +381,28 @@ function _build_partition_and_materialize(
             ic_eqs[i] = _IcSysEq(e.authored, e.target, e.reads, e.mentions, init_equations[k])
         end
     end
-    ic_system = _IcSystem(ic_eqs, ic_struct.order, ic_struct.implicit)
+    ic_order = copy(ic_struct.order)
+    # An explicit `faq` initial condition over some of its target's cells is
+    # seeded first, before the system (`_ic_partial_faq`).
+    partial = Tuple{String, ASTExpr}[
+        (t, r) for (t, r) in raw_field_ics if _ic_partial_faq(t, r, model, index_sets, derived_extents)
+    ]
+    if !isempty(partial)
+        gone = Set{String}(first(p) for p in partial)
+        field_ics = Tuple{String, ASTExpr}[p for p in field_ics if !(first(p) in gone)]
+        pre = Int[]
+        for (t, r) in partial
+            push!(
+                ic_eqs, _IcSysEq(
+                    Equation(OpExpr("ic", ASTExpr[VarExpr(t)]), r), t, String[], String[t],
+                    Equation(VarExpr(t), r), true
+                )
+            )
+            push!(pre, length(ic_eqs))
+        end
+        ic_order = vcat(pre, ic_order)
+    end
+    ic_system = _IcSystem(ic_eqs, ic_order, ic_struct.implicit)
 
     return _EquationPartition(
         param_names, observed_names, state_var_names, param_scope,

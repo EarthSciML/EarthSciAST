@@ -169,16 +169,27 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
                                     "lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
                                     "rhs" => 0.0
                                 ),
+                                # An initialization equation that is not an
+                                # explicit initial condition (esm-spec §11.4.3).
+                                Dict(
+                                    "lhs" => Dict(
+                                        "op" => "+",
+                                        "args" => Any[Dict("op" => "ic", "args" => Any["x"]), 1.0]
+                                    ),
+                                    "rhs" => 3.0
+                                ),
                             ],
-                            "initialization_equations" => Any[Dict("lhs" => "x", "rhs" => 2.0)]
                         )
                     )
                 )
             )
         )
-        @test !isempty(flat.initialization_equations)
+        @test length(flat.initialization_equations) == 1
+        @test isempty(flat.field_ics)
         doc = E.flattened_to_esm(flat)
-        @test length(doc["models"]["Flattened"]["initialization_equations"]) ==
-            length(flat.initialization_equations)
+        # A document spells it in `equations`, as every `ic` equation is.
+        @test !haskey(doc["models"]["Flattened"], "initialization_equations")
+        @test length(doc["models"]["Flattened"]["equations"]) ==
+            length(flat.equations) + length(flat.initialization_equations)
     end
 end

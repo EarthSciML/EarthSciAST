@@ -313,8 +313,10 @@ end
         ui, vi, ri = seed(m, :interpreter)
         @test all(un[vn["M.u[$i]"]] === ui[vi["M.u[$i]"]] for i in 1:5)
         @test all(un[vn["M.u[$i]"]] == 0.37 * i + 1.0 / (i + 2.0) for i in 1:5)
-        @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(M.u)"]
-        @test [r.rule for r in _pr_rows(ri, :setup_percell)] == ["init(M.u)"]
+        # The deprecated block reads as the explicit initial condition
+        # `ic(u) ~ faq(…)` over every cell (esm-spec §11.4.4): the field fold.
+        @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["ic(M.u)"]
+        @test [r.rule for r in _pr_rows(ri, :setup_percell)] == ["ic(M.u)"]
     end
 
     # A pointwise filter: a cell whose predicate is false is the semiring's 0̄
@@ -336,7 +338,7 @@ end
             ui, vi, _ = seed(m, :interpreter)
             @test [ui[vi["M.u[$i]"]] for i in 1:5] == [10.0, 20.0, zb, zb, zb]
             @test all(un[vn["M.u[$i]"]] === ui[vi["M.u[$i]"]] for i in 1:5)
-            @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(M.u)"]
+            @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["ic(M.u)"]
         end
     end
 
@@ -358,22 +360,26 @@ end
         ui, vi, _ = seed(m, :interpreter; param_arrays = Dict("M.F" => F))
         @test [ui[vi["M.u[$i]"]] for i in 1:5] == 2.0 .* F
         @test all(un[vn["M.u[$i]"]] === ui[vi["M.u[$i]"]] for i in 1:5)
-        @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(M.u)"]
+        @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["ic(M.u)"]
     end
 
-    # A body that reads ANOTHER state reads the initial state seeded so far, and
-    # the compiled fill takes that state as a snapshot of its current values,
-    # beside a live forcing buffer read at the output index.
+    # A body that reads ANOTHER state's starting value (a triangular equation
+    # of the initialization system, esm-spec §11.4.3) reads the initial state
+    # seeded so far, and the compiled fill takes that state as a snapshot of its
+    # current values, beside a live forcing buffer read at the output index.
+    # `v`'s starting value comes from its own explicit initial condition: a
+    # declared default is a starting point, never a value of the system.
     @testset "a faq initialization equation reading another state is a compiled fill" begin
         vvar = Dict(
             "v" => _PR.ModelVariable(
                 _PR.UnknownVariable; shape = ["x"],
-                default = 0.5
+                default = 9.0
             )
         )
         vzero = _PR.Equation(faq1(_Didx("v", _v("i"))), faq1(_n(0.0)))
+        vic = _PR.Equation(_PR.OpExpr("ic", _PR.ASTExpr[_v("v")]), _n(0.5))
         m = _PR.Model(
-            merge(uvar(), Fvar(), vvar), [zero_eq(), vzero];
+            merge(uvar(), Fvar(), vvar), [zero_eq(), vzero, vic];
             initialization_equations = [
                 _PR.Equation(
                     _v("u"),
@@ -394,10 +400,11 @@ end
         @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(M.u)"]
     end
 
-    # A body that reads its OWN target has only the per-cell forms, which walk a
-    # tree at every cell against the state as it is being written. A strict
-    # compiler refuses that by name; the interpreter takes it.
-    @testset "a self-reading faq initialization equation refuses under native" begin
+    # A body that reads its OWN target's starting value is not explicit in it:
+    # `ic(u) ~ faq(2i + index(ic(u), i))` is a truly implicit initialization
+    # system (esm-spec §11.4.3), which the tree-walk evaluator, having no
+    # nonlinear solver, refuses under every compiler.
+    @testset "a self-reading faq initialization equation is an implicit system" begin
         m = _PR.Model(
             uvar(), [zero_eq()];
             initialization_equations = [
@@ -407,17 +414,14 @@ end
                 ),
             ]
         )
-        e = try
-            seed(m, :native); nothing
-        catch err
-            err
+        for c in (:native, :interpreter)
+            e = try
+                seed(m, c); nothing
+            catch err
+                err
+            end
+            @test e isa _PR.TreeWalkError && e.code == _PR.ERROR_CODES.UNSUPPORTED_CONSTRUCT
         end
-        @test e isa _PR.TreeWalkError && e.code == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
-        @test occursin("init(M.u)", e.detail) && occursin("tree walk per cell", e.detail)
-        @test occursin(_PR._ONE_CELL_NOTE, e.detail)
-        ui, vi, ri = seed(m, :interpreter)
-        @test [ui[vi["M.u[$i]"]] for i in 1:5] == 2.0 .* (1:5)
-        @test !isempty(_pr_rows(ri, :setup_percell)) || !isempty(_pr_rows(ri, :setup_compiled))
     end
 
     # ── Field initial conditions answered once per field (#482) ───────────────
@@ -904,7 +908,10 @@ end
             )
             for c in (:native, :interpreter)
                 e = err_of(() -> seed(m, c; const_arrays = Dict("M.C" => collect(1.0:5.0))))
-                @test code_of(e) == code
+                # The block reads as an explicit field initial condition
+                # (esm-spec §11.4.4), whose fold names the out-of-range gather
+                # inside its own refusal.
+                @test code_of(e) == code || occursin(code, sprint(showerror, e))
             end
         end
     end
@@ -1254,15 +1261,25 @@ end
             )
         )
     )
+    # esm 2.5.0 (esm-spec §11.4.3): the block reads as `ic(w) ~ faq(2*index(ic(u), i))`,
+    # a triangular equation of the initialization system. `u`'s supplied value
+    # is a known of it; a declared default is not, so a `u` the caller supplies
+    # only in part leaves the system under-determined, and a supplied cell of
+    # `w`, the equation's target, over-determines it.
     cells(prob, v) = [prob.u0[prob.var_map["M.$v[$i]"]] for i in 1:3]
+    unbalanced(f) = try
+        f(); false
+    catch err
+        err isa _PR.TreeWalkError && err.code == _PR.ERROR_CODES.IC_SYSTEM_UNBALANCED
+    end
     for compiler in (:interpreter, :native)
-        p1 = _PR.esm_problem(doc, (0.0, 1.0); compiler = compiler, u0 = Dict("u[2]" => 7.0))
-        @test cells(p1, "u") == [1.0, 7.0, 1.0]
-        @test cells(p1, "w") == [2.0, 14.0, 2.0]
+        @test unbalanced(() -> _PR.esm_problem(doc, (0.0, 1.0); compiler = compiler, u0 = Dict("u[2]" => 7.0)))
         p2 = _PR.esm_problem(doc, (0.0, 1.0); compiler = compiler, u0 = Dict("u" => 4.0))
+        @test cells(p2, "u") == [4.0, 4.0, 4.0]
         @test cells(p2, "w") == [8.0, 8.0, 8.0]
-        p3 = _PR.esm_problem(doc, (0.0, 1.0); compiler = compiler, u0 = Dict("M.w[2]" => -1.0))
-        @test cells(p3, "w") == [2.0, -1.0, 2.0]
+        @test unbalanced(
+            () -> _PR.esm_problem(doc, (0.0, 1.0); compiler = compiler, u0 = Dict("u" => 4.0, "M.w[2]" => -1.0))
+        )
     end
 end
 

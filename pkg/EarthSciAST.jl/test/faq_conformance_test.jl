@@ -175,7 +175,9 @@ end
     m = doc["models"]["M"]
     m["equations"][1]["rhs"] = good
     m["initialization_equations"] = Any[Dict{String, Any}("lhs" => "y_cells", "rhs" => bad)]
-    cases["initialization equation"] = (doc, "/models/M/initialization_equations/0/rhs")
+    # The loader reads the deprecated block as an `ic` equation appended to
+    # `equations` (esm-spec §11.4.4), where validation finds it.
+    cases["initialization equation"] = (doc, "/models/M/equations/1/rhs")
 
     doc = deepcopy(base)
     m = doc["models"]["M"]
