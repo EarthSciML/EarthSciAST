@@ -480,6 +480,41 @@ def _supplied_z(name: str, length: int, u0: dict) -> list[float] | None:
     return None
 
 
+def _explicit_ic_values(flat: Any, name: str, rhs: Any, params: dict, t0: float) -> list[float]:
+    """An explicit ``ic(name) ~ rhs`` evaluated at ``t0``, column-major: the
+    shaped parameters in scope as their inline arrays, a whole-array
+    right-hand side aligned with ``name``'s index sets by name (esm-spec
+    §4.3.4; ``ic(bw) ~ aw0`` repeats ``aw0`` along the axes it lacks), and the
+    value broadcast over ``name``'s shape."""
+    import numpy as np
+
+    from .index_alignment import promoted_axes
+    from .simulation_array import (
+        _aligned_ic_rhs,
+        _eval_buildtime_field,
+        _resolve_index_set_shape,
+    )
+
+    arrays: dict[str, Any] = {}
+    for pname, pvar in flat.parameters.items():
+        d = getattr(pvar, "default", None)
+        if getattr(pvar, "shape", None) and isinstance(d, (list, tuple)):
+            arrays[pname] = np.asarray(d, dtype=float)
+    var = flat.state_variables.get(name)
+    decl = getattr(var, "shape", None)
+    shape = _resolve_index_set_shape(decl, flat.index_sets) if decl else None
+    body = _aligned_ic_rhs(name, rhs, promoted_axes(flat), flat.index_sets) if shape else rhs
+    v = np.asarray(
+        _eval_buildtime_field(
+            body, index_sets=flat.index_sets, param_values=params, input_arrays=arrays, t=t0
+        ),
+        dtype=float,
+    )
+    if shape:
+        v = np.broadcast_to(v, tuple(shape))
+    return v.ravel(order="F").tolist()
+
+
 def _z_start(
     flat: Any, name: str, length: int, params: dict, t0: float, u0: dict | None = None
 ) -> list[float | None]:
@@ -508,8 +543,7 @@ def _z_start(
     values = None
     if rhs is not None:
         try:
-            v = _eval_buildtime_field(rhs, index_sets=flat.index_sets, param_values=params, t=t0)
-            values = np.asarray(v, dtype=float).ravel(order="F").tolist()
+            values = _explicit_ic_values(flat, name, rhs, params, t0)
         except Exception:  # noqa: BLE001 — an unevaluable ic falls back to the default
             values = None
     if values is None:
