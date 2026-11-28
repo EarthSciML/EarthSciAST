@@ -850,7 +850,7 @@ end
     catch e
         e
     end
-    code_of(e) = e isa _PR.TreeWalkError || e isa _PR.ParseError ? e.code : nothing
+    code_of(e) = hasproperty(e, :code) ? getproperty(e, :code) : nothing
 
     @testset "seed_expression_ic!: an undeclared name is the caller's error" begin
         vm = Dict{String, Int}("M.u[$i]" => i for i in 1:3)
@@ -911,9 +911,8 @@ end
             for c in (:native, :interpreter)
                 e = err_of(() -> seed(m, c; const_arrays = Dict("M.C" => collect(1.0:5.0))))
                 # The block reads as an explicit field initial condition
-                # (esm-spec §11.4.4), whose fold names the out-of-range gather
-                # inside its own refusal.
-                @test code_of(e) == code || occursin(code, sprint(showerror, e))
+                # (esm-spec §11.4.4), whose fold refuses with the code.
+                @test code_of(e) == code
             end
         end
     end
@@ -1265,9 +1264,9 @@ end
     )
     # esm 2.5.0 (esm-spec §11.4.3): the block reads as `ic(w) ~ faq(2*index(ic(u), i))`,
     # a triangular equation of the initialization system. `u`'s supplied value
-    # is a known of it; a declared default is not, so a `u` the caller supplies
-    # only in part leaves the system under-determined, and a supplied cell of
-    # `w`, the equation's target, over-determines it.
+    # is a known of it, and so is its declared default ("Declared defaults"),
+    # so a `u` the caller supplies only in part reads the default elsewhere;
+    # a supplied cell of `w`, the equation's target, over-determines it.
     cells(prob, v) = [prob.u0[prob.var_map["M.$v[$i]"]] for i in 1:3]
     unbalanced(f) = try
         f(); false
@@ -1275,7 +1274,9 @@ end
         err isa _PR.TreeWalkError && err.code == _PR.ERROR_CODES.IC_SYSTEM_UNBALANCED
     end
     for compiler in (:interpreter, :native)
-        @test unbalanced(() -> _PR.esm_problem(doc, (0.0, 1.0); compiler = compiler, u0 = Dict("u[2]" => 7.0)))
+        p1 = _PR.esm_problem(doc, (0.0, 1.0); compiler = compiler, u0 = Dict("u[2]" => 7.0))
+        @test cells(p1, "u") == [1.0, 7.0, 1.0]
+        @test cells(p1, "w") == [2.0, 14.0, 2.0]
         p2 = _PR.esm_problem(doc, (0.0, 1.0); compiler = compiler, u0 = Dict("u" => 4.0))
         @test cells(p2, "u") == [4.0, 4.0, 4.0]
         @test cells(p2, "w") == [8.0, 8.0, 8.0]
