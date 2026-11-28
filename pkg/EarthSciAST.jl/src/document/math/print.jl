@@ -1673,9 +1673,27 @@ function index_parts(j)
     return xs[1], Any[xs[2:end]...]
 end
 
+"""`Math.distinctNames`: no name occurs twice."""
+distinct_names(ks) = allunique(ks)
+
+"""`Math.defOutsOK`: the left side's subscripts `os` and the ranges `rows` after the
+right side are those of a defining form: each subscript a name or `1` ([`out_ok`](@ref)),
+no name twice, and each row the range of one of the subscripts, at most once. A
+subscript with no row is an output index with no range, as in the bracket form."""
+function def_outs_ok(os, rows)
+    names = out_names(os)
+    return all(out_ok, os) && distinct_names(names) &&
+        all(kv -> kv.first in names, rows) &&
+        distinct_names([kv.first for kv in rows])
+end
+
 """`Math.unlift`: the equation `x_(os) = rhs` with the ranges `rows` of its output
 indices, as the equation it writes: `x = faq` with the output indices `os` and the
-rows' ranges, over `rhs` read as the reduction or as the body."""
+rows' ranges, over `rhs` read as the reduction (a `faq` with no output indices that
+ranges over at least one index, none of them an output index) or as the body. Nothing
+else is a defining form: a reduction with no range of its own (`sum v_j`,
+`limits(sum) v_j`, `sum_(j > 1) v_j`) would read as reducing what it does not, and the
+printer writes the bracket form for it."""
 function unlift(q, rows)
     sd = eq_sides(q)
     sd === nothing && return nothing
@@ -1683,16 +1701,19 @@ function unlift(q, rows)
     ip = index_parts(lhs)
     ip === nothing && return nothing
     x, os = ip
+    def_outs_ok(os, rows) || return nothing
     f = if is_red_node(rhs)
         kvs = rhs.kvs
         rs = look("ranges", kvs)
-        rest = rs isa JObj ? collect(rs.kvs) : Pair{String, Any}[]
+        (rs isa JObj && !isempty(rs.kvs)) || return nothing
+        names = out_names(os)
+        any(kv -> kv.first in names, rs.kvs) && return nothing
         JObj(
             sort_kvs(
                 vcat(
                     Pair{String, Any}[
                         "output_idx" => JArr(copy(os)),
-                        "ranges" => JObj(sort_kvs(vcat(rest, collect(rows)))),
+                        "ranges" => JObj(sort_kvs(vcat(collect(rs.kvs), collect(rows)))),
                     ],
                     [kv for kv in kvs if kv.first != "output_idx" && kv.first != "ranges"],
                 )

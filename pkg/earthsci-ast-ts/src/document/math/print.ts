@@ -2018,11 +2018,36 @@ function binParts(j: Json, op: string): readonly Json[] | undefined {
   return a.xs
 }
 
+/** `Math.distinctNames`: no name occurs twice. */
+export function distinctNames(ks: readonly string[]): boolean {
+  return new Set(ks).size === ks.length
+}
+
+/**
+ * `Math.defOutsOK`: the left side's subscripts `os` and the ranges `rows` after the
+ * right side are those of a defining form: each subscript a name or `1` ({@link outOk},
+ * as the bracket form's entries), no name twice, and each row the range of one of the
+ * subscripts, at most once. A subscript with no row is an output index with no range,
+ * as in the bracket form.
+ */
+export function defOutsOk(os: readonly Json[], rows: readonly Kv[]): boolean {
+  const names = outNames(os)
+  return (
+    os.every(outOk) &&
+    distinctNames(names) &&
+    rows.every((kv) => names.includes(kv[0])) &&
+    distinctNames(rows.map((kv) => kv[0]))
+  )
+}
+
 /**
  * `Math.unlift`: the equation `x_(os) = rhs` with the ranges `rows` of its output
  * indices, as the equation it writes: `x = faq` with the output indices `os` and the
- * rows' ranges, over `rhs` read as the reduction (a `faq` with no output indices) or as
- * the body.
+ * rows' ranges, over `rhs` read as the reduction (a `faq` with no output indices that
+ * ranges over at least one index, none of them an output index) or as the body.
+ * Nothing else is a defining form: a reduction with no range of its own (`sum v_j`,
+ * `limits(sum) v_j`, `sum_(j > 1) v_j`) would read as reducing what it does not, and
+ * the printer writes the bracket form for it.
  */
 export function unlift(q: Json, rows: readonly Kv[]): Json | undefined {
   const sides = binParts(q, '==')
@@ -2032,10 +2057,14 @@ export function unlift(q: Json, rows: readonly Kv[]): Json | undefined {
   if (ia === undefined || ia.length === 0 || ia[0].t !== 'str') return undefined
   const x = ia[0].s
   const os = ia.slice(1)
+  if (!defOutsOk(os, rows)) return undefined
   let f: Json
   if (rhs.t === 'obj' && isRedNode(rhs)) {
     const rs = look('ranges', rhs.kvs)
-    const rest: readonly Kv[] = rs?.t === 'obj' ? rs.kvs : []
+    if (rs?.t !== 'obj' || rs.kvs.length === 0) return undefined
+    const rest: readonly Kv[] = rs.kvs
+    const names = outNames(os)
+    if (rest.some((kv) => names.includes(kv[0]))) return undefined
     f = jobj(
       sortKvs([
         ['output_idx', jarr(os)],

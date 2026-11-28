@@ -2311,10 +2311,51 @@ func prWithoutOutRanges(kvs Obj) Obj {
 	return out
 }
 
+// prDistinctNames is `Math.distinctNames`: no name occurs twice.
+func prDistinctNames(ks []string) bool {
+	seen := make(map[string]bool, len(ks))
+	for _, k := range ks {
+		if seen[k] {
+			return false
+		}
+		seen[k] = true
+	}
+	return true
+}
+
+// prDefOutsOk is `Math.defOutsOK`: the left side's subscripts os and the ranges
+// rows after the right side are those of a defining form: each subscript a
+// name or `1` (prOutOk, as the bracket form's entries), no name twice, and each
+// row the range of one of the subscripts, at most once. A subscript with no row
+// is an output index with no range, as in the bracket form.
+func prDefOutsOk(os []Json, rows Obj) bool {
+	for _, o := range os {
+		if !prOutOk(o) {
+			return false
+		}
+	}
+	names := prOutNames(os)
+	if !prDistinctNames(names) {
+		return false
+	}
+	keys := make([]string, len(rows))
+	for i, kv := range rows {
+		if !slices.Contains(names, kv.K) {
+			return false
+		}
+		keys[i] = kv.K
+	}
+	return prDistinctNames(keys)
+}
+
 // prUnlift is `Math.unlift`: the equation `x_(os) = rhs` with the ranges rows
 // of its output indices, as the equation it writes: `x = faq` with the output
 // indices os and the rows' ranges, over rhs read as the reduction (a `faq` with
-// no output indices) or as the body.
+// no output indices that ranges over at least one index, none of them an
+// output index) or as the body. Nothing else is a defining form: a reduction
+// with no range of its own (`sum v_j`, `limits(sum) v_j`, `sum_(j > 1) v_j`)
+// would read as reducing what it does not, and the printer writes the bracket
+// form for it.
 func prUnlift(q Json, rows Obj) (Json, bool) {
 	lhs, rhs, ok := prBinNode(q, "==")
 	if !ok {
@@ -2336,12 +2377,20 @@ func prUnlift(q Json, rows Obj) (Json, bool) {
 		return nil, false
 	}
 	os := append([]Json{}, ia[1:]...)
+	if !prDefOutsOk(os, rows) {
+		return nil, false
+	}
 	var f Json
 	if kvs, isObj := rhs.(Obj); isObj && prIsRedNode(rhs) {
-		rest := Obj{}
-		if rv, has := exprLook("ranges", kvs); has {
-			if rs, ok := rv.(Obj); ok {
-				rest = rs
+		rv, _ := exprLook("ranges", kvs)
+		rest, ok := rv.(Obj)
+		if !ok || len(rest) == 0 {
+			return nil, false
+		}
+		names := prOutNames(os)
+		for _, kv := range rest {
+			if slices.Contains(names, kv.K) {
+				return nil, false
 			}
 		}
 		rr := append(append(Obj{}, rest...), rows...)

@@ -1650,10 +1650,30 @@ def _wrap_faq(rhs: Any, os: list, rows: list) -> Obj:
     )
 
 
+def distinct_names(ks: list) -> bool:
+    """``Math.distinctNames``: no name occurs twice."""
+    return len(set(ks)) == len(ks)
+
+
+def def_outs_ok(os: list, rows: list) -> bool:
+    """``Math.defOutsOK``: the left side's subscripts ``os`` and the ranges ``rows``
+    after the right side are those of a defining form: each subscript a name or
+    ``1``, no name twice, and each row the range of one of the subscripts, at
+    most once."""
+    names = out_names(os)
+    return (
+        all(out_ok(o) for o in os)
+        and distinct_names(names)
+        and all(k in names for k, _ in rows)
+        and distinct_names([k for k, _ in rows])
+    )
+
+
 def unlift(q: Any, rows: list) -> Any:
     """``Math.unlift``: the equation ``x_(os) = rhs`` with the ranges ``rows`` of its
     output indices, as the equation it writes; ``None`` when ``q`` is no such
-    equation."""
+    equation, or when its right side is a reduction with no range of its own or
+    one ranging over an output index."""
     if not (type(q) is Obj and len(q) == 2 and q[0][0] == "args" and q[1] == ("op", "==")):
         return None
     sides = q[0][1]
@@ -1668,12 +1688,18 @@ def unlift(q: Any, rows: list) -> Any:
     if type(ia) is not list or not ia or type(ia[0]) is not str:
         return None
     x, os = ia[0], ia[1:]
+    if not def_outs_ok(os, rows):
+        return None
     if is_red_node(rhs):
-        rs = look("ranges", rhs)
-        rest = list(rs) if type(rs) is Obj else []
+        rest = look("ranges", rhs)
+        if type(rest) is not Obj or not rest:
+            return None
+        names = out_names(os)
+        if any(k in names for k, _ in rest):
+            return None
         f = Obj(
             sort_kvs(
-                [("output_idx", list(os)), ("ranges", Obj(sort_kvs(rest + list(rows))))]
+                [("output_idx", list(os)), ("ranges", Obj(sort_kvs(list(rest) + list(rows))))]
                 + [kv for kv in rhs if kv[0] != "output_idx" and kv[0] != "ranges"]
             )
         )

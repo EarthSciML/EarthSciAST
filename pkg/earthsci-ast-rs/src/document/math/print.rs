@@ -2454,10 +2454,35 @@ fn node2<'a>(j: &'a Json, o: &str) -> Option<&'a [Json]> {
     }
 }
 
+/// `Math.distinctNames`: no name occurs twice.
+pub fn distinct_names<S: AsRef<str>>(ks: &[S]) -> bool {
+    ks.iter()
+        .enumerate()
+        .all(|(i, k)| !ks[i + 1..].iter().any(|k2| k2.as_ref() == k.as_ref()))
+}
+
+/// `Math.defOutsOK`: the left side's subscripts `os` and the ranges `rows`
+/// after the right side are those of a defining form: each subscript a name or
+/// `1` ([`out_ok`], as the bracket form's entries), no name twice, and each row
+/// the range of one of the subscripts, at most once. A subscript with no row is
+/// an output index with no range, as in the bracket form.
+pub fn def_outs_ok(os: &[Json], rows: &[(String, Json)]) -> bool {
+    let names = out_names(os);
+    let keys: Vec<&str> = rows.iter().map(|kv| kv.0.as_str()).collect();
+    os.iter().all(out_ok)
+        && distinct_names(&names)
+        && keys.iter().all(|k| names.iter().any(|n| n == k))
+        && distinct_names(&keys)
+}
+
 /// `Math.unlift`: the equation `x_(os) = rhs` with the ranges `rows` of its
 /// output indices, as the equation it writes: `x = faq` with the output indices
 /// `os` and the rows' ranges, over `rhs` read as the reduction (a `faq` with no
-/// output indices) or as the body.
+/// output indices that ranges over at least one index, none of them an output
+/// index) or as the body. Nothing else is a defining form ([`def_outs_ok`]): a
+/// reduction with no range of its own (`sum v_j`, `limits(sum) v_j`,
+/// `sum_(j > 1) v_j`) would read as reducing what it does not, and the printer
+/// writes the bracket form for it.
 pub fn unlift(q: &Json, rows: &[(String, Json)]) -> Option<Json> {
     let [lhs, rhs] = node2(q, "==")? else {
         return None;
@@ -2465,12 +2490,19 @@ pub fn unlift(q: &Json, rows: &[(String, Json)]) -> Option<Json> {
     let [Json::Str(x), os @ ..] = node2(lhs, "index")? else {
         return None;
     };
+    if !def_outs_ok(os, rows) {
+        return None;
+    }
     let f = match rhs {
         Json::Obj(kvs) if is_red_node(rhs) => {
-            let mut rs = match look("ranges", kvs) {
-                Some(Json::Obj(rs)) => rs.clone(),
-                _ => Vec::new(),
+            let Some(Json::Obj(rest)) = look("ranges", kvs) else {
+                return None;
             };
+            let names = out_names(os);
+            if rest.is_empty() || rest.iter().any(|kv| names.contains(&kv.0)) {
+                return None;
+            }
+            let mut rs = rest.clone();
             rs.extend(rows.iter().cloned());
             let mut fs = vec![
                 ("output_idx".to_string(), Json::Arr(os.to_vec())),
