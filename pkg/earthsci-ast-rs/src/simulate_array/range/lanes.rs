@@ -20,7 +20,7 @@
 //! itself and runs the same program, so a call's work is proportional to its
 //! lanes: the whole-domain values the hoisted reads reach (state-free
 //! observeds of the data) live once per lane program, in the gather
-//! program's context, computed once per parameter vector and forcing epoch
+//! program's context, computed once per parameter vector and forcing set
 //! and shared by every workspace.
 
 use super::forcing::{ForcingSet, ForcingSlot, RhsError, shape};
@@ -120,33 +120,67 @@ enum LaneTime {
 /// The gather program's context, shared by every workspace and lane input
 /// of one lane program (and its clones): it holds the whole-domain values
 /// of the state-free observeds the hoisted reads reach, computed once per
-/// parameter vector and forcing epoch (the tape's CONST and SEGMENT
+/// parameter vector and forcing set (the tape's CONST and SEGMENT
 /// sections), so no workspace holds a whole-domain array. A gather is a
 /// short critical section: it reads each hoisted value at each lane's cell.
+///
+/// Calls may alternate between forcing sets (a lane pool whose lanes
+/// straddle a forcing refresh evaluates some stages on the old set and some
+/// on the new one), so the context keeps a primed slab per live set
+/// ([`TapeCtx::keep_segments`]), and returning to a set swaps its slab back
+/// in rather than computing its SEGMENT values over the domain again. A
+/// set's slab is dropped once no clone of the set is left: its epoch can
+/// never be passed again.
 struct Shared {
-    ctx: std::sync::Mutex<Box<TapeCtx>>,
+    state: std::sync::Mutex<SharedState>,
+}
+
+struct SharedState {
+    ctx: Box<TapeCtx>,
+    /// The sets whose SEGMENT results the context may keep, by epoch, while
+    /// some clone of each is alive.
+    sets: Vec<(u64, std::sync::Weak<[Arc<[f64]>]>)>,
 }
 
 impl Shared {
     fn new(gather: &Arc<TapeProgram>) -> Self {
         let mut ctx = TapeCtx::new(Arc::clone(gather));
         ctx.set_serial();
+        ctx.keep_segments();
         Shared {
-            ctx: std::sync::Mutex::new(Box::new(ctx)),
+            state: std::sync::Mutex::new(SharedState {
+                ctx: Box::new(ctx),
+                sets: Vec::new(),
+            }),
         }
     }
 
-    /// The context, primed sections forgotten if a call panicked in it.
-    fn lock(&self) -> std::sync::MutexGuard<'_, Box<TapeCtx>> {
-        match self.ctx.lock() {
+    /// The context, ready for a call on `forcing`: its primed sections
+    /// forgotten if a call panicked in it, and `forcing` recorded.
+    fn lock(&self, forcing: &ForcingSet) -> std::sync::MutexGuard<'_, SharedState> {
+        let mut g = match self.state.lock() {
             Ok(g) => g,
             Err(poisoned) => {
-                self.ctx.clear_poison();
+                self.state.clear_poison();
                 let mut g = poisoned.into_inner();
-                g.invalidate_sections();
+                g.ctx.invalidate_sections();
                 g
             }
+        };
+        let epoch = forcing.epoch();
+        if !g.sets.iter().any(|s| s.0 == epoch) {
+            g.sets.push((epoch, forcing.liveness()));
         }
+        g
+    }
+}
+
+impl SharedState {
+    /// Drop the kept slab of every set no clone of which is left.
+    fn forget_dropped(&mut self) {
+        let SharedState { ctx, sets } = self;
+        sets.retain(|s| s.1.strong_count() > 0);
+        ctx.retain_segments(|e| sets.iter().any(|s| s.0 == e));
     }
 }
 
@@ -399,7 +433,8 @@ impl LaneProgram {
             return Ok(());
         }
         let _precision = crate::precision::enter(inner.precision);
-        let mut ctx = inner.shared.lock();
+        let mut shared = inner.shared.lock(forcing);
+        let ctx = &mut shared.ctx;
         let scope = crate::simulate_array::FaultScope::enter();
         let call = CallInputs {
             state: &bufs.state,
@@ -412,8 +447,10 @@ impl LaneProgram {
             t,
             declared: &inner.declared,
         };
-        run_tape_inputs(&mut ctx, &call, &mut bufs.values, false);
-        tape_fault(scope, &mut ctx)
+        run_tape_inputs(ctx, &call, &mut bufs.values, false);
+        let out = tape_fault(scope, ctx);
+        shared.forget_dropped();
+        out
     }
 
     /// [`Self::eval_into`] with every hoisted read taken from `inputs`, and
@@ -2626,7 +2663,7 @@ mod tests {
                 .expect("lanes");
             let inner = &*lanes.inner;
             assert!(matches!(inner.timing, LaneTime::PerLane));
-            let gather = Arc::clone(&inner.shared.lock().prog);
+            let gather = Arc::clone(&inner.shared.state.lock().unwrap().ctx.prog);
             (
                 per_call_elements(&inner.prog),
                 inner.prog.slab.total_elems,
@@ -2641,6 +2678,193 @@ mod tests {
         assert_eq!(small.2, large.2, "a gather's work grows with the domain");
         // The shared gather context holds the whole-domain observed.
         assert!(large.3 > small.3);
+    }
+
+    /// A pointwise decay forced by `G = faq_m F[m, j]`, a whole-domain
+    /// state-free observed of the forcing buffer `F[lon, lat]` (each cell
+    /// sums over the whole `lon` axis): the gather program's SEGMENT
+    /// section computes it.
+    fn forced_observed_program(nlon: i64) -> RhsProgram {
+        let refresh =
+            json!({"kind": "schedule", "interval": 60.0, "handler": {"handler_id": "reload"}});
+        let r2 = json!({"i": {"from": "lon"}, "j": {"from": "lat"}});
+        let ix = |v: &str, s: &[&str]| {
+            let mut args = vec![json!(v)];
+            args.extend(s.iter().map(|x| json!(x)));
+            json!({"op": "index", "args": args})
+        };
+        let doc = json!({
+            "esm": "2.0.0",
+            "metadata": {"name": "lane_forced", "authors": ["test"]},
+            "index_sets": {
+                "lon": {"kind": "interval", "size": nlon},
+                "lat": {"kind": "interval", "size": 3}
+            },
+            "models": {"M": {
+                "variables": {
+                    "A": {"type": "unknown", "units": "1", "shape": ["lon", "lat"],
+                          "default": 1.0},
+                    "G": {"type": "unknown", "units": "1", "shape": ["lon", "lat"]},
+                    "F": {"type": "parameter", "units": "1", "shape": ["lon", "lat"],
+                          "default": 0.25, "update": refresh},
+                    "k": {"type": "parameter", "units": "1/s", "default": 0.1}
+                },
+                "equations": [
+                    {"lhs": "G", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                        "ranges": r2,
+                        "expr": {"op": "faq", "args": [], "output_idx": [],
+                            "ranges": {"m": {"from": "lon"}},
+                            "expr": {"op": "*", "args": [ix("F", &["m", "j"]),
+                                {"op": "+", "args": [1.0, "i"]}]}}}},
+                    {"lhs": {"op": "faq", "args": [], "output_idx": ["i", "j"], "ranges": r2,
+                             "expr": {"op": "D", "args": [ix("A", &["i", "j"])], "wrt": "t"}},
+                     "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"], "ranges": r2,
+                        "expr": {"op": "+", "args": [
+                            {"op": "*", "args": [{"op": "-", "args": ["k"]}, ix("A", &["i", "j"])]},
+                            {"op": "*", "args": [{"op": "cos", "args": ["t"]},
+                                ix("G", &["i", "j"])]}]}}}
+                ]
+            }}
+        });
+        let prob = crate::esm_problem(
+            crate::ProblemInput::Json(&doc),
+            (0.0, 1.0),
+            crate::ProblemOptions {
+                compiler: Some(crate::Compiler::Native),
+                ..Default::default()
+            },
+        )
+        .expect("builds");
+        crate::rhs_program(&prob).expect("program")
+    }
+
+    /// Calls that alternate between forcing sets (a lane pool straddling a
+    /// forcing refresh) compute the whole-domain observeds of the data once
+    /// per set, not once per switch, and every lane still equals the
+    /// whole-domain program at its cell and time, bit for bit. A dropped
+    /// set's kept slab is dropped.
+    #[test]
+    fn alternating_forcing_sets_prime_the_gather_once_per_set() {
+        use crate::simulate_array::tape::section_primes;
+        let (nlon, nlat) = (5usize, 3usize);
+        let prog = forced_observed_program(nlon as i64);
+        let k = prog
+            .forcing_slots()
+            .iter()
+            .position(|s| s.name.ends_with("F"))
+            .expect("a slot for F");
+        let fa = prog.default_forcing();
+        let buf =
+            |s: f64| -> Arc<[f64]> { (0..nlon * nlat).map(|i| s + 0.125 * i as f64).collect() };
+        let fb = fa.replace(k, buf(1.0)).expect("replace");
+        let p = prog
+            .parameter_vector(&std::collections::HashMap::new())
+            .expect("p");
+        let cap = 4;
+        let lanes = prog
+            .lanes(
+                LaneKind::Cells {
+                    sets: vec!["lon".into(), "lat".into()],
+                },
+                cap,
+            )
+            .expect("lanes");
+        assert!(lanes.n_lane_inputs() > 0);
+        let kept = || {
+            lanes
+                .inner
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .ctx
+                .kept_segments()
+                .len()
+        };
+        let u: Vec<f64> = (0..nlon * nlat).map(|i| 0.5 + 0.01 * i as f64).collect();
+        // The whole-domain value of lane cell (i, j) at time t with set fs.
+        let whole = |t: f64, fs: &ForcingSet| -> Vec<f64> {
+            let mut ws = prog.new_workspace();
+            let mut du = vec![f64::NAN; u.len()];
+            prog.eval_into(&u, &[], &p, t, fs, &mut du, &mut ws)
+                .expect("whole");
+            du
+        };
+        let mut ws = lanes.new_workspace();
+        let mut inputs = lanes.lane_inputs();
+        let lay = lanes.layout().clone();
+        let mut ld = vec![0.0; lay.u_len];
+        let mut lu = vec![0.0; lay.u_len];
+        let la = vec![0.0; lay.aux_len];
+        for call in 0..8usize {
+            let fs = if call % 2 == 0 { &fa } else { &fb };
+            let mut cells = Vec::new();
+            for l in 0..cap {
+                let c = (call * 7 + l * 4) % (nlon * nlat);
+                let (i, j) = (c % nlon, c / nlon);
+                cells.extend([1 + i as i32, 1 + j as i32]);
+                lu[l] = u[c];
+            }
+            let ts: Vec<f64> = (0..cap)
+                .map(|l| 0.1 * call as f64 + 0.03 * l as f64)
+                .collect();
+            if call % 4 < 2 {
+                lanes
+                    .eval_times_into(&lu, &la, &p, &ts, fs, &cells, cap, &mut ld, &mut ws)
+                    .expect("lanes");
+            } else {
+                lanes
+                    .gather_lane_inputs(&mut inputs, &p, ts[0], fs, &cells, cap)
+                    .expect("gather");
+                lanes
+                    .eval_gathered_times_into(
+                        &lu, &la, &inputs, &p, &ts, &cells, cap, &mut ld, &mut ws,
+                    )
+                    .expect("gathered");
+            }
+            for l in 0..cap {
+                let c = (call * 7 + l * 4) % (nlon * nlat);
+                let w = whole(ts[l], fs);
+                assert_eq!(
+                    ld[l].to_bits(),
+                    w[c].to_bits(),
+                    "call {call}, lane {l}, cell {c}"
+                );
+            }
+        }
+        assert_eq!(kept(), 2, "a primed slab per set");
+        // Count the gather's primes alone: alternate the sets again, on the
+        // gather only.
+        let before_g = section_primes();
+        for call in 0..6 {
+            let fs = if call % 2 == 0 { &fa } else { &fb };
+            lanes
+                .gather_lane_inputs(&mut inputs, &p, 0.0, fs, &[1, 1], 1)
+                .expect("gather");
+        }
+        let after_g = section_primes();
+        assert_eq!(
+            (after_g.0 - before_g.0, after_g.1 - before_g.1),
+            (0, 0),
+            "a gather on a set already primed re-ran a primed section"
+        );
+        // A dropped set's context serves the next set: still two contexts.
+        drop(fb);
+        let fc = fa.replace(k, buf(2.0)).expect("replace");
+        lanes
+            .gather_lane_inputs(&mut inputs, &p, 0.0, &fc, &[1, 1], 1)
+            .expect("gather");
+        assert_eq!(kept(), 2, "a dropped set's slab is dropped");
+        let w = whole(0.0, &fc);
+        lu[0] = u[0];
+        lanes
+            .eval_gathered_times_into(&lu, &la, &inputs, &p, &[0.0], &[1, 1], 1, &mut ld, &mut ws)
+            .expect("gathered");
+        assert_eq!(
+            ld[0].to_bits(),
+            w[0].to_bits(),
+            "the reused context's value"
+        );
     }
 }
 

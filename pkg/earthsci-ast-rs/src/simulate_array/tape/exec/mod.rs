@@ -555,6 +555,58 @@ pub(in crate::simulate_array) struct TapeCtx {
     forcing_epoch: u64,
     /// The params slice the last call ran with (`None` before the first).
     last_params: Option<Vec<f64>>,
+    /// The slabs of the other forcing epochs primed under the current
+    /// parameters, when the context keeps them ([`TapeCtx::keep_segments`]).
+    segments: Option<SegmentStore>,
+}
+
+/// The slabs of the other forcing epochs a context primed under its current
+/// parameters (see [`TapeCtx::keep_segments`]). The context's own slab holds
+/// the epoch it last primed; each kept slab holds what that slab held when
+/// the context last left another epoch: the same CONST values, and that
+/// epoch's SEGMENT values. A call on a kept epoch swaps its slab in (and the
+/// slab it replaces out, under the epoch it held), so returning to an epoch
+/// moves no element. The SEGMENT section is a function of the parameters and
+/// the forcing alone, so the swapped-in values are, bit for bit, what running
+/// the section again would write.
+struct SegmentStore {
+    /// The parameter epoch every kept slab was primed under.
+    param_epoch: u64,
+    /// `(forcing epoch, the slab primed for it)`.
+    slabs: Vec<(u64, Vec<f64>)>,
+}
+
+impl SegmentStore {
+    /// Make `slab` the one primed for `forcing_epoch` if a slab is kept for
+    /// it under `param_epoch`, keeping the slab it replaces under `primed`,
+    /// the epoch that slab held; `false` (and nothing moved) otherwise.
+    fn swap_in(
+        &mut self,
+        param_epoch: u64,
+        primed: u64,
+        forcing_epoch: u64,
+        slab: &mut Vec<f64>,
+    ) -> bool {
+        if self.param_epoch != param_epoch {
+            return false;
+        }
+        let Some(k) = self.slabs.iter().position(|e| e.0 == forcing_epoch) else {
+            return false;
+        };
+        std::mem::swap(slab, &mut self.slabs[k].1);
+        self.slabs[k].0 = primed;
+        true
+    }
+
+    /// Keep a copy of `slab`, primed for `primed` under `param_epoch`,
+    /// before the SEGMENT section runs again over it for another epoch.
+    fn keep(&mut self, param_epoch: u64, primed: u64, slab: &[f64]) {
+        if self.param_epoch != param_epoch {
+            self.param_epoch = param_epoch;
+            self.slabs.clear();
+        }
+        self.slabs.push((primed, slab.to_vec()));
+    }
 }
 
 impl TapeCtx {
@@ -568,7 +620,40 @@ impl TapeCtx {
             param_epoch: 0,
             forcing_epoch: 1,
             last_params: None,
+            segments: None,
         }
+    }
+
+    /// Keep a slab per forcing epoch this context primes under its current
+    /// parameters, so a call that returns to an epoch swaps its slab back in
+    /// instead of running the SEGMENT section again: for a context shared by
+    /// calls that alternate between forcing sets. Each kept slab is the
+    /// size of the context's own; [`Self::retain_segments`] drops them.
+    pub(crate) fn keep_segments(&mut self) {
+        if self.segments.is_none() {
+            self.segments = Some(SegmentStore {
+                param_epoch: 0,
+                slabs: Vec::new(),
+            });
+        }
+    }
+
+    /// Drop the kept slab of every forcing epoch `keep` refuses.
+    pub(crate) fn retain_segments(&mut self, mut keep: impl FnMut(u64) -> bool) {
+        if let Some(store) = &mut self.segments {
+            store.slabs.retain(|e| keep(e.0));
+        }
+    }
+
+    /// The forcing epochs this context holds primed: its own slab's, then
+    /// every kept slab's.
+    #[cfg(test)]
+    pub(crate) fn kept_segments(&self) -> Vec<u64> {
+        let mut out = vec![self.exec.primed_forcing_epoch];
+        if let Some(s) = &self.segments {
+            out.extend(s.slabs.iter().map(|e| e.0));
+        }
+        out
     }
 
     /// Invalidate the SEGMENT section: the driver calls this after refreshing
@@ -592,6 +677,9 @@ impl TapeCtx {
         self.last_params = None;
         self.exec.primed_param_epoch = 0;
         self.exec.primed_forcing_epoch = 0;
+        if let Some(store) = &mut self.segments {
+            store.slabs.clear();
+        }
         self.exec.scratch.funcs.clear();
         #[cfg(not(target_arch = "wasm32"))]
         for p in &mut self.exec.peers {
@@ -897,9 +985,19 @@ pub(in crate::simulate_array) fn run_tape_inputs(
     }
     let (param_epoch, forcing_epoch) = (ctx.param_epoch, ctx.forcing_epoch);
     let TapeCtx {
-        prog, exec, mirror, ..
+        prog,
+        exec,
+        mirror,
+        segments,
+        ..
     } = ctx;
     let prog = &**prog;
+    // A kept slab has the program's own layout, which a call plan may grow
+    // and move.
+    #[cfg(not(target_arch = "wasm32"))]
+    let segments = segments.as_mut().filter(|_| exec.plan.is_none());
+    #[cfg(target_arch = "wasm32")]
+    let segments = segments.as_mut();
     #[cfg(not(target_arch = "wasm32"))]
     {
         let (ways, threads) = if exec.serial {
@@ -966,13 +1064,29 @@ pub(in crate::simulate_array) fn run_tape_inputs(
         exec.primed_forcing_epoch = forcing_epoch;
         #[cfg(test)]
         SECTION_PRIMES.with(|c| c.set((c.get().0 + 1, c.get().1)));
+        if let Some(store) = segments {
+            store.param_epoch = param_epoch;
+            store.slabs.clear();
+        }
         run_range(&env, 0..prime_end, exec, dy);
         refill_primed(prog, exec);
     } else if exec.primed_forcing_epoch != forcing_epoch {
-        exec.primed_forcing_epoch = forcing_epoch;
-        #[cfg(test)]
-        SECTION_PRIMES.with(|c| c.set((c.get().0, c.get().1 + 1)));
-        run_range(&env, const_end..prime_end, exec, dy);
+        let primed = std::mem::replace(&mut exec.primed_forcing_epoch, forcing_epoch);
+        let swapped = match segments {
+            Some(store) => {
+                let swapped = store.swap_in(param_epoch, primed, forcing_epoch, &mut exec.slab);
+                if !swapped && primed != 0 {
+                    store.keep(param_epoch, primed, &exec.slab);
+                }
+                swapped
+            }
+            None => false,
+        };
+        if !swapped {
+            #[cfg(test)]
+            SECTION_PRIMES.with(|c| c.set((c.get().0, c.get().1 + 1)));
+            run_range(&env, const_end..prime_end, exec, dy);
+        }
         refill_primed(prog, exec);
     }
     // With nothing reading the published observeds, the output-only tail of
