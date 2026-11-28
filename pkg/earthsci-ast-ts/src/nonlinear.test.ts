@@ -14,11 +14,14 @@ function loadFixture(name: string) {
 }
 
 describe('Nonlinear-system additions (gt-ebuq)', () => {
-  it('round-trips the ISORROPIA-shape fixture preserving init eqs, guesses, system_kind', () => {
+  it('round-trips the ISORROPIA-shape fixture: init eqs read as guesses, system_kind kept', () => {
     const { parsed } = loadFixture('nonlinear_isorropia_shape.esm')
     const model = parsed.models!.IsorropiaEq as Model
     expect(model.system_kind).toBe('nonlinear')
-    expect(model.initialization_equations).toHaveLength(2)
+    // esm 2.5.0 (esm-spec §11.4.4): a model with no time derivative reads its
+    // deprecated initialization equations as `guesses`; both unknowns already
+    // have one, which is kept.
+    expect(model.initialization_equations).toBeUndefined()
     expect(Object.keys(model.guesses!).sort()).toEqual(['H', 'SO4'])
 
     const first = toJson(parsed)
