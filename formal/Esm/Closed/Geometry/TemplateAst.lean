@@ -271,23 +271,25 @@ theorem op_or'' : Op.ofString "or" = .strict .or := rfl
 variable {env : Env α}
 
 theorem ev_un' {op : String} {o : StrictOp} (hop : Op.ofString op = .strict o) {a : Ast} {u : α}
-    (ha : eval a env = .ok (.num u)) :
+    (ha : eval a env = .ok (.num u)) (notGather : o ≠ .index := by decide) :
     eval (.node op [a]) env = (applyStrict o [.num u]).map Val.num := by
-  simp only [eval, hop, evalList, ha, bind, Except.bind, pure, Except.pure]
-  cases h : applyStrict o [.num u] <;> rfl
+  exact eval_strict_numbers env op [a] o [u] hop notGather
+    (by simp [evalList, ha, bind, Except.bind, pure, Except.pure])
 
 theorem ev_tri {op : String} {o : StrictOp} (hop : Op.ofString op = .strict o) {a b c : Ast}
-    {u v w : α} (ha : EV env a u) (hb : EV env b v) (hc : EV env c w) :
+    {u v w : α} (ha : EV env a u) (hb : EV env b v) (hc : EV env c w)
+    (notGather : o ≠ .index := by decide) :
     eval (.node op [a, b, c]) env = (applyStrict o [.num u, .num v, .num w]).map Val.num := by
-  simp only [eval, hop, evalList, ha, hb, hc, bind, Except.bind, pure, Except.pure]
-  cases h : applyStrict o [.num u, .num v, .num w] <;> rfl
+  exact eval_strict_numbers env op [a, b, c] o [u, v, w] hop notGather
+    (by simp [evalList, ha, hb, hc, bind, Except.bind, pure, Except.pure])
 
 theorem ev_quad {op : String} {o : StrictOp} (hop : Op.ofString op = .strict o) {a b c d : Ast}
-    {u v w x : α} (ha : EV env a u) (hb : EV env b v) (hc : EV env c w) (hd : EV env d x) :
+    {u v w x : α} (ha : EV env a u) (hb : EV env b v) (hc : EV env c w) (hd : EV env d x)
+    (notGather : o ≠ .index := by decide) :
     eval (.node op [a, b, c, d]) env =
       (applyStrict o [.num u, .num v, .num w, .num x]).map Val.num := by
-  simp only [eval, hop, evalList, ha, hb, hc, hd, bind, Except.bind, pure, Except.pure]
-  cases h : applyStrict o [.num u, .num v, .num w, .num x] <;> rfl
+  exact eval_strict_numbers env op [a, b, c, d] o [u, v, w, x] hop notGather
+    (by simp [evalList, ha, hb, hc, hd, bind, Except.bind, pure, Except.pure])
 
 theorem ev_lit (m : ℤ) (e : ℕ) : EV env (.num m e) (Lits.ofDec m e : α) := rfl
 
@@ -375,9 +377,10 @@ theorem ev_ix3 {R C i : Ast} {M : List (List (List α))} {c j n : ℕ} (dz : ℤ
   have hd' : ((d : ℤ) - 1).toNat = d - 1 := by omega
   rw [List.getD_eq_getElem _ _ (show c - 1 < M.length by omega)] at cn hv
   rw [List.getD_eq_getElem _ _ (show j - 1 < M[c - 1].length by omega)] at hv
-  simp only [EV, ixA3, eval, op_index, evalList, hR, hC, hi, bind, Except.bind, pure,
-    Except.pure, hdl]
-  simp [hasInf, applyStrict, asNum, asInt, toInt_nat, indexVal, crd, hc', hj', hd', c1, c2, hj1,
+  rw [EV, ixA3, eval_index_materialized env R [C, i, .num (d : ℤ) 0]
+    (literal_array_gather_barrier _ _ _ hR rfl)]
+  simp only [evalList, eval, hR, hC, hi, bind, Except.bind, pure, Except.pure, hdl]
+  simp [applyWholeStrict, hasInf, applyStrict, asNum, asInt, toInt_nat, indexVal, crd, hc', hj', hd', c1, c2, hj1,
     hd1, bind, Except.bind, pure, Except.pure,
     List.getElem?_eq_getElem (show c - 1 < M.length by omega),
     List.getElem?_eq_getElem (show j - 1 < M[c - 1].length by omega),

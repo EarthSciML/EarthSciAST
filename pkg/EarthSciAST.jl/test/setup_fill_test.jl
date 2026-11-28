@@ -105,9 +105,9 @@ emitted(sf) = EA.RuntimeGeneratedFunctions.get_expression(getfield(sf.level.kern
                 "tests/spatial/pde_inline_assertions_exec.esm",
                 "tests/conformance/build_once_spatial_field/fixtures/build_once_spatial_ode.esm",
             )
-            path = joinpath(root, rel)
-            pn = esm_problem(path, (0.0, 1.0))
-            pi_ = esm_problem(path, (0.0, 1.0); compiler = :interpreter)
+            file = load_path(joinpath(root, rel))
+            pn = esm_problem(file, (0.0, 1.0))
+            pi_ = esm_problem(file, (0.0, 1.0); compiler = :interpreter)
             @test all(pn.u0[pn.var_map[k]] === pi_.u0[j] for (k, j) in pi_.var_map)
             dn = similar(pn.u0); pn.f!(dn, pn.u0, pn.p, 0.0)
             di = similar(pi_.u0); pi_.f!(di, pi_.u0, pi_.p, 0.0)

@@ -545,7 +545,7 @@
       "class": "semantic",
       "phase": 3,
       "area": "diagnostics",
-      "note": "join_side_ambiguous and join_syms_unknown_symbol are validation-time verdicts, decidable from the single document, attached at the containing equation field."
+      "note": "join_side_ambiguous and join_syms_unknown_symbol are validation-time verdicts, decidable from the single document, attached at the containing equation field. The static Lean adapter resolves join key names and checks these codes when requesting an equation. A full validate interface remains open."
     },
     {
       "id": "conf.5.5.8.driver-choice-result-neutral",
@@ -554,7 +554,7 @@
       "class": "semantic",
       "phase": 3,
       "area": "arrays",
-      "note": "With several join gates on one node, the result is independent of which gate drives enumeration and of the order the clauses are written."
+      "note": "With several join gates on one node, the result is independent of which gate drives enumeration and of the order the clauses are written. The static Lean evaluator intersects equality-gate partner lists and retains the range order. The shared static_join_composite fixture exercises clause order."
     },
     {
       "id": "conf.5.5.8.fourth-shape-should",
@@ -692,7 +692,7 @@
       "class": "semantic",
       "phase": 3,
       "area": "arrays",
-      "note": "A ragged range in a non-value-invention faq binds k in 1..offsets[i], not values[i,k]."
+      "note": "An ordinary FAQ binds k in 1..offsets[i]. The value-invention exception in the same paragraph binds values[i,k] directly."
     },
     {
       "id": "conf.5.6.4.ragged-values-must-be-gathered",

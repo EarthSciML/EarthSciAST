@@ -27,10 +27,12 @@ include("testutils.jl")
     # Walk the module (and its namespaced submodule) for concrete Exception
     # types and assert every one of them is under the root. `all=true` reaches
     # the unexported internals — the control-flow signals (`_Decline`,
-    # `_DiagnosticCap`, …) are covered deliberately. The one exception is
-    # `_HaloDone` (src/range/tile.jl), which leaves a build at the range seam
-    # and is kept outside the root on purpose, so that no `catch` of an
-    # `EarthSciASTError` between the seam and its handler can swallow it.
+    # `_DiagnosticCap`, …) are covered deliberately. The two exceptions leave a
+    # build from deep inside it and are kept outside the root on purpose, so
+    # that no `catch` of an `EarthSciASTError` between the throw and the
+    # handler can swallow them: `_HaloDone` (src/range/tile.jl) at the range
+    # seam, and `_LaneWholeFallback` (src/range/lanes.jl), which `_lane_instance`
+    # catches outside `_build_selected` to retry the build.
     @testset "every exception type in the package subtypes it" begin
         strays = String[]
         found = 0
@@ -50,7 +52,7 @@ include("testutils.jl")
         # Guard the scan: a reflection change that found nothing would pass the
         # subset check vacuously.
         @test found >= 30
-        @test strays == ["EarthSciAST._HaloDone"]
+        @test sort(strays) == ["EarthSciAST._HaloDone", "EarthSciAST._LaneWholeFallback"]
     end
 
     @testset "a single catch clause covers the surface" begin

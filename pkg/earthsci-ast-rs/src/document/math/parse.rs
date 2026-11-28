@@ -16,7 +16,7 @@ use super::expr::{REMOVED_OPS, is_deprecated_op, is_formula, is_greek, is_letter
 use super::print::{
     BMAT_MAX_COLS, Ctx, FIELD_CALL_OPS, FaqForm, MkForm, RedK, faq_json, formula_raw, ins_kv,
     is_call_op, is_notation_core, mk_json, mk_node, node, prints_as_call, simple_tok, tname_ok,
-    tparams, unesc_k, unesc_t,
+    tparams, unesc_k, unesc_t, unlift, up_set,
 };
 use super::surface::neg_num;
 use super::token::{Kw, Sf, Tok};
@@ -1779,11 +1779,43 @@ pub fn p_euler_exp<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
     Some((node("exp", vec![y]), r))
 }
 
+/// `Math.pSetSeg`: one segment of an index set's name: an upright word `upSet` sets
+/// upright, or a name segment.
+fn p_set_seg(sf: Sf, ts: &[Tok]) -> P<'_, Vec<char>> {
+    if let [Tok::Ups(ps), r @ ..] = ts
+        && let [(g, d)] = ps.as_slice()
+        && d.is_empty()
+    {
+        let gc: Vec<char> = g.chars().collect();
+        if up_set(sf, &gc) {
+            return Some((gc, r));
+        }
+    }
+    p_seg(sf, ts)
+}
+
+/// `Math.pSet`: an index set's name, its segments joined by the scope dot (`pSetLoop`
+/// as a loop).
+pub fn p_set(sf: Sf, ts: &[Tok]) -> P<'_, String> {
+    let (mut acc, mut r) = p_set_seg(sf, ts)?;
+    loop {
+        match r {
+            [Tok::Kw(Kw::Sdot), r1 @ ..] => {
+                let (g, r2) = p_set_seg(sf, r1)?;
+                acc.push('.');
+                acc.extend(g);
+                r = r2;
+            }
+            _ => return Some((s_of(&acc), r)),
+        }
+    }
+}
+
 /// `Math.pRange`: a range row: `k \in S`, `k \in S(i, j)`, `a \le k \le b`.
 pub fn p_range<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Row> {
     let f = f.checked_sub(1)?;
     match p_add(c, f, ts) {
-        Some((Json::Str(k), [Tok::Kw(Kw::Inn), r @ ..])) => match p_name(c.sf, r) {
+        Some((Json::Str(k), [Tok::Kw(Kw::Inn), r @ ..])) => match p_set(c.sf, r) {
             Some((s, [Tok::Kw(Kw::Lp), r2 @ ..])) => match p_names(c.sf, r2) {
                 Some((ps, [Tok::Kw(Kw::Rp), r3 @ ..])) => Some((
                     Row::Rng(
@@ -2265,10 +2297,43 @@ pub fn need(l: usize, len: usize) -> usize {
     30 * len + (12usize.saturating_sub(l))
 }
 
-/// `Math.parseToks` (Induct.lean): read a whole token list.
+/// `Math.pTail`: range rows separated by commas, to the end of the input: the
+/// ranges of a defining equation's output indices (`x_s = …, s \in S`).
+pub fn p_tail(c: Ctx, f: usize, ts: &[Tok]) -> Option<Vec<Row>> {
+    let mut out = Vec::new();
+    let mut f = f;
+    let mut ts = ts;
+    let is_end = |t: &Tok| is_kw(Kw::Comma, t);
+    loop {
+        f = f.checked_sub(1)?;
+        match p_row(c, f, &is_end, ts)? {
+            (row, []) => {
+                out.push(row);
+                return Some(out);
+            }
+            (row, [Tok::Kw(Kw::Comma), r @ ..]) => {
+                out.push(row);
+                ts = r;
+            }
+            (_, r) => {
+                limits::reached(r);
+                return None;
+            }
+        }
+    }
+}
+
+/// `Math.parseToks` (Induct.lean): read a whole token list: an expression, or
+/// an equation in its defining form (`x_s = …, s \in S`, [`unlift`]).
 pub fn parse_toks(sf: Sf, s: &super::expr::Sym, ts: &[Tok]) -> Option<Json> {
-    match p_or(Ctx { sf, s }, need(1, ts.len()), ts) {
+    let c = Ctx { sf, s };
+    let f = need(1, ts.len());
+    match p_or(c, f, ts) {
         Some((e, [])) => Some(e),
+        Some((q, [Tok::Kw(Kw::Comma), r @ ..])) => match row_parts(p_tail(c, f, r)?)? {
+            (rg, None) => unlift(&q, &rg),
+            _ => None,
+        },
         Some((_, r)) => {
             limits::reached(r);
             None

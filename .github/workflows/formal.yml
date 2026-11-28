@@ -3,10 +3,10 @@ name: Formal model (Lean)
 # Builds the Lean model of the spec in `formal/` and runs its audit gate
 # (`scripts/formal-audit.py`), then scores the model's adapter on the tiers
 # it covers: the standard-library template tiers (interp, datetime, relational,
-# geometry). A mismatch there fails the job (formal/README.md). Every .esm under
-# tests/ also goes through the document source formats: printed as Markdown and
-# Typst and read back, the Typst compiled with the repository's `esm` Typst
-# package, and the Markdown's math rendered with KaTeX.
+# geometry) and static scalar and array assertions. A mismatch fails the job.
+# Every .esm under tests/ is printed as Markdown and Typst and read back.
+# The Typst compiles with the repository's `esm` package, and KaTeX renders
+# the Markdown math.
 #
 # The spec files are in `paths` because the inventory audit checks that every
 # MUST clause is accounted for and that every citation still resolves: a spec
@@ -22,61 +22,116 @@ on:
       - 'lib/calendar.esm'
       - 'lib/relational.esm'
       - 'lib/geometry.esm'
+      - 'lib/vector_calculus.esm'
       - 'esm-spec.md'
       - 'CONFORMANCE_SPEC.md'
       - 'scripts/formal-audit.py'
       - 'scripts/run-closed-functions-lean.py'
       - 'scripts/test_run_closed_functions_lean.py'
       - 'scripts/run-inline-tests-conformance.py'
+      - 'scripts/run-lean-inline-tests.py'
+      - 'scripts/difftest/**'
+      - 'pkg/EarthSciAST.jl/**'
+      - 'pkg/earthsci-ast-py/**'
+      - 'pkg/earthsci-ast-rs/**'
+      - 'tests/conformance/scalar_operator_semantics/**'
+      - 'tests/conformance/bool_and_or_reductions/**'
+      - 'tests/conformance/faq_pointwise_filter/**'
+      - 'tests/conformance/array_expression_forms/**'
+      - 'tests/conformance/broadcast_alignment/**'
+      - 'tests/conformance/static_array_semantics/**'
+      - 'tests/conformance/native_model_shapes/**'
+      - 'tests/conformance/shaped_observed_scalar_broadcast/**'
+      - 'tests/conformance/const_array_gather_bounds/**'
+      - 'tests/conformance/pde_inline_observed_indexed_lhs/**'
       - 'scripts/conformance_lib.py'
       - 'tests/closed_functions/**'
       - 'tests/conformance/interp_templates/**'
       - 'tests/conformance/datetime_templates/**'
       - 'tests/conformance/relational_templates/**'
+      - 'tests/conformance/determinism/**'
+      - 'scripts/run-determinism-conformance.py'
       - 'tests/conformance/geometry_templates/**'
       - 'tests/conformance/document_format/**'
+      - 'tests/property_corpus/**'
+      - 'scripts/run-property-corpus-conformance.py'
       - 'scripts/gen-document-format-fixtures.py'
       - 'tests/**/*.esm'
       - 'typst/packages/**'
+      - 'docs/content/rfcs/discretization.md'
+      - 'scripts/run-canonical-lean.py'
+      - 'scripts/run-lean-rewrite-conformance.py'
+      - 'tests/conformance/expression_templates/**'
+      - 'tests/invalid/template_imports/**'
+      - 'tests/invalid/expected_errors.json'
+      - 'tests/conformance/canonical/**'
       - '.github/workflows/formal.yml'
   pull_request:
-    branches: [ main ]
     paths:
       - 'formal/**'
       - 'lib/interp.esm'
       - 'lib/calendar.esm'
       - 'lib/relational.esm'
       - 'lib/geometry.esm'
+      - 'lib/vector_calculus.esm'
       - 'esm-spec.md'
       - 'CONFORMANCE_SPEC.md'
       - 'scripts/formal-audit.py'
       - 'scripts/run-closed-functions-lean.py'
       - 'scripts/test_run_closed_functions_lean.py'
       - 'scripts/run-inline-tests-conformance.py'
+      - 'scripts/run-lean-inline-tests.py'
+      - 'scripts/difftest/**'
+      - 'pkg/EarthSciAST.jl/**'
+      - 'pkg/earthsci-ast-py/**'
+      - 'pkg/earthsci-ast-rs/**'
+      - 'tests/conformance/scalar_operator_semantics/**'
+      - 'tests/conformance/bool_and_or_reductions/**'
+      - 'tests/conformance/faq_pointwise_filter/**'
+      - 'tests/conformance/array_expression_forms/**'
+      - 'tests/conformance/broadcast_alignment/**'
+      - 'tests/conformance/static_array_semantics/**'
+      - 'tests/conformance/native_model_shapes/**'
+      - 'tests/conformance/shaped_observed_scalar_broadcast/**'
+      - 'tests/conformance/const_array_gather_bounds/**'
+      - 'tests/conformance/pde_inline_observed_indexed_lhs/**'
       - 'scripts/conformance_lib.py'
       - 'tests/closed_functions/**'
       - 'tests/conformance/interp_templates/**'
       - 'tests/conformance/datetime_templates/**'
       - 'tests/conformance/relational_templates/**'
+      - 'tests/conformance/determinism/**'
+      - 'scripts/run-determinism-conformance.py'
       - 'tests/conformance/geometry_templates/**'
       - 'tests/conformance/document_format/**'
+      - 'tests/property_corpus/**'
+      - 'scripts/run-property-corpus-conformance.py'
       - 'scripts/gen-document-format-fixtures.py'
       - 'tests/**/*.esm'
       - 'typst/packages/**'
+      - 'docs/content/rfcs/discretization.md'
+      - 'scripts/run-canonical-lean.py'
+      - 'scripts/run-lean-rewrite-conformance.py'
+      - 'tests/conformance/expression_templates/**'
+      - 'tests/invalid/template_imports/**'
+      - 'tests/invalid/expected_errors.json'
+      - 'tests/conformance/canonical/**'
       - '.github/workflows/formal.yml'
   workflow_dispatch:
+  schedule:
+    - cron: '41 3 * * *'
 
 permissions:
   contents: read
 
 concurrency:
-  group: formal-${{ github.ref }}
+  group: formal-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lean:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v7
 
@@ -95,10 +150,11 @@ jobs:
       run: python3 formal/scripts/gen-lib-templates.py --check
 
     # The generator's and the scorer's own tests: pure Python, and instant.
-    - name: Test the generator and the scorer
+    - name: Test the generator and the scorers
       run: |
         python3 formal/scripts/test_gen_lib_templates.py
         python3 scripts/test_run_closed_functions_lean.py
+        python3 scripts/run-property-corpus-conformance.py --self-test
 
     - name: Cache Lean toolchain
       uses: actions/cache@v6
@@ -135,17 +191,57 @@ jobs:
     - name: Audit registry against the build
       run: python3 scripts/formal-audit.py registry --lean
 
+    - name: Score the model on the determinism tier
+      env:
+        EARTHSCI_DETERMINISM_ADAPTER_LEAN: formal/.lake/build/bin/esm-lean determinism
+      run: python3 scripts/run-determinism-conformance.py --bindings lean
+
     # The model as a conformance participant: `esm-lean` on the
     # standard-library template tiers, bit for bit where the tolerance is zero.
     # `lake build` above already built the adapter.
     - name: Score the model on the template tiers
       run: python3 scripts/run-closed-functions-lean.py --no-build
 
+    - name: Score Lean on static scalar assertions and Boolean reductions
+      env:
+        EARTHSCI_INLINE_TESTS_ADAPTER_LEAN: python3 scripts/run-lean-inline-tests.py
+      run: |
+        python3 formal/scripts/test_static_assertions.py
+        python3 scripts/run-inline-tests-conformance.py \
+          --manifest tests/conformance/scalar_operator_semantics/manifest.json \
+          --bindings lean --compiler interpreter
+        python3 scripts/run-inline-tests-conformance.py \
+          --manifest tests/conformance/bool_and_or_reductions/manifest.json \
+          --bindings lean --compiler interpreter
+
+    - name: Score Lean on static array assertions
+      env:
+        EARTHSCI_INLINE_TESTS_ADAPTER_LEAN: python3 scripts/run-lean-inline-tests.py
+      run: |
+        python3 formal/scripts/test_static_array_assertions.py
+        python3 formal/scripts/test_ragged_faq.py
+        for tier in faq_pointwise_filter array_expression_forms broadcast_alignment static_array_semantics; do
+          python3 scripts/run-inline-tests-conformance.py \
+            --manifest "tests/conformance/$tier/manifest.json" \
+            --bindings lean --compiler interpreter
+        done
+
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
+
     # The document source format golden set is generated by `esm-lean`; a
     # printer or parser change that moves a pinned spelling fails here until
     # the fixtures are regenerated (scripts/gen-document-format-fixtures.py).
     - name: Check the document-format fixtures against the model
       run: python3 scripts/formal-audit.py fixtures
+
+    - name: Score the model against the expression property corpus
+      env:
+        EARTHSCI_PROPERTY_CORPUS_ADAPTER_LEAN: formal/.lake/build/bin/esm-lean expressions
+      run: >-
+        python3 scripts/run-property-corpus-conformance.py
+        --bindings lean --fail-on-source-mismatch --check-number-spelling
 
     # The document source formats on the whole corpus: every .esm under tests/
     # that is a JSON object round-trips through Markdown and Typst
@@ -164,3 +260,74 @@ jobs:
 
     - name: Document formats on the corpus
       run: python3 formal/scripts/doc-corpus.py --typst typst --katex
+
+    - name: Score the model on the canonical expression byte fixtures
+      run: python3 scripts/run-canonical-lean.py
+
+    - name: Check rewrite and operator import conformance
+      run: python3 scripts/run-lean-rewrite-conformance.py
+
+    - uses: julia-actions/setup-julia@v3
+      id: setup-julia
+      with:
+        version: 'lts'
+
+    - uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache native adapter dependencies
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.julia
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-formal-native-jl${{ steps.setup-julia.outputs.julia-version }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml', 'pkg/earthsci-ast-rs/Cargo.lock', '.github/workflows/formal.yml') }}
+        restore-keys: |
+          ${{ runner.os }}-formal-native-jl${{ steps.setup-julia.outputs.julia-version }}-
+
+    - name: Set up native differential adapters
+      run: |
+        python -m pip install './pkg/earthsci-ast-py[simulate]' hypothesis==6.170.17
+        JULIA_PKG_PRECOMPILE_AUTO=0 julia --project=formal/.lake/difftest-julia -e '
+          using Pkg
+          Pkg.develop(path="pkg/EarthSciAST.jl")
+          Pkg.add(["JSON3", "OrdinaryDiffEqTsit5"])
+          Pkg.precompile()'
+        cargo build --locked --manifest-path pkg/earthsci-ast-rs/Cargo.toml \
+          --features conformance-adapters --bin earthsci-inline-tests-adapter-rust
+
+    - name: Compare generated scalar and shaped cases with native binding compilers
+      run: |
+        python scripts/difftest/test_scalar.py
+        seed=20261026
+        scalar_cases=200
+        shaped_cases=140
+        if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
+          seed="$GITHUB_RUN_ID"
+          scalar_cases=1200
+          shaped_cases=700
+        fi
+        adapters=(
+          --adapter 'julia=julia --project=formal/.lake/difftest-julia scripts/difftest/scalar_julia.jl'
+          --adapter 'rust=pkg/earthsci-ast-rs/target/debug/earthsci-inline-tests-adapter-rust --jsonl'
+        )
+        # Every recorded disagreement replays against all participants first.
+        replays=()
+        for fixture in tests/differential/*/*.esm; do
+          replays+=(--fixture "$fixture")
+        done
+        python scripts/difftest/scalar.py --timeout 300 "${adapters[@]}" "${replays[@]}"
+        python scripts/difftest/scalar.py --seed "$seed" --cases "$scalar_cases" --timeout 300 "${adapters[@]}"
+        python scripts/difftest/scalar.py --shaped --seed "$seed" --cases "$shaped_cases" --timeout 300 "${adapters[@]}"
+
+    - uses: actions/upload-artifact@v7
+      if: failure() && hashFiles('conformance-results/scalar-difftest.esm') != ''
+      with:
+        name: scalar-difftest-reproducer-${{ github.run_attempt }}
+        path: conformance-results/scalar-difftest.esm
+
+    - uses: actions/upload-artifact@v7
+      if: failure() && hashFiles('conformance-results/shaped-difftest.esm') != ''
+      with:
+        name: shaped-difftest-reproducer-${{ github.run_attempt }}
+        path: conformance-results/shaped-difftest.esm

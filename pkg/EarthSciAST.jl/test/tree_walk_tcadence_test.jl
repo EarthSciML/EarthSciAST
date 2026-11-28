@@ -390,13 +390,14 @@ end
     # ----------------------------------------------------------------
     @testset "Rosenbrock23 solve: native ≡ interpreter, AD and FD Jacobians" begin
         K, M = 4, 3
+        model = _tc_fastjx_model(K, M)
         buf = [2.0]
         prob_of(f!, u0, p) = SciMLBase.ODEProblem(f!, copy(u0), (0.0, 5.0), p)
         fi, u0, p, _ts, _vm, ri = ESM.Internal.build(
-            _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf)
+            model; param_arrays = Dict("F" => buf)
         )
         fdis, _u, _p, _ts2, _vm2, rdis = ESM.Internal.build(
-            _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf),
+            model; param_arrays = Dict("F" => buf),
             compiler = :interpreter
         )
         @test ri.stats.n_time_slots > 0 && rdis.stats.n_time_slots == 0

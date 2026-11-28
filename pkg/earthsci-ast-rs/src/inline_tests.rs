@@ -3036,7 +3036,9 @@ fn run_component_tests(
                         // substitution.
                         // Native-only, like the evaluations it answers from.
                         #[cfg(not(target_arch = "wasm32"))]
-                        Err(e) if crate::problem::has_nothing_to_integrate(prob) => {
+                        Err(e @ crate::simulate::SimulateError::DiffsolError { .. })
+                            if crate::problem::has_nothing_to_integrate(prob) =>
+                        {
                             // Whatever the refused solve latched is not an
                             // answer; the fields below are. Without this reset
                             // a half-filled `setup_arrays` would shadow them,
@@ -3065,13 +3067,10 @@ fn run_component_tests(
                             {
                                 fields = f.clone();
                             }
-                            // With no fields there is nothing to answer from,
-                            // and `solve`'s own diagnostic is the honest one:
-                            // it is what raises an evaluator FAULT
-                            // (`E_TREEWALK_RECUR_UNAVAILABLE` for an unguarded
-                            // recurrence self-read, `tests/
-                            // recurrence_causal_self_reference.rs`) for a
-                            // document that is genuinely broken.
+                            // With no fields there is nothing to answer from.
+                            // Evaluation faults take the ordinary error branch
+                            // below, so a retry cannot replace a named fault
+                            // with a numerical result.
                             if fields.is_empty() {
                                 Err(format!("simulate failed: {e}"))
                             } else {

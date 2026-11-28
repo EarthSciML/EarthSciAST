@@ -38,6 +38,8 @@ from .printer import (
     tparams,
     unesc_k,
     unesc_t,
+    unlift,
+    up_set,
 )
 from .surface import neg_num
 
@@ -1359,6 +1361,29 @@ def _p_euler_exp(c: Ctx, f: int, ts: list, i: int):
     return None if r is None else (node("exp", [r[0]]), r[1])
 
 
+def _p_set_seg(sf: str, ts: list, i: int):
+    """``Math.pSetSeg``: an upright word ``up_set`` sets upright, or a name segment."""
+    t = _at(ts, i)
+    if _tag(t) == "ups" and len(t[1]) == 1 and t[1][0][1] == "" and up_set(sf, t[1][0][0]):
+        return t[1][0][0], i + 1
+    return p_seg(sf, ts, i)
+
+
+def _p_set(sf: str, ts: list, i: int):
+    """``Math.pSet``: an index set's name, its segments joined by the scope dot."""
+    r = _p_set_seg(sf, ts, i)
+    if r is None:
+        return None
+    acc, i = r
+    while _at(ts, i) == K.SDOT:
+        r = _p_set_seg(sf, ts, i + 1)
+        if r is None:
+            return None
+        acc = acc + "." + r[0]
+        i = r[1]
+    return acc, i
+
+
 def _p_range(c: Ctx, f: int, ts: list, i: int):
     """``Math.pRange``: ``k \\in S``, ``k \\in S(i, j)``, ``a \\le k \\le b``.
     A row is ``("rng", k, value)`` or ``("filt", value)``."""
@@ -1371,7 +1396,7 @@ def _p_range(c: Ctx, f: int, ts: list, i: int):
     x, j = r
     tj = _at(ts, j)
     if type(x) is str and tj == K.INN:
-        r2 = p_name(c.sf, ts, j + 1)
+        r2 = _p_set(c.sf, ts, j + 1)
         if r2 is None:
             return None
         s, k = r2
@@ -1875,7 +1900,38 @@ def need(level: int, n: int) -> int:
 def parse_toks(sf: str, s: Any, ts: list):
     """``Math.parseToks`` (Induct.lean): read a whole token list; ``(value,)`` or
     ``None``."""
-    r = p_or(Ctx(sf, s), need(1, len(ts)), ts, 0)
-    if r is None or r[1] != len(ts):
+    c = Ctx(sf, s)
+    f = need(1, len(ts))
+    r = p_or(c, f, ts, 0)
+    if r is None:
         return None
-    return (r[0],)
+    if r[1] == len(ts):
+        return (r[0],)
+    if ts[r[1]] != K.COMMA:
+        return None
+    rows = _p_tail(c, f, ts, r[1] + 1)
+    if rows is None:
+        return None
+    parts = _row_parts(rows)
+    if parts is None or parts[1] is not _NOFILTER:
+        return None
+    u = unlift(r[0], parts[0])
+    return None if u is None else (u,)
+
+
+def _p_tail(c: Ctx, f: int, ts: list, i: int):
+    """``Math.pTail``: range rows separated by commas, to the end of the input."""
+    rows = []
+    while True:
+        if f == 0:
+            return None
+        f -= 1
+        r = _p_row(c, f, lambda t: t == K.COMMA, ts, i)
+        if r is None:
+            return None
+        rows.append(r[0])
+        if r[1] == len(ts):
+            return rows
+        if ts[r[1]] != K.COMMA:
+            return None
+        i = r[1] + 1

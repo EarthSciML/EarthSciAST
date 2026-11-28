@@ -1,0 +1,28 @@
+{
+  "properties": [
+    {
+      "id": "P-expansion-preserved-by-extra-fuel",
+      "clauses": ["spec.9.6.4.expand-deterministic"],
+      "statement": "Giving a successful template expansion more fuel preserves its output, including when other references occur in its bindings.",
+      "lean_statement": "∀ (lib : List (String × Esm.Expr.Template)) (fuel larger : Nat), fuel ≤ larger → ∀ (term result : Esm.Expr.Ast), Esm.Expr.expandRefs lib fuel term = .ok result → Esm.Expr.expandRefs lib larger term = .ok result",
+      "status": "proven",
+      "theorem": "Esm.Expr.expandRefs_of_le"
+    },
+    {
+      "id": "P-expansion-unique-under-equivalent-registries",
+      "clauses": ["spec.9.6.4.expand-deterministic"],
+      "statement": "Two successful expansions of the same input have identical AST results at any fuel bounds when their registries bind each definition name identically.",
+      "lean_statement": "∀ (left right : List (String × Esm.Expr.Template)), (∀ name, left.lookup name = right.lookup name) → ∀ (leftFuel rightFuel : Nat) (term leftResult rightResult : Esm.Expr.Ast), Esm.Expr.expandRefs left leftFuel term = .ok leftResult → Esm.Expr.expandRefs right rightFuel term = .ok rightResult → leftResult = rightResult",
+      "status": "proven",
+      "theorem": "Esm.Expr.expandRefs_unique"
+    },
+    {
+      "id": "P-expansion-preserves-nested-free-name",
+      "defined_by": "formal/Esm/Expr/Template.lean",
+      "statement": "Binding an outer template's parameter to a number preserves the same-spelled free name of a distinct nested template with no parameters.",
+      "lean_statement": "∀ (outer inner parameter : String), outer ≠ inner → ∀ (coefficient : Int) (exponent : Nat), Esm.Expr.expandRefs [(outer, ⟨[parameter], .apply inner .nil⟩), (inner, ⟨[], .var parameter⟩)] 2 (.apply outer (.cons parameter (.num coefficient exponent) .nil)) = .ok (.var parameter)",
+      "status": "proven",
+      "theorem": "Esm.Expr.expandRefs_preserves_nested_free_name"
+    }
+  ]
+}

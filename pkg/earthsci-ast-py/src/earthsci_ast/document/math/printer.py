@@ -1006,6 +1006,30 @@ def faq_ok(f: FaqForm) -> bool:
     return True
 
 
+def up_set(sf: str, g: str) -> bool:
+    """``Math.upSet``: a segment of an index set's name prints upright in a Typst
+    range row when it would otherwise print ``italic("…")``."""
+    return (
+        sf == K.TYPST
+        and seg_ok(g)
+        and not is_single(g)
+        and sub_parts(g) is None
+        and not is_formula(g)
+    )
+
+
+def set_seg_toks(sf: str, g: str) -> list:
+    """``Math.setSegToks``: one segment of an index set's name."""
+    return [("ups", ((g, ""),))] if up_set(sf, g) else seg_toks(sf, g)
+
+
+def set_toks(c: Ctx, s: str) -> list:
+    """``Math.setToks``: the tokens of an index set's name in a range row."""
+    if explicit_name(c.s, s):
+        return [("it", s)]
+    return sep_by([K.SDOT], [set_seg_toks(c.sf, g) for g in s.split(".")])
+
+
 def row_toks(c: Ctx, k: str, v: Any) -> list:
     """``Math.rowToks``: ``a \\le k \\le b``, ``k \\in S``, ``k \\in S(i, j)``."""
     t = type(v)
@@ -1013,7 +1037,7 @@ def row_toks(c: Ctx, k: str, v: Any) -> list:
         return [*pa(c, 4, v[0]), K.LE, *name_toks(c, k), K.LE, *pa(c, 4, v[1])]
     if t is Obj:
         if len(v) == 1 and v[0][0] == "from" and type(v[0][1]) is str:
-            return [*name_toks(c, k), K.INN, *name_toks(c, v[0][1])]
+            return [*name_toks(c, k), K.INN, *set_toks(c, v[0][1])]
         if (
             len(v) == 2
             and v[0][0] == "from"
@@ -1025,7 +1049,7 @@ def row_toks(c: Ctx, k: str, v: Any) -> list:
             return [
                 *name_toks(c, k),
                 K.INN,
-                *name_toks(c, v[0][1]),
+                *set_toks(c, v[0][1]),
                 K.LP,
                 *sep_by([K.COMMA], ps),
                 K.RP,
@@ -1594,6 +1618,171 @@ def pa(c: Ctx, need: int, e: Any) -> list:
     return pr(c, e).at(c.sf, need)
 
 
+# ## The defining form of an equation (Print.lean, "The defining form of an equation")
+
+
+def sort_kvs(xs: list) -> list:
+    """``Math.sortKVs``: sort bindings by key (insertion)."""
+    out: list = []
+    for kv in reversed(xs):
+        out = ins_kv(kv, out)
+    return out
+
+
+def is_red_node(j: Any) -> bool:
+    """``Math.isRedNode``: a ``faq`` node with no output indices."""
+    if type(j) is not Obj:
+        return False
+    o = look("op", j)
+    oi = look("output_idx", j)
+    return type(o) is str and o == "faq" and type(oi) is list and len(oi) == 0
+
+
+def _wrap_faq(rhs: Any, os: list, rows: list) -> Obj:
+    return Obj(
+        [
+            ("args", []),
+            ("expr", rhs),
+            ("op", "faq"),
+            ("output_idx", list(os)),
+            ("ranges", Obj(sort_kvs(list(rows)))),
+        ]
+    )
+
+
+def distinct_names(ks: list) -> bool:
+    """``Math.distinctNames``: no name occurs twice."""
+    return len(set(ks)) == len(ks)
+
+
+def def_outs_ok(os: list, rows: list) -> bool:
+    """``Math.defOutsOK``: the left side's subscripts ``os`` and the ranges ``rows``
+    after the right side are those of a defining form: each subscript a name or
+    ``1``, no name twice, and each row the range of one of the subscripts, at
+    most once."""
+    names = out_names(os)
+    return (
+        all(out_ok(o) for o in os)
+        and distinct_names(names)
+        and all(k in names for k, _ in rows)
+        and distinct_names([k for k, _ in rows])
+    )
+
+
+def unlift(q: Any, rows: list) -> Any:
+    """``Math.unlift``: the equation ``x_(os) = rhs`` with the ranges ``rows`` of its
+    output indices, as the equation it writes; ``None`` when ``q`` is no such
+    equation, or when its right side is a reduction with no range of its own or
+    one ranging over an output index."""
+    if not (type(q) is Obj and len(q) == 2 and q[0][0] == "args" and q[1] == ("op", "==")):
+        return None
+    sides = q[0][1]
+    if type(sides) is not list or len(sides) != 2:
+        return None
+    lhs, rhs = sides
+    if not (
+        type(lhs) is Obj and len(lhs) == 2 and lhs[0][0] == "args" and lhs[1] == ("op", "index")
+    ):
+        return None
+    ia = lhs[0][1]
+    if type(ia) is not list or not ia or type(ia[0]) is not str:
+        return None
+    x, os = ia[0], ia[1:]
+    if not def_outs_ok(os, rows):
+        return None
+    if is_red_node(rhs):
+        rest = look("ranges", rhs)
+        if type(rest) is not Obj or not rest:
+            return None
+        names = out_names(os)
+        if any(k in names for k, _ in rest):
+            return None
+        f = Obj(
+            sort_kvs(
+                [("output_idx", list(os)), ("ranges", Obj(sort_kvs(list(rest) + list(rows))))]
+                + [kv for kv in rhs if kv[0] != "output_idx" and kv[0] != "ranges"]
+            )
+        )
+    else:
+        f = _wrap_faq(rhs, os, rows)
+    return Obj([("args", [x, f]), ("op", "==")])
+
+
+def lift_parts(e: Any):
+    """``Math.liftParts``: the equation ``x_(os) = rhs`` and the ranges of the output
+    indices of an equation ``x = faq``; ``None`` when it has no defining form."""
+    if not (type(e) is Obj and len(e) == 2 and e[0][0] == "args" and e[1] == ("op", "==")):
+        return None
+    sides = e[0][1]
+    if type(sides) is not list or len(sides) != 2:
+        return None
+    x, r = sides
+    if type(x) is not str or type(r) is not Obj:
+        return None
+    kvs = r
+    o, os, rs = look("op", kvs), look("output_idx", kvs), look("ranges", kvs)
+    if not (type(o) is str and o == "faq" and type(os) is list and type(rs) is Obj):
+        return None
+    if not os or not plain_last(x):
+        return None
+    outs = [k for k in os if type(k) is str]
+    rows = []
+    for k in outs:
+        v = look(k, rs)
+        if v is not MISSING:
+            rows.append((k, v))
+    rest = [kv for kv in rs if kv[0] not in outs]
+
+    def plain_field(kv) -> bool:
+        k = kv[0]
+        if k in ("expr", "op", "output_idx", "ranges"):
+            return True
+        return k == "args" and type(kv[1]) is list and len(kv[1]) == 0
+
+    bare = not rest and all(plain_field(kv) for kv in kvs)
+    body = look("expr", kvs)
+    if body is MISSING:
+        body = None
+    if bare and not is_red_node(body):
+        rhs = body
+    else:
+        rhs = Obj(
+            sort_kvs(
+                [("output_idx", [])]
+                + ([("ranges", Obj(rest))] if rest else [])
+                + [kv for kv in kvs if kv[0] != "output_idx" and kv[0] != "ranges"]
+            )
+        )
+        # The reduction must have its native spelling (``faqForm`` and ``faqOK``).
+        f = faq_form(rhs)
+        if f is None or not faq_ok(f):
+            return None
+    q = Obj([("args", [Obj([("args", [x, *os]), ("op", "index")]), rhs]), ("op", "==")])
+    return q, rows
+
+
+def lift_ok(e: Any, q: Any, rows: list) -> bool:
+    """``Math.liftOK``: the defining form reads back as exactly ``e``."""
+    if not rows or not is_e(q):
+        return False
+    for k, v in rows:
+        if not (name_ok(k) and range_ok(v)):
+            return False
+        if type(v) is list and len(v) == 2 and not (is_e(v[0]) and is_e(v[1])):
+            return False
+    return unlift(q, rows) == e
+
+
+def def_rows_toks(c: Ctx, rows: list) -> list:
+    """``Math.defRowsToks``: the range rows after a defining equation."""
+    return sep_by([K.COMMA], [row_toks(c, k, v) for k, v in rows])
+
+
 def print_toks(sf: str, s: Sym, e: Any) -> list:
-    """``Math.print``: the tokens of a whole expression."""
-    return pa(Ctx(sf, s), 1, e)
+    """``Math.print``: the tokens of a whole expression, an equation ``x = faq`` with
+    output indices in its defining form when that reads back."""
+    c = Ctx(sf, s)
+    lp = lift_parts(e)
+    if lp is not None and lift_ok(e, lp[0], lp[1]):
+        return [*pa(c, 1, lp[0]), K.COMMA, *def_rows_toks(c, lp[1])]
+    return pa(c, 1, e)

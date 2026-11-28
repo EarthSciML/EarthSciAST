@@ -305,41 +305,59 @@ _xq_directmerge(t) = get(t, :classmerge_round1_merge, 0) +
         @test length(esms) >= 100
 
         function corpus_build(file)
-            withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
-                try
-                    f!, u0, p, _t, _vm, rep = ESM._with_merge_recheck() do
-                        ESM.Internal.build(file; compiler = _XQ_NATIVE)
-                    end
-                    return (f = f!, u0 = u0, p = p, tally = rep.counts)
-                catch e
-                    corpus_is_resource_error(e) && rethrow()
-                    return nothing
+            try
+                _, _, _, _, _, rep = ESM._with_merge_recheck() do
+                    ESM.Internal.build(file; compiler = _XQ_NATIVE)
                 end
+                return _xq_repair(rep.counts)
+            catch e
+                corpus_is_resource_error(e) && rethrow()
+                return nothing
             end
         end
 
+        started_sweep = time_ns()
+        timings = withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
+            map_corpus(esms) do path
+                started = time_ns()
+                file = try
+                    ESM.load_path(path)
+                catch e
+                    corpus_is_resource_error(e) && rethrow()
+                    nothing
+                end
+                load_ns = time_ns() - started
+                if file === nothing || file.models === nothing
+                    return (load_ns, UInt64(0), nothing)
+                end
+                started = time_ns()
+                repairs = corpus_build(file)
+                return (load_ns, time_ns() - started, repairs)
+            end
+        end
+        elapsed_seconds = (time_ns() - started_sweep) / 1.0e9
         built = 0
         skipped = 0
         repair_total = 0
-        direct_total = 0
-        for path in esms
-            file = try
-                ESM.load_path(path)
-            catch e
-                corpus_is_resource_error(e) && rethrow()
-                skipped += 1
-                continue
+        load_ns = UInt64(0)
+        build_ns = UInt64(0)
+        slowest_build_ns = UInt64(0)
+        slowest_fixture = ""
+        for (path, (loading, elapsed, repairs)) in zip(esms, timings)
+            load_ns += loading
+            build_ns += elapsed
+            if elapsed > slowest_build_ns
+                slowest_build_ns = elapsed
+                slowest_fixture = relpath(path, TESTUTILS_REPO_ROOT)
             end
-            file.models === nothing && (skipped += 1; continue)
-            ron = corpus_build(file)
-            if ron === nothing
+            if repairs === nothing
                 skipped += 1
                 continue
             end
             built += 1
-            repair_total += _xq_repair(ron.tally)
-            direct_total += _xq_directmerge(ron.tally)
+            repair_total += repairs
         end
+        @info "Class-merge corpus sweep" built skipped elapsed_seconds load_seconds = load_ns / 1.0e9 build_seconds = build_ns / 1.0e9 slowest_fixture slowest_build_seconds = slowest_build_ns / 1.0e9
         # The sweep is real (a corpus regression that stops fixtures building
         # would otherwise pass this vacuously) …
         @test built >= 40

@@ -133,12 +133,17 @@ fn program(c: &Value) -> Result<RhsProgram, SimulateError> {
 
 /// The whole-domain reference `G` of `op` at the generated state.
 fn reference(op: &RhsProgram) -> Vec<f64> {
+    reference_at(op, 0.0)
+}
+
+/// [`reference`] at time `t`.
+fn reference_at(op: &RhsProgram, t: f64) -> Vec<f64> {
     let (u, aux) = global_state(op);
     let p = op.parameter_vector(&Default::default()).expect("defaults");
     let fs = op.default_forcing();
     let mut du = vec![f64::NAN; op.layout().u_len];
     let mut ws = op.new_workspace();
-    op.eval_into(&u, &aux, &p, 0.0, &fs, &mut du, &mut ws)
+    op.eval_into(&u, &aux, &p, t, &fs, &mut du, &mut ws)
         .expect("whole-domain evaluation");
     du
 }
@@ -613,14 +618,15 @@ fn lanes_case(c: &Value) -> Result<(), String> {
         }
         (u, aux)
     };
-    let matches = |cells: &[i32], n: usize, du: &[f64]| -> Result<(), String> {
+    // Lane `l`'s reference: `G`, or the whole-domain program at its time.
+    let matches_at = |cells: &[i32], n: usize, du: &[f64], gs: &[&[f64]]| -> Result<(), String> {
         for b in &lay.u {
             let w = whole.block(&b.name).unwrap();
             for l in 0..n {
                 let cell = cell_of(cells, l);
                 for e in 0..n_elems(b) {
                     let gi = lane_global(&whole, &b.name, &lane_sets, &cell, e);
-                    let (got, want) = (du[(b.offset + e) * cap + l], g[w.slot(&gi).unwrap()]);
+                    let (got, want) = (du[(b.offset + e) * cap + l], gs[l][w.slot(&gi).unwrap()]);
                     if got.to_bits() != want.to_bits() {
                         return Err(format!(
                             "lane {} {}{gi:?}: {got} vs G {want}",
@@ -633,6 +639,7 @@ fn lanes_case(c: &Value) -> Result<(), String> {
         }
         Ok(())
     };
+    let matches = |cells: &[i32], n: usize, du: &[f64]| matches_at(cells, n, du, &vec![&g[..]; n]);
     for bt in c["batches"].as_array().unwrap() {
         let bid = bt["id"].as_str().unwrap();
         let n = bt["n"].as_u64().unwrap() as usize;
@@ -651,6 +658,57 @@ fn lanes_case(c: &Value) -> Result<(), String> {
         let (u, aux) = gather(&cells, n);
         let mut du = vec![f64::NAN; lay.u_len];
         let mut ws = lanes.new_workspace();
+        if let Some(times) = bt["times"].as_array() {
+            let ts: Vec<f64> = times.iter().map(|x| x.as_f64().unwrap()).collect();
+            if let Some(names) = bt["expect_mixed_times"].as_array() {
+                // Lanes at different times, refused naming each observed.
+                let refused = |r: Result<(), earthsci_ast::RhsError>, how: &str| match r {
+                    Err(e @ earthsci_ast::RhsError::MixedTimes { .. }) => {
+                        let msg = e.to_string();
+                        match names.iter().find(|x| !msg.contains(x.as_str().unwrap())) {
+                            Some(x) => Err(format!("{bid}{how}: `{msg}` does not name {x}")),
+                            None => Ok(()),
+                        }
+                    }
+                    other => Err(format!(
+                        "{bid}{how}: expected a mixed-times error, got {other:?}"
+                    )),
+                };
+                refused(
+                    lanes.eval_times_into(&u, &aux, &p, &ts, &fs, &cells, n, &mut du, &mut ws),
+                    "",
+                )?;
+                let mut inputs = lanes.lane_inputs();
+                lanes
+                    .gather_lane_inputs(&mut inputs, &p, ts[0], &fs, &cells, n)
+                    .map_err(|e| format!("{bid}: gather_lane_inputs: {e}"))?;
+                refused(
+                    lanes.eval_gathered_times_into(
+                        &u, &aux, &inputs, &p, &ts, &cells, n, &mut du, &mut ws,
+                    ),
+                    " (pre-gathered)",
+                )?;
+                continue;
+            }
+            // A time per lane (U19): lane `l` against the whole-domain
+            // program at `times[l]`, plain and pre-gathered.
+            let refs: Vec<Vec<f64>> = ts[..n].iter().map(|&t| reference_at(&op, t)).collect();
+            let gs: Vec<&[f64]> = refs.iter().map(Vec::as_slice).collect();
+            lanes
+                .eval_times_into(&u, &aux, &p, &ts, &fs, &cells, n, &mut du, &mut ws)
+                .map_err(|e| format!("{bid}: eval at a time per lane: {e}"))?;
+            matches_at(&cells, n, &du, &gs).map_err(|e| format!("{bid}: {e}"))?;
+            let mut inputs = lanes.lane_inputs();
+            lanes
+                .gather_lane_inputs(&mut inputs, &p, ts[0], &fs, &cells, n)
+                .map_err(|e| format!("{bid}: gather_lane_inputs: {e}"))?;
+            let mut du2 = vec![f64::NAN; lay.u_len];
+            lanes
+                .eval_gathered_times_into(&u, &aux, &inputs, &p, &ts, &cells, n, &mut du2, &mut ws)
+                .map_err(|e| format!("{bid}: pre-gathered eval at a time per lane: {e}"))?;
+            matches_at(&cells, n, &du2, &gs).map_err(|e| format!("{bid} (pre-gathered): {e}"))?;
+            continue;
+        }
         lanes
             .eval_into(&u, &aux, &p, 0.0, &fs, &cells, n, &mut du, &mut ws)
             .map_err(|e| format!("{bid}: eval: {e}"))?;

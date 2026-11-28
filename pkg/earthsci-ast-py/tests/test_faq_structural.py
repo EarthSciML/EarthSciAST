@@ -286,10 +286,13 @@ def test_derivative_state_delivered_bare_by_a_template_is_refused_at_build() -> 
             esm_problem(doc, (0.0, 0.0), compiler=compiler)
 
 
-def test_bare_read_of_an_inferred_shape_is_refused_at_build() -> None:
+@pytest.mark.parametrize("wrap", ["bare", "scaled", "scaled_then_shifted"])
+def test_bare_read_of_an_inferred_shape_is_refused_at_build(wrap: str) -> None:
     """``a_val`` declares no shape; its defining faq makes it an array over
     ``a_rows``. validate reads declarations only, so it passes there; the build
-    reads inferred shapes too, as Julia's does after shape promotion."""
+    reads inferred shapes too, as Julia's does after shape promotion. The faq
+    may sit anywhere on the definition's elementwise value path
+    (``k * faq(...)``): it still gives ``a_val`` its shape (esm-spec §4.3.4)."""
     from earthsci_ast.problem import esm_problem
 
     doc = _bare_operand_doc(
@@ -303,13 +306,19 @@ def test_bare_read_of_an_inferred_shape_is_refused_at_build() -> None:
         "shape": ["a_rows"],
         "default": [1.0, 2.0],
     }
-    model["equations"][0]["rhs"] = {
+    model["variables"]["k"] = {"type": "parameter", "units": "1", "default": 2.0}
+    producer = {
         "op": "faq",
         "args": [],
         "output_idx": ["i"],
         "ranges": {"i": {"from": "a_rows"}},
         "expr": {"op": "index", "args": ["base", "i"]},
     }
+    if wrap == "scaled":
+        producer = {"op": "*", "args": ["k", producer]}
+    elif wrap == "scaled_then_shifted":
+        producer = {"op": "+", "args": [1.0, {"op": "*", "args": ["k", producer]}]}
+    model["equations"][0]["rhs"] = producer
     assert validate_text(json.dumps(doc)).structural_errors == []
     for compiler in ("interpreter", "native"):
         with pytest.raises(Exception, match="faq_bare_array_operand"):

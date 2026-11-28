@@ -1,0 +1,142 @@
+{
+  "properties": [
+    {
+      "id": "P-units-scalar-extrema-compatibility",
+      "clauses": [
+        "spec.4.8.3.agreement-dimension-and-scale"
+      ],
+      "statement": "A determinable scalar extremum unit is an operand's unit, and every pair of determinable operands agrees in exact scale and dimension under the pure-angle exception.",
+      "lean_statement": "∀ (known : List Esm.Units.U) (result : Esm.Units.U), Esm.Units.ScalarCheck.checkKnown known = .ok (some result) → result ∈ known ∧ ∀ u ∈ known, ∀ v ∈ known, Esm.Units.ScalarCheck.Compatible u v",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checkKnown_compatible"
+    },
+    {
+      "id": "P-units-scalar-mixed-angle-result-pure-number",
+      "clauses": [
+        "spec.4.8.3.agreement-dimension-and-scale"
+      ],
+      "statement": "When accepted scalar extrema or ifelse value operands include a determinable pure number, the inferred result is a pure number, with exact scale agreement supplied by compatibility.",
+      "lean_statement": "∀ (known : List Esm.Units.U) (result pureUnit : Esm.Units.U), Esm.Units.ScalarCheck.checkKnown known = .ok (some result) → pureUnit ∈ known → pureUnit.dim = 0 → result.dim = 0",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checkKnown_prefers_number"
+    },
+    {
+      "id": "P-units-scalar-extrema-all-unknown",
+      "clauses": [
+        "spec.4.8.4.undeterminable-not-dimensionless"
+      ],
+      "statement": "An extremum whose value operands are all undeterminable has an undeterminable result unit.",
+      "lean_statement": "∀ n : Nat, Esm.Units.ScalarCheck.checkExtrema (List.replicate n (.ok none)) = .ok none",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checkExtrema_unknown"
+    },
+    {
+      "id": "P-units-scalar-ifelse-condition-error",
+      "clauses": [
+        "spec.4.8.3.agreement-dimension-and-scale"
+      ],
+      "statement": "An ifelse condition's unit error remains an error regardless of both branch verdicts.",
+      "lean_statement": "∀ (e : Esm.Units.ScalarCheck.Error) (yes no : Esm.Units.ScalarCheck.Verdict), Esm.Units.ScalarCheck.checkIfelse (.error e) yes no = .error e",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checkIfelse_condition_error"
+    },
+    {
+      "id": "P-units-scalar-ifelse-one-known",
+      "clauses": [
+        "spec.4.8.4.undeterminable-not-dimensionless"
+      ],
+      "statement": "With an accepted condition and one determinable branch, ifelse has that branch's unit regardless of its position.",
+      "lean_statement": "∀ (condition : Option Esm.Units.U) (u : Esm.Units.U), Esm.Units.ScalarCheck.checkIfelse (.ok condition) (.ok (some u)) (.ok none) = .ok (some u) ∧ Esm.Units.ScalarCheck.checkIfelse (.ok condition) (.ok none) (.ok (some u)) = .ok (some u)",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checkIfelse_one_known"
+    },
+    {
+      "id": "P-units-scalar-ifelse-both-unknown",
+      "clauses": [
+        "spec.4.8.4.undeterminable-not-dimensionless"
+      ],
+      "statement": "With an accepted condition and two undeterminable branches, ifelse has an undeterminable result unit.",
+      "lean_statement": "∀ condition : Option Esm.Units.U, Esm.Units.ScalarCheck.checkIfelse (.ok condition) (.ok none) (.ok none) = .ok none",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checkIfelse_unknown"
+    },
+    {
+      "id": "P-units-scalar-extrema-exact-rescaling",
+      "clauses": [
+        "spec.4.8.3.agreement-dimension-and-scale"
+      ],
+      "statement": "For checked min and max with all operand units determinable, converting operands to their canonical scales commutes with the exact evaluator and conversion of the result.",
+      "lean_statement": "∀ (maximum : Bool) (a b : Esm.Units.U × Esm.Closed.Num) (rest : List (Esm.Units.U × Esm.Closed.Num)) (result : Esm.Units.U), Esm.Units.ScalarCheck.checkKnown ((a :: b :: rest).map Prod.fst) = .ok (some result) → Esm.Expr.applyStrict (if maximum then .max else .min) ((a :: b :: rest).map (fun x => .num (Esm.Units.ScalarCheck.scaleValue x.1.scale.real x.2))) = (Esm.Expr.applyStrict (if maximum then .max else .min) ((a :: b :: rest).map (fun x => .num x.2))).map (Esm.Units.ScalarCheck.scaleValue result.scale.real)",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checked_extremum_scaling"
+    },
+    {
+      "id": "P-units-scalar-ifelse-exact-rescaling",
+      "clauses": [
+        "spec.4.8.3.agreement-dimension-and-scale"
+      ],
+      "statement": "At a checked ifelse with determinable evaluated branch values and a positive condition rescaling, the preserved truth test selects the same branch and its scale agrees with the result scale.",
+      "lean_statement": "∀ (condition : Esm.Units.ScalarCheck.Verdict) (c : Esm.Closed.Num) (cs : ℝ), 0 < cs → ∀ (yes no : Esm.Units.U × Esm.Closed.Num) (result : Esm.Units.U), Esm.Units.ScalarCheck.checkIfelse condition (.ok (some yes.1)) (.ok (some no.1)) = .ok (some result) → (if Esm.Expr.truthy (Esm.Units.ScalarCheck.scaleValue cs c) then Esm.Units.ScalarCheck.scaleValue yes.1.scale.real yes.2 else Esm.Units.ScalarCheck.scaleValue no.1.scale.real no.2) = Esm.Units.ScalarCheck.scaleValue result.scale.real (if Esm.Expr.truthy c then yes.2 else no.2)",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checked_ifelse_scaling"
+    },
+    {
+      "id": "P-units-scalar-compositional-exact-rescaling",
+      "clauses": [
+        "spec.4.8.3.sum-operands-share-unit",
+        "spec.4.8.3.pow-exponent-dimensionless",
+        "spec.4.8.3.sqrt-not-transcendental",
+        "spec.4.8.3.comparison-operands-share-unit",
+        "spec.4.8.3.agreement-dimension-and-scale",
+        "spec.4.8.3.atan2-commensurate",
+        "spec.4.8.3.strict-transcendental-argument"
+      ],
+      "statement": "For a checked scalar tree of declared inputs, arithmetic, rational powers, extrema, comparisons, logic, sign, exp, log, log10, atan2, or conditionals, evaluating after converting the inputs gives the exact evaluator's authored result converted by the inferred unit's scale.",
+      "lean_statement": "∀ (bindings : Esm.Units.ScalarCheck.ScalarBindings) (term : Esm.Units.ScalarCheck.ScalarTerm) (result : Esm.Units.U), term.check (Esm.Units.ScalarCheck.scalarUnits bindings) = .ok (some result) → ∃ value : Esm.Closed.Num, Esm.Expr.eval term.ast (Esm.Units.ScalarCheck.scalarInputs bindings) = .ok (.num value) ∧ Esm.Expr.eval term.ast (Esm.Units.ScalarCheck.canonicalInputs bindings) = .ok (.num (Esm.Units.ScalarCheck.scaleValue result.scale.real value))",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checked_scalar_rescaling"
+    },
+    {
+      "id": "P-units-scalar-rational-exponent-evaluation",
+      "clauses": [
+        "spec.4.8.3.pow-exponent-dimensionless"
+      ],
+      "statement": "The exact expression evaluator reads the constant numerator-over-denominator expression for every rational exponent as that exact rational value, independently of the environment.",
+      "lean_statement": "∀ (q : ℚ) (env : Esm.Expr.Env Esm.Closed.Num), Esm.Expr.eval (Esm.Units.ScalarCheck.rationalExponent q) env = .ok (.num (.fin (q : ℝ)))",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.eval_rationalExponent"
+    },
+    {
+      "id": "P-units-scalar-transcendental-scale-one",
+      "clauses": [
+        "spec.4.8.3.strict-transcendental-argument",
+        "spec.4.8.3.no-silent-scale-normalization"
+      ],
+      "statement": "An accepted strict transcendental input already has real scale one and gives the ordinary dimensionless result unit, including under the pure-angle exception.",
+      "lean_statement": "∀ (u result : Esm.Units.U), Esm.Units.ScalarCheck.checkPure u = .ok (some result) → u.scale.real = Esm.Units.U.one.scale.real ∧ result = Esm.Units.U.one",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checkPure_scales"
+    },
+    {
+      "id": "P-units-scalar-atan2-commensurability",
+      "clauses": [
+        "spec.4.8.3.atan2-commensurate"
+      ],
+      "statement": "An accepted pair of atan2 coordinates agrees in dimension and exact scale, and its result unit is rad.",
+      "lean_statement": "∀ (y x result : Esm.Units.U), Esm.Units.ScalarCheck.checkAtan2 y x = .ok (some result) → y.Agree x ∧ result = .base .rad",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.checkAtan2_units"
+    },
+    {
+      "id": "P-units-scalar-bare-literal-needs-context",
+      "clauses": [
+        "spec.4.8.3.sum-operands-share-unit",
+        "spec.4.8.4.undeterminable-not-dimensionless"
+      ],
+      "statement": "For a scale other than one, converting the declared operand of x + 1 and leaving the bare literal unchanged cannot give the converted value of the authored sum.",
+      "lean_statement": "∀ (s x : ℝ), s ≠ 1 → Esm.Expr.eval (.node \"+\" [.var \"x\", .num 1 0]) [(\"x\", .num (Esm.Closed.Num.fin (s * x)))] ≠ .ok (.num (Esm.Closed.Num.fin (s * (x + 1))))",
+      "status": "proven",
+      "theorem": "Esm.Units.ScalarCheck.unscaled_literal_breaks_rescaling"
+    }
+  ]
+}

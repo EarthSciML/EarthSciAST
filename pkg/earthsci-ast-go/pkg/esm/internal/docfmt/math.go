@@ -26,8 +26,15 @@ func mathParseToks(lim *Lim, sf Sf, s *Sym, toks []Tok) (Json, bool) {
 	return psParseToks(lim, sf, s, toks)
 }
 
-// mathPrintLatex is `Math.printLatex` (RoundTripLatex.lean).
+// mathPrintLatex is `Math.printLatex` (RoundTripLatex.lean): an expression
+// (an `==` at its top is a comparison and prints as any expression does).
 func mathPrintLatex(s *Sym, e Json) string {
+	return string(latexRender(prPa(Ctx{sf: SfLatex, s: s}, 1, e)))
+}
+
+// mathPrintLatexEqn is `Math.printLatexEqn`: an equation's expression,
+// `==(lhs, rhs)`, in its defining form when it has one.
+func mathPrintLatexEqn(s *Sym, e Json) string {
 	return string(latexRender(mathPrint(SfLatex, s, e)))
 }
 
@@ -40,8 +47,16 @@ func mathParseLatex(lim *Lim, s *Sym, text string) (Json, bool) {
 	return mathParseToks(lim, SfLatex, s, toks)
 }
 
-// mathPrintTypst is `Math.printTypst`.
+// mathPrintTypst is `Math.printTypst` (RoundTripTypst.lean): an expression
+// (an `==` at its top is a comparison, as in an event's condition, and prints
+// as any expression does).
 func mathPrintTypst(s *Sym, e Json) string {
+	return string(typRender(prPa(Ctx{sf: SfTypst, s: s}, 1, e)))
+}
+
+// mathPrintTypstEqn is `Math.printTypstEqn`: an equation's expression,
+// `==(lhs, rhs)`, in its defining form when it has one.
+func mathPrintTypstEqn(s *Sym, e Json) string {
 	return string(typRender(mathPrint(SfTypst, s, e)))
 }
 

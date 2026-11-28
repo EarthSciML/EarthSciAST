@@ -20,6 +20,57 @@
       "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description[The box model.]\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n"
     },
     {
+      "id": "description_verbatim",
+      "kind": "print",
+      "description": "A description whose text is safe to typeset as Typst markup is written verbatim in Typst, #description[...]: code spans, nested brackets, lists and an underscore inside a word are kept as written.",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"Box": {"description": "Mixes `q` over [lev, [tracer]]; see grids/column_1d.\n- one\n- two", "equations": [{"lhs": {"args": ["c"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["u", "c"], "op": "*"}], "op": "-"}}], "variables": {"c": {"default": 0, "type": "unknown", "units": "kg/m^3"}, "u": {"default": 1, "type": "parameter", "units": "m/s"}}}}},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[Box]\n\n```esm:description\nMixes `q` over [lev, [tracer]]; see grids/column_1d.\n- one\n- two\n```\n\n:var[$c$]{default=0 units=\"kg/m^3\"}\n\n:param[$u$]{default=1 units=\"m/s\"}\n\n$$\n\\frac{\\mathrm{d} c}{\\mathrm{d} t} = -u c\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description[Mixes `q` over [lev, [tracer]]; see grids/column_1d.\n- one\n- two]\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n"
+    },
+    {
+      "id": "description_string",
+      "kind": "print",
+      "description": "A description that is not safe to typeset as Typst markup (here a * for multiplication, a $, a #, an @, an underscore outside a word, a // and a <) is written in Typst as a string, #description(\"...\").",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"Box": {"description": "Loss is k * c, $5 per #2 @ x_ y // \"z\" <a>", "equations": [{"lhs": {"args": ["c"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["u", "c"], "op": "*"}], "op": "-"}}], "variables": {"c": {"default": 0, "type": "unknown", "units": "kg/m^3"}, "u": {"default": 1, "type": "parameter", "units": "m/s"}}}}},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[Box]\n\n```esm:description\nLoss is k * c, $5 per #2 @ x_ y // \"z\" <a>\n```\n\n:var[$c$]{default=0 units=\"kg/m^3\"}\n\n:param[$u$]{default=1 units=\"m/s\"}\n\n$$\n\\frac{\\mathrm{d} c}{\\mathrm{d} t} = -u c\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description(\"Loss is k * c, $5 per #2 @ x_ y // \\\"z\\\" <a>\")\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n"
+    },
+    {
+      "id": "description_escaped",
+      "kind": "variant",
+      "description": "A Typst description written with its markup characters escaped by a backslash, as earlier documents were, reads as the unescaped text.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description[First\\-order \\*loss\\* \\[x\\]]\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"Box": {"description": "First-order *loss* [x]", "equations": [{"lhs": {"args": ["c"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["u", "c"], "op": "*"}], "op": "-"}}], "variables": {"c": {"default": 0, "type": "unknown", "units": "kg/m^3"}, "u": {"default": 1, "type": "parameter", "units": "m/s"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description(\"First-order *loss* [x]\")\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n"
+    },
+    {
+      "id": "description_string_shorthand",
+      "kind": "print",
+      "description": "A description with a Typst shorthand (here ~, -- and ...) or a bracket inside a code span is written in Typst as a string: as markup it would typeset differently from the text, or not compile.",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"Box": {"description": "Valid for ~10--20 km... see index [`]`].", "equations": [{"lhs": {"args": ["c"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["u", "c"], "op": "*"}], "op": "-"}}], "variables": {"c": {"default": 0, "type": "unknown", "units": "kg/m^3"}, "u": {"default": 1, "type": "parameter", "units": "m/s"}}}}},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[Box]\n\n```esm:description\nValid for ~10--20 km... see index [`]`].\n```\n\n:var[$c$]{default=0 units=\"kg/m^3\"}\n\n:param[$u$]{default=1 units=\"m/s\"}\n\n$$\n\\frac{\\mathrm{d} c}{\\mathrm{d} t} = -u c\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description(\"Valid for ~10--20 km... see index [`]`].\")\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n"
+    },
+    {
+      "id": "description_raw_span",
+      "kind": "variant",
+      "description": "In a hand-written Typst description, a code span's characters are literal (a backslash or bracket inside one is kept as written), and outside one \\u{...} is a code point.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description[Use `\\n` or `]` here, caf\\u{e9}.]\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"Box": {"description": "Use `\\n` or `]` here, café.", "equations": [{"lhs": {"args": ["c"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["u", "c"], "op": "*"}], "op": "-"}}], "variables": {"c": {"default": 0, "type": "unknown", "units": "kg/m^3"}, "u": {"default": 1, "type": "parameter", "units": "m/s"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description(\"Use `\\\\n` or `]` here, café.\")\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n"
+    },
+    {
+      "id": "description_like_prose",
+      "kind": "variant",
+      "description": "A line that only starts like a description opener (here #description-note[...]) is prose, which the reader skips.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description-note[An aside.]\n\n#description[The box model.]\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"Box": {"description": "The box model.", "equations": [{"lhs": {"args": ["c"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["u", "c"], "op": "*"}], "op": "-"}}], "variables": {"c": {"default": 0, "type": "unknown", "units": "kg/m^3"}, "u": {"default": 1, "type": "parameter", "units": "m/s"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"Box\")\n\n#description[The box model.]\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n"
+    },
+    {
       "id": "declarations",
       "kind": "print",
       "description": "Variables and parameters are :var and :param directives (Typst #var, #param), the other fields attributes; a list-valued field is a quoted flow collection.",
@@ -186,6 +237,14 @@
       "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"continuous_events": [{"affects": [{"lhs": "u", "rhs": {"args": ["u"], "op": "-"}}], "conditions": [{"args": ["c", 0.5], "op": "-"}], "name": "floor"}], "discrete_events": [{"affects": [{"lhs": "c", "rhs": {"args": [{"args": ["c"], "op": "Pre"}, 2], "op": "/"}}], "name": "reset", "trigger": {"expression": {"args": ["c", 2], "op": ">"}, "type": "condition"}}], "equations": [{"lhs": {"args": ["c"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["u", "c"], "op": "*"}], "op": "-"}}], "guesses": {"c": {"args": ["u", 1], "op": "+"}}, "variables": {"c": {"default": 0, "type": "unknown", "units": "kg/m^3"}, "u": {"default": 1, "type": "parameter", "units": "m/s"}}}}},
       "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$c$]{default=0 units=\"kg/m^3\"}\n\n:param[$u$]{default=1 units=\"m/s\"}\n\n$$\n\\frac{\\mathrm{d} c}{\\mathrm{d} t} = -u c\n$$\n\n```esm:continuous_events\n- affects:\n    - lhs: \"u\"\n      rhs: $-u$\n  conditions:\n    - $c - 0.5$\n  name: \"floor\"\n```\n\n```esm:discrete_events\n- affects:\n    - lhs: \"c\"\n      rhs: $\\frac{\\operatorname{Pre}(c)}{2}$\n  name: \"reset\"\n  trigger:\n    expression: $c > 2$\n    type: \"condition\"\n```\n\n```esm:guesses\nc: $u + 1$\n```\n",
       "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n\n#esm-block(\"continuous_events\", (\n  (\n    affects: (\n      (\n        lhs: \"u\",\n        rhs: $-u$,\n      ),\n    ),\n    conditions: (\n      $c - 0.5$,\n    ),\n    name: \"floor\",\n  ),\n))\n\n#esm-block(\"discrete_events\", (\n  (\n    affects: (\n      (\n        lhs: \"c\",\n        rhs: $op(\"Pre\")(c)/2$,\n      ),\n    ),\n    name: \"reset\",\n    trigger: (\n      expression: $c > 2$,\n      type: \"condition\",\n    ),\n  ),\n))\n\n#esm-block(\"guesses\", (\n  c: $u + 1$,\n))\n"
+    },
+    {
+      "id": "block_math_comparison_faq",
+      "kind": "print",
+      "description": "An == in a path block is a comparison, not an equation: a faq with output indices on its right side keeps the bracket form, never the defining form y_i = …, i in S.",
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"discrete_events": [{"affects": [{"lhs": "c", "rhs": 0}], "name": "match", "trigger": {"expression": {"args": ["y", {"args": [], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "S"}}}], "op": "=="}, "type": "condition"}}], "equations": [{"lhs": {"args": ["c"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["u", "c"], "op": "*"}], "op": "-"}}], "variables": {"c": {"default": 0, "type": "unknown", "units": "kg/m^3"}, "u": {"default": 1, "type": "parameter", "units": "m/s"}, "w": {"type": "parameter"}, "y": {"type": "parameter"}}}}},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:var[$c$]{default=0 units=\"kg/m^3\"}\n\n:param[$u$]{default=1 units=\"m/s\"}\n\n:param[$w$]{}\n\n:param[$y$]{}\n\n$$\n\\frac{\\mathrm{d} c}{\\mathrm{d} t} = -u c\n$$\n\n```esm:discrete_events\n- affects:\n    - lhs: \"c\"\n      rhs: $0$\n  name: \"match\"\n  trigger:\n    expression: $y = \\left[\\sum w_{i}\\right]_{i \\in S}$\n    type: \"condition\"\n```\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n#param($w$)\n\n#param($y$)\n\n$ (dif c)/(dif t) = -u c $\n\n#esm-block(\"discrete_events\", (\n  (\n    affects: (\n      (\n        lhs: \"c\",\n        rhs: $0$,\n      ),\n    ),\n    name: \"match\",\n    trigger: (\n      expression: $y = lr([sum w_i])_(i in S)$,\n      type: \"condition\",\n    ),\n  ),\n))\n"
     },
     {
       "id": "block_math_coupling",

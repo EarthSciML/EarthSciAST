@@ -213,7 +213,7 @@ const MAX_RANK: usize = 8;
 /// Largest box a contraction is promoted to (`window × output` elements, one
 /// term each): beyond it the contraction stays unrolled rather than
 /// materialize its terms.
-const MAX_PROMOTED_ELEMS: usize = 1 << 27;
+pub const MAX_PROMOTED_ELEMS: usize = 1 << 27;
 
 /// The parts of a contraction (`faq`) every lowering form reads: the output
 /// index names, the body, the contracted names and their ranges, the

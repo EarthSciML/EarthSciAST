@@ -357,7 +357,7 @@ function _lift_rhs_to_cell(
         shape === nothing && return _index_wrap(v, loops)
         return _lift_gather_shaped(v, shape, loops, align.axes, species, elementwise)
     end
-    function node(e::OpExpr)
+    function node(e::OpExpr, _elementwise::Bool)
         if walk !== nothing && e.op == APPLY_EXPRESSION_TEMPLATE_OP && _ref_is_makearray(walk, e)
             # An operator written as a reference: it denotes its `makearray`,
             # read per cell like one, and stays a reference.

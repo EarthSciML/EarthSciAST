@@ -33,6 +33,7 @@ import numpy as np
 import pytest
 
 from earthsci_ast.esm_types import ExprNode
+from earthsci_ast.inline_tests import run_inline_tests
 from earthsci_ast.numpy_interpreter import EvalContext, NumpyInterpreterError, eval_expr
 from earthsci_ast.parse import load_string
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
@@ -794,3 +795,226 @@ def test_alignment_declines_on_a_derived_index_set() -> None:
     assert "cells" not in sizes
     expr = {"op": "*", "args": ["w1", "x"]}
     assert align_expression(expr, ("cells", "lat"), {"w1": ("lat",)}, sizes) is expr
+
+
+@pytest.mark.parametrize("with_state", [False, True])
+def test_native_named_parameter_axes_at_output(with_state: bool) -> None:
+    """Named parameters align in both output paths, including inferred observations."""
+    variables = {
+        "q": {"type": "parameter", "shape": ["lat"], "default": [5, 8]},
+        "c": {"type": "parameter", "shape": ["lon"], "default": [3, 10, 20]},
+        "singleton": {"type": "parameter", "shape": ["one"], "default": 4},
+        "reordered": {"type": "unknown", "shape": ["lon", "lat"], "defined_by": "product"},
+        "product": {"type": "unknown", "defined_by": {"op": "*", "args": ["q", "c"]}},
+        "explicit": {
+            "type": "unknown",
+            "shape": ["lon", "lat"],
+            "defined_by": {"op": "broadcast", "fn": "+", "args": ["q", "c"]},
+        },
+        "gather": {
+            "type": "unknown",
+            "defined_by": {"op": "index", "args": [{"op": "+", "args": ["q", "c"]}, 2, 3]},
+        },
+        "mixed": {
+            "type": "unknown",
+            "shape": ["lon", "lat"],
+            "defined_by": {"op": "+", "args": ["q", _const([100, 200, 300])]},
+        },
+        "subset": {"type": "unknown", "shape": ["lon", "lat"], "defined_by": "q"},
+        "sampled": {
+            "type": "unknown",
+            "defined_by": {
+                "op": "+",
+                "args": [
+                    "q",
+                    {"op": "index", "args": ["singleton", 1]},
+                    "clock" if with_state else "t",
+                ],
+            },
+        },
+    }
+    equations = []
+    if with_state:
+        variables["clock"] = {"type": "unknown", "default": 0}
+        equations.append({"lhs": {"op": "D", "args": ["clock"], "wrt": "t"}, "rhs": 1})
+    doc = json.loads(_doc(variables, equations, {**GRID, "one": {"kind": "interval", "size": 1}}))
+    doc["models"]["M"]["tests"] = [
+        {
+            "id": "outputs",
+            "time_span": {"start": 0, "end": 1},
+            "assertions": [
+                {"variable": "explicit", "coords": {"lat": 2, "lon": 3}, "time": 0, "expected": 28},
+                {"variable": "product[2,3]", "time": 0, "expected": 160},
+                {"variable": "reordered[3,2]", "time": 0, "expected": 160},
+                {"variable": "gather", "time": 0, "expected": 28},
+                {"variable": "mixed[3,2]", "time": 0, "expected": 308},
+                {"variable": "subset[3,2]", "time": 0, "expected": 8},
+                {"variable": "sampled[2]", "time": 1, "expected": 13},
+            ],
+        }
+    ]
+    results = run_inline_tests(load_string(json.dumps(doc)), compiler="native")
+    assert len(results) == 7
+    assert all(result.passed for result in results), results
+
+
+def test_promoted_axes_handles_reverse_definition_chain() -> None:
+    """The inferred frame cannot depend on Python's call stack or equation order."""
+    from earthsci_ast.flatten import FlattenedEquation, flatten
+    from earthsci_ast.index_alignment import promoted_axes
+
+    flat = flatten(
+        load_string(_doc({"q": {"type": "parameter", "shape": ["lat"], "default": 1}}, []))
+    )
+    flat.equations = [FlattenedEquation(f"M.alias{i}", f"M.alias{i + 1}", "M") for i in range(1500)]
+    flat.equations.append(FlattenedEquation("M.alias1500", "M.q", "M"))
+    assert promoted_axes(flat)["M.alias0"] == ("lat",)
+
+
+def _lat_faq() -> dict:
+    return {
+        "op": "faq",
+        "args": [],
+        "output_idx": ["i"],
+        "ranges": {"i": {"from": "lat"}},
+        "expr": {"op": "index", "args": ["q", "i"]},
+    }
+
+
+def _nested_producer_doc(equations: list, z_shape: list | None, assertion: dict) -> dict:
+    variables = {
+        "q": {"type": "parameter", "units": "1", "shape": ["lat"], "default": [5, 8, 9]},
+        "c": {"type": "parameter", "units": "1", "shape": ["lon"], "default": [3, 10, 20]},
+        "k": {"type": "parameter", "units": "1", "default": 1},
+        "w": {"type": "unknown", "units": "1"},
+        "z": {"type": "unknown", "units": "1"},
+    }
+    if z_shape is not None:
+        variables["z"]["shape"] = z_shape
+    if not any(eq["lhs"] == "w" for eq in equations):
+        del variables["w"]
+    return {
+        "esm": "2.3.0",
+        "metadata": {"name": "NestedProducer"},
+        # Equal extents: a positional broadcast gives a finite, wrong answer.
+        "index_sets": {
+            "lat": {"kind": "interval", "size": 3},
+            "lon": {"kind": "interval", "size": 3},
+        },
+        "models": {
+            "M": {
+                "variables": variables,
+                "equations": equations,
+                "tests": [
+                    {"id": "t", "time_span": {"start": 0, "end": 1}, "assertions": [assertion]}
+                ],
+            }
+        },
+    }
+
+
+_NESTED_CASES = {
+    # `w = k * faq(lat)` is over [lat]; `z = w + c` is the [lat, lon] union.
+    "via_definition": (
+        [
+            {"lhs": "w", "rhs": {"op": "*", "args": ["k", _lat_faq()]}},
+            {"lhs": "z", "rhs": {"op": "+", "args": ["w", "c"]}},
+        ],
+        None,
+        "z[2,3]",
+    ),
+    "inline_undeclared": (
+        [{"lhs": "z", "rhs": {"op": "+", "args": [{"op": "*", "args": ["k", _lat_faq()]}, "c"]}}],
+        None,
+        "z[2,3]",
+    ),
+    "inline_declared_transposed": (
+        [{"lhs": "z", "rhs": {"op": "+", "args": ["c", {"op": "*", "args": ["k", _lat_faq()]}]}}],
+        ["lon", "lat"],
+        "z[3,2]",
+    ),
+}
+
+
+@pytest.mark.parametrize("compiler", ["interpreter", "native"])
+@pytest.mark.parametrize("case", sorted(_NESTED_CASES))
+def test_nested_producer_contributes_its_axes_to_the_union(case: str, compiler: str) -> None:
+    """A ``faq`` under an elementwise op (``k * faq(...)``) names its index sets
+    on the value path, so the undeclared result is the [lat, lon] union and
+    each operand is placed by name (esm-spec §4.3.4, §9.6.11). Reading it as a
+    scalar built ``z`` over one axis and broadcast ``c`` by position."""
+    equations, z_shape, cell = _NESTED_CASES[case]
+    assertion = {"variable": cell, "time": 0, "expected": 8 + 20}
+    doc = _nested_producer_doc(equations, z_shape, assertion)
+    results = run_inline_tests(load_string(json.dumps(doc)), compiler=compiler)
+    assert [(r.passed, r.actual) for r in results] == [(True, 28.0)], results
+
+
+def test_promoted_axes_reads_a_nested_producer() -> None:
+    from earthsci_ast.flatten import flatten
+    from earthsci_ast.index_alignment import promoted_axes
+
+    equations, _, cell = _NESTED_CASES["via_definition"]
+    doc = _nested_producer_doc(equations, None, {"variable": cell, "time": 0, "expected": 0})
+    axes = promoted_axes(flatten(load_string(json.dumps(doc))))
+    assert axes["M.w"] == ("lat",)
+    assert axes["M.z"] == ("lat", "lon")
+
+
+def _singleton_axis_doc(rhs) -> str:
+    return json.dumps(
+        {
+            "esm": "2.3.0",
+            "metadata": {"name": "SingletonAxis"},
+            "index_sets": {
+                "lat": {"kind": "interval", "size": 2},
+                "one": {"kind": "interval", "size": 1},
+            },
+            "models": {
+                "M": {
+                    "variables": {
+                        "s": {"type": "parameter", "units": "1", "shape": ["one"], "default": [4]},
+                        "k": {"type": "parameter", "units": "1", "default": 2},
+                        "y": {"type": "unknown", "units": "1", "shape": ["lat"]},
+                    },
+                    "equations": [{"lhs": "y", "rhs": rhs}],
+                    "tests": [
+                        {
+                            "id": "t",
+                            "time_span": {"start": 0, "end": 1},
+                            "assertions": [
+                                {"variable": "y", "coords": {"lat": 2}, "time": 0, "expected": 8}
+                            ],
+                        }
+                    ],
+                }
+            },
+        }
+    )
+
+
+_SINGLETON_RHS = ["s", {"op": "*", "args": ["s", "k"]}]
+
+
+@pytest.mark.parametrize("rhs", _SINGLETON_RHS, ids=["alias", "scaled"])
+def test_a_one_element_axis_is_not_an_axis_of_the_result(rhs) -> None:
+    """``s`` over ``["one"]`` (extent 1) in a ``["lat"]`` result: alignment is
+    by NAME, so ``one`` has no result axis to fill, whatever its extent
+    (esm-spec §4.3.4 rule 1). A bare ``y = rhs`` definition is checked like
+    ``D(y) = rhs``."""
+    doc = _singleton_axis_doc(rhs)
+    assert "array_shape_mismatch" in _codes(doc)
+    assert any("'s'" in m and "'one'" in m for m in _errors(doc))
+
+
+@pytest.mark.parametrize("compiler", ["interpreter", "native"])
+@pytest.mark.parametrize("rhs", _SINGLETON_RHS, ids=["alias", "scaled"])
+def test_a_one_element_axis_is_refused_at_build(rhs, compiler: str, monkeypatch) -> None:
+    """The build refuses it too, rather than stretching the one element over
+    ``lat``: with load-time validation bypassed, the run reports the mismatch."""
+    import earthsci_ast.parse as parse
+
+    monkeypatch.setattr(parse, "_validate_structural", lambda *a, **k: None)
+    results = run_inline_tests(load_string(_singleton_axis_doc(rhs)), compiler=compiler)
+    assert [r.passed for r in results] == [False]
+    assert "array_shape_mismatch" in (results[0].message or "")

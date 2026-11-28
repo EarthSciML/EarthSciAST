@@ -35,12 +35,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
     # Build and return (du values at the probes, u0, counters). `atload`
     # expands the surviving references before the build sees them, which is the
     # Option-A image; `compiler` picks the evaluator.
+    flat_fixture(path) = flatten(load_path(path))
+
     function build_and_probe(
-            fix::AbstractString; atload::Bool = false,
+            flat::EarthSciAST.FlattenedSystem; atload::Bool = false,
             compiler::Symbol = :native
         )
         let
-            flat = flatten(load_path(fix))
             atload && (flat = expand_flattened_refs(flat))
             f, u0, p, _, _, rep = EarthSciAST.Internal.build(flat; compiler = compiler)
             counters = (
@@ -60,20 +61,21 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         end
     end
 
+    fullrank = flat_fixture(fullrank_per_cell_fixture())
+
     @testset "gate 3: bit-identity on the full-rank cross-product fixture" begin
-        WHOLE = bench("transport_3axis_7cubed_fullrank.esm")
-        FIX = fullrank_per_cell_fixture()
+        whole = flat_fixture(bench("transport_3axis_7cubed_fullrank.esm"))
 
         # Both spellings, lifted or not, are the same right-hand side.
-        lifted, _, _ = build_and_probe(WHOLE)
-        lifted_percell, _, _ = build_and_probe(WHOLE; compiler = :interpreter)
-        fast, u0, cfast = build_and_probe(FIX)
+        lifted, _, _ = build_and_probe(whole)
+        lifted_percell, _, _ = build_and_probe(whole; compiler = :interpreter)
+        fast, u0, cfast = build_and_probe(fullrank)
         for k in 1:3
             @test lifted[k] == fast[k]
             @test lifted[k] == lifted_percell[k]
         end
-        atload, _, catload = build_and_probe(FIX; atload = true)
-        percell, _, _ = build_and_probe(FIX; compiler = :interpreter)
+        atload, _, catload = build_and_probe(fullrank; atload = true)
+        percell, _, _ = build_and_probe(fullrank; compiler = :interpreter)
 
         @test length(u0) == 343
         for k in 1:3
@@ -102,9 +104,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # structurally: EVERY acc plan is vectorizable, which is the property a
         # compiled backend needs — the emitter refuses a per-cell fallback
         # kernel outright.
-        FIX = fullrank_per_cell_fixture()
-        flat = flatten(load_path(FIX))
-        fo, u0, p, _, _ = EarthSciAST.Internal.build(flat; form = :oop)
+        fo, u0, p, _, _ = EarthSciAST.Internal.build(fullrank; form = :oop)
         # `fo` is the `_OopRHS` wrapper; the compiled IR — and its lane plans —
         # is its `rhs` field.
         oplans = getfield(getfield(fo, :rhs), :acc_plans)
@@ -117,9 +117,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # 3-D makearray — the affine and symbolic paths decline it (pre-existing
         # "reduced-rank region value" fallback), so this pins the retry chain:
         # ref-aware attempt → fused retry → symbolic → per-cell, all sound.
-        FIX = bench("transport_3axis_7cubed.esm")
-        fast, u0, _ = build_and_probe(FIX)
-        atload, _, _ = build_and_probe(FIX; atload = true)
+        reduced = flat_fixture(bench("transport_3axis_7cubed.esm"))
+        fast, u0, _ = build_and_probe(reduced)
+        atload, _, _ = build_and_probe(reduced; atload = true)
         for k in 1:3
             @test fast[k] == atload[k]
             @test sum(abs, fast[k]) > 0
@@ -241,8 +241,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             open(fix, "w") do io
                 JSON3.write(io, doc)
             end
-            fast, u0, cfast = build_and_probe(fix)
-            atload, _, _ = build_and_probe(fix; atload = true)
+            flat = flat_fixture(fix)
+            fast, u0, cfast = build_and_probe(flat)
+            atload, _, _ = build_and_probe(flat; atload = true)
             @test length(u0) == 8
             for k in 1:3
                 @test fast[k] == atload[k]
@@ -382,8 +383,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             # The reference-preserving build (default) and the expand-at-load build
             # must BOTH succeed and agree bit-for-bit. Before the fix the default
             # build threw E_TREEWALK_UNBOUND_VARIABLE: T.
-            refbuild, u0, _ = build_and_probe(fix)
-            atload, _, _ = build_and_probe(fix; atload = true)
+            flat = flat_fixture(fix)
+            refbuild, u0, _ = build_and_probe(flat)
+            atload, _, _ = build_and_probe(flat; atload = true)
             @test length(u0) == 2                       # Chem.A, Chem.B (0-D)
             for k in 1:3
                 @test refbuild[k] == atload[k]

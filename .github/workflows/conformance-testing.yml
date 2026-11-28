@@ -174,8 +174,8 @@ jobs:
       #
       # `Pkg.test()` builds a separate environment (the `[targets] test` set)
       # and precompiles it under its own `Base.CacheFlags` configuration
-      # (`--check-bounds=yes` before 1.13, `--code-coverage` when coverage is
-      # on), ~210 packages that the install step below does not build. Warm
+      # (`--check-bounds=yes` before 1.13), ~210 packages that the install
+      # step below does not build. Warm
       # that costs well under a minute; cold it costs minutes of every leg.
       # (That set no longer includes ModelingToolkit or Catalyst: their tests
       # run in mtk-compiler.yml's `mtk-tests` job, in an environment of their
@@ -225,29 +225,13 @@ jobs:
             Pkg.precompile()
           '
 
-      # Coverage on ONE leg — the one that uploads it. Instrumented code runs
-      # slower and precompiles under a separate cache configuration, which the
-      # other leg paid for and then threw away. It rides on the LTS leg, the
-      # faster of the two, so the 90-minute ceiling has the most headroom
-      # where the extra cost lands.
       - name: Run Julia tests
         env:
           ESM_EARTHSCIMODELS: ${{ github.workspace }}/EarthSciModels
-        run: |
-          julia --project=. -e 'using Pkg; Pkg.test(coverage=${{ matrix.julia-version == 'lts' }})'
-
-      - name: Process Julia coverage
-        uses: julia-actions/julia-processcoverage@v1
-        if: matrix.julia-version == 'lts'
-        with:
-          directories: pkg/EarthSciAST.jl/src
-
-      - name: Upload Julia coverage to Codecov
-        uses: codecov/codecov-action@v7
-        if: matrix.julia-version == 'lts'
-        with:
-          files: lcov.info
-          flags: julia
+          # Independent corpus builds use the interactive pool. The default
+          # pool stays single-threaded for the serial compiler checks.
+          JULIA_NUM_THREADS: '1,2'
+        run: julia --project=. -e 'using Pkg; Pkg.test()'
 
       # See the restore step above for why this is main-only. `always()` so a
       # red suite still banks the precompile work, which is just as valid; the
@@ -429,27 +413,10 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install build pytest pytest-cov
           pip install -e .[dev,test]
 
-      # Coverage only on the leg that uploads it: on 3.11 coverage.py falls
-      # back to its sys.settrace tracer, which doubled that leg's wall time for
-      # a report nobody read. `--durations` keeps the slowest tests visible in
-      # every log.
       - name: Run Python tests
-        run: |
-          if [ "${{ matrix.python-version }}" = "3.x" ]; then
-            pytest tests/ -v --durations=30 --cov=src/earthsci_ast --cov-report=xml
-          else
-            pytest tests/ -v --durations=30
-          fi
-
-      - name: Upload Python coverage to Codecov
-        uses: codecov/codecov-action@v7
-        if: matrix.python-version == '3.x'
-        with:
-          files: pkg/earthsci-ast-py/coverage.xml
-          flags: python
+        run: pytest tests/ -v --durations=30
 
   rust-tests:
     runs-on: ubuntu-latest
@@ -706,14 +673,7 @@ jobs:
       # Under -race the esm package's runtime varies widely between hosted
       # runners and approaches go test's default 10-minute timeout.
       - name: Run Go tests
-        run: go test -v -race -timeout 20m -coverprofile=coverage.out ./...
-
-      - name: Upload Go coverage to Codecov
-        uses: codecov/codecov-action@v7
-        if: matrix.go-version == 'stable'
-        with:
-          files: pkg/earthsci-ast-go/coverage.out
-          flags: go
+        run: go test -v -race -timeout 20m ./...
 
       - name: Build Go binary
         run: go build -v ./...
@@ -756,10 +716,8 @@ jobs:
   # per-language job still fails the workflow on its own, exactly as before.
   standard-conformance-testing:
     runs-on: ubuntu-latest
-    # Each inline-test tier runs every binding under both compilers, and Julia
-    # starts a fresh process per tier and compiler; the recurrence,
-    # value-invention, expression-form, boolean-reduction and missing-data
-    # tiers took the job past 45 minutes.
+    # Julia batches the inline-test tiers in one process per compiler, but the
+    # conformance producers still need headroom for cold builds.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
@@ -842,25 +800,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev,test]
 
-      # Build exactly what the harness RUNS, which is not what this step used
-      # to build. Every rust invocation in `test-conformance.sh` is a `cargo
-      # run` on the DEV profile with `--features conformance-adapters`; the
-      # release artifacts this step produced were used by nothing, at a
-      # measured 4m21s per run (#224). Dev is not the slow profile here:
-      # Cargo.toml pins `opt-level = 2` for this crate and its dependencies in
-      # the dev profile precisely so the conformance producers run fast.
-      #
-      # This step is NOT cheaper than the one it replaces, and nothing here
-      # claims it is: it builds three more bin targets at the same
-      # optimisation level, so on its own it takes longer than the release
-      # build did. What is saved is downstream — the crate is compiled ONCE,
-      # here, instead of again inside the 45-minute harness step below, where
-      # it was previously built twice over (once at default features for
-      # `esm`, once with `conformance-adapters` for the first adapter).
-      - name: Build Rust package
+      # Build the CLI and adapters in one workspace feature resolution. The
+      # harness executes these binaries directly, so a package-specific
+      # Cargo invocation cannot rebuild their shared dependencies.
+      - name: Build Rust conformance binaries
         working-directory: pkg/earthsci-ast-rs
         run: |
-          cargo build --features conformance-adapters
+          cargo build --target-dir target --workspace --bins --features earthsci-ast/conformance-adapters
 
       # Make scripts executable
       - name: Make conformance scripts executable
@@ -872,13 +818,11 @@ jobs:
 
       # Run standard cross-language conformance testing.
       #
-      # `--skip-binding-suites`: the five suites are the `needs:` gate above,
-      # already run at more versions than this job could. What still runs here
-      # is everything only this job can do — the per-binding conformance
-      # PRODUCERS, the cross-language comparison, and the determinism /
-      # geometry / cadence / PDE gates. A producer that fails still fails this
-      # job. See the job comment and issue #224.
+      # The binding matrices run concurrently. This job runs the conformance
+      # producers and checks their results.
       - name: Run standard conformance tests
+        env:
+          ESM_RUST_CONFORMANCE_BIN_DIR: ${{ github.workspace }}/pkg/earthsci-ast-rs/target/debug
         run: |
           ./scripts/test-conformance.sh --skip-binding-suites
 

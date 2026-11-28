@@ -41,6 +41,8 @@ class Scalar (α : Type) where
   le : α → α → Bool
   lt : α → α → Bool
   isNaN : α → Bool
+  /-- Order for IEEE minimum/maximum, which distinguish signed zeros. -/
+  ltExtrema : α → α → Bool := lt
 
 /-- A scalar as the reference sees it: a finite real, or NaN. (Infinite inputs are not
 modelled over ℝ; the axes are required finite and JSON cannot spell an
@@ -97,6 +99,7 @@ instance : Scalar Float where
   le := fun a b => a ≤ b
   lt := fun a b => a < b
   isNaN := Float.isNaN
+  ltExtrema := fun a b => decide (a < b) || (a.toBits == 0x8000000000000000 && b.toBits == 0)
 
 section Generic
 
@@ -182,6 +185,7 @@ namespace Num
   simp [Scalar.div, Num.div, hb]
 @[simp] theorem le_fin (a b : ℝ) : (Scalar.le (fin a) (fin b) : Bool) = decide (a ≤ b) := rfl
 @[simp] theorem lt_fin (a b : ℝ) : (Scalar.lt (fin a) (fin b) : Bool) = decide (a < b) := rfl
+@[simp] theorem ltExtrema_eq_lt (a b : Num) : Scalar.ltExtrema a b = Scalar.lt a b := rfl
 @[simp] theorem le_nan (x : Num) : Scalar.le x nan = false := by cases x <;> rfl
 @[simp] theorem nan_le (x : Num) : Scalar.le nan x = false := by cases x <;> rfl
 @[simp] theorem lt_nan (x : Num) : Scalar.lt x nan = false := by cases x <;> rfl

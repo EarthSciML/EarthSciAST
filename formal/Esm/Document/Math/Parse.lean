@@ -968,13 +968,39 @@ def pEulerExp (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
     | some (y, r') => some (node "exp" [y], r')
     | none => none
 
+/-- One segment of an index set's name: an upright word that `upSet` sets upright, or a
+name segment. The two never overlap: `pSeg` reads an upright token only as a formula, and
+`upSet` excludes formulas. -/
+def pSetSeg (sf : Sf) (ts : List Tok) : Option (List Char × List Tok) :=
+  match ts with
+  | .ups [(g, "")] :: r => if upSet sf g.toList then some (g.toList, r) else pSeg sf ts
+  | _ => pSeg sf ts
+
+/-- The segments of an index set's name after the first, joined by the scope dot. -/
+def pSetLoop (sf : Sf) : Nat → List Char → List Tok → Option (List Char × List Tok)
+  | 0, _, _ => none
+  | f + 1, acc, ts =>
+    match ts with
+    | .kw .sdot :: r =>
+      match pSetSeg sf r with
+      | some (g, r') => pSetLoop sf f (acc ++ '.' :: g) r'
+      | none => none
+    | _ => some (acc, ts)
+
+/-- An index set's name (see `setToks`): a name whose segments may also be upright words
+in Typst (`upright("lev")`, `upright("lev")"."upright("top")`). -/
+def pSet (sf : Sf) (ts : List Tok) : Option (String × List Tok) :=
+  match pSetSeg sf ts with
+  | some (g, r) => (pSetLoop sf (r.length + 1) g r).map fun p => (String.ofList p.1, p.2)
+  | none => none
+
 /-- A range row: `k \in S`, `k \in S(i, j)`, `a \le k \le b`. -/
 def pRange (c : Ctx) : Nat → List Tok → Option (Row × List Tok)
   | 0, _ => none
   | f + 1, ts =>
     match pAdd c f ts with
     | some (.str k, .kw .inn :: r) =>
-      match pName c.sf r with
+      match pSet c.sf r with
       | some (s, .kw .lp :: r2) =>
         match pNames c.sf (r2.length + 1) r2 with
         | some (ps, .kw .rp :: r3) => some (.rng k (.obj [("from", .str s), ("of", .arr (ps.map .str))]), r3)
@@ -1007,6 +1033,16 @@ def pRows (c : Ctx) : Nat → Kw → Kw → List Tok → Option (List Row × Lis
     | some (row, .kw k :: r) =>
       if k = sep then (pRows c f sep close r).map fun p => (row :: p.1, p.2)
       else if k = close then some ([row], r) else none
+    | _ => none
+
+/-- Range rows separated by commas, to the end of the input: the ranges of a defining
+equation's output indices (`x_s = …, s \in S`). -/
+def pTail (c : Ctx) : Nat → List Tok → Option (List Row)
+  | 0, _ => none
+  | f + 1, ts =>
+    match pRow c f (isKw .comma) ts with
+    | some (row, []) => some [row]
+    | some (row, .kw .comma :: r) => (pTail c f r).map (row :: ·)
     | _ => none
 
 /-- A reduction after its operator: the subscript rows (LaTeX: one row, a lone dense

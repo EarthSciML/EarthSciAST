@@ -53,6 +53,8 @@ import {
   callFormNode,
   unescK,
   unescT,
+  unlift,
+  upSet,
   type Ctx,
   type FaqForm,
   type RedK,
@@ -1464,6 +1466,35 @@ export function pEulerExp(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
   return r && [node('exp', [r[0]]), r[1]]
 }
 
+/** `Math.pSetSeg`: an upright word `upSet` sets upright, or a name segment. */
+function pSetSeg(sf: Sf, ts: Toks, i: number): P<string> {
+  const t = ts[i]
+  if (
+    t !== undefined &&
+    t.t === 'ups' &&
+    t.ps.length === 1 &&
+    t.ps[0][1] === '' &&
+    upSet(sf, t.ps[0][0])
+  ) {
+    return [t.ps[0][0], i + 1]
+  }
+  return pSeg(sf, ts, i)
+}
+
+/** `Math.pSet`: an index set's name, its segments joined by the scope dot. */
+export function pSet(sf: Sf, ts: Toks, i: number): P<string> {
+  const first = pSetSeg(sf, ts, i)
+  if (first === undefined) return undefined
+  let [acc, r] = first
+  while (isKwTok(ts[r], 'Sdot')) {
+    const g = pSetSeg(sf, ts, r + 1)
+    if (g === undefined) return undefined
+    acc += `.${g[0]}`
+    r = g[1]
+  }
+  return [acc, r]
+}
+
 /** `Math.pRange`: a range row: `k \in S`, `k \in S(i, j)`, `a \le k \le b`. */
 export function pRange(c: Ctx, f: number, ts: Toks, i: number): P<Row> {
   if (f === 0) return undefined
@@ -1472,7 +1503,7 @@ export function pRange(c: Ctx, f: number, ts: Toks, i: number): P<Row> {
   if (r === undefined) return undefined
   const [x, j] = r
   if (x.t === 'str' && isKwTok(ts[j], 'Inn')) {
-    const s = pName(c.sf, ts, j + 1)
+    const s = pSet(c.sf, ts, j + 1)
     if (s === undefined) return undefined
     if (isKwTok(ts[s[1]], 'Lp')) {
       const ps = pNames(c.sf, ts, s[1] + 1)
@@ -1910,10 +1941,40 @@ export function need(l: number, len: number): number {
   return 30 * len + Math.max(0, 12 - l)
 }
 
-/** `Math.parseToks` (Induct.lean): read a whole token list. */
+/**
+ * `Math.parseToks` (Induct.lean): read a whole token list as one expression: an
+ * expression, or an equation in its defining form (`x_s = …, s \in S`, {@link unlift}).
+ */
 export function parseToks(sf: Sf, s: Sym, ts: readonly Tok[]): Json | undefined {
-  const r = pOr({ sf, s }, need(1, ts.length), ts, 0)
-  return r !== undefined && r[1] === ts.length ? r[0] : undefined
+  const c: Ctx = { sf, s }
+  const f = need(1, ts.length)
+  const r = pOr(c, f, ts, 0)
+  if (r === undefined) return undefined
+  if (r[1] === ts.length) return r[0]
+  if (!isKwTok(ts[r[1]], 'Comma')) return undefined
+  const rows = pTail(c, f, ts, r[1] + 1)
+  if (rows === undefined) return undefined
+  const parts = rowParts(rows)
+  if (parts === undefined || parts[1] !== undefined) return undefined
+  return unlift(r[0], parts[0])
+}
+
+/**
+ * `Math.pTail`: range rows separated by commas, to the end of the input: the ranges of
+ * a defining equation's output indices (`x_s = …, s \in S`).
+ */
+export function pTail(c: Ctx, f: number, ts: Toks, i: number): Row[] | undefined {
+  const rows: Row[] = []
+  for (;;) {
+    if (f === 0) return undefined
+    f -= 1
+    const r = pRow(c, f, (t) => isKwTok(t, 'Comma'), ts, i)
+    if (r === undefined) return undefined
+    rows.push(r[0])
+    if (r[1] === ts.length) return rows
+    if (!isKwTok(ts[r[1]], 'Comma')) return undefined
+    i = r[1] + 1
+  }
 }
 
 export type { Chars }

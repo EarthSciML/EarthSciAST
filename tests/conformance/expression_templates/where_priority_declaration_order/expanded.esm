@@ -1,0 +1,24 @@
+{
+  "esm": "2.4.0",
+  "metadata": {"name": "RewriteSelectionOrder"},
+  "index_sets": {
+    "a": {"kind": "interval", "size": 2},
+    "b": {"kind": "interval", "size": 2}
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "x": {"type": "parameter", "default": [1, 2], "shape": ["a"]},
+        "y": {"type": "parameter", "default": [3, 4], "shape": ["b"]},
+        "scoped": {"type": "unknown"},
+        "high": {"type": "unknown"},
+        "fallback": {"type": "unknown"}
+      },
+      "equations": [
+        {"lhs": "scoped", "rhs": 2},
+        {"lhs": "high", "rhs": 4},
+        {"lhs": "fallback", "rhs": 1}
+      ]
+    }
+  }
+}

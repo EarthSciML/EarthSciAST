@@ -1,0 +1,142 @@
+{
+  "properties": [
+    {
+      "id": "P-determinism-distinct-members",
+      "clauses": [
+        "conf.5.5.1.distinct-not-insertion-order"
+      ],
+      "statement": "An emitted distinct set contains exactly the keys in the input.",
+      "lean_statement": "∀ {α : Type} [LinearOrder α] (key : α) (keys : List α), key ∈ Esm.Determinism.distinct keys ↔ key ∈ keys",
+      "status": "proven",
+      "theorem": "Esm.Determinism.mem_distinct"
+    },
+    {
+      "id": "P-determinism-distinct-sorted",
+      "clauses": [
+        "conf.5.5.1.distinct-not-insertion-order"
+      ],
+      "statement": "The distinct output is strictly ascending under the key order.",
+      "lean_statement": "∀ {α : Type} [LinearOrder α] (keys : List α), (Esm.Determinism.distinct keys).Pairwise (· < ·)",
+      "status": "proven",
+      "theorem": "Esm.Determinism.distinct_sorted"
+    },
+    {
+      "id": "P-determinism-distinct-perm",
+      "clauses": [
+        "conf.5.5.pure-function-of-total-order",
+        "conf.5.5.1.distinct-not-insertion-order"
+      ],
+      "statement": "Permuting the input does not change the emitted distinct set or its order.",
+      "lean_statement": "∀ {α : Type} [LinearOrder α] (a b : List α), a.Perm b → Esm.Determinism.distinct a = Esm.Determinism.distinct b",
+      "status": "proven",
+      "theorem": "Esm.Determinism.distinct_perm"
+    },
+    {
+      "id": "P-determinism-distinct-idempotent",
+      "clauses": [
+        "conf.5.5.1.distinct-not-insertion-order"
+      ],
+      "statement": "Emitting the distinct set a second time gives the same ordered keys.",
+      "lean_statement": "∀ {α : Type} [LinearOrder α] (keys : List α), Esm.Determinism.distinct (Esm.Determinism.distinct keys) = Esm.Determinism.distinct keys",
+      "status": "proven",
+      "theorem": "Esm.Determinism.distinct_idempotent"
+    },
+    {
+      "id": "P-determinism-edge-endpoints-swap",
+      "clauses": [
+        "conf.5.5.pure-function-of-total-order",
+        "spec.9.8.3.edge-key-contract"
+      ],
+      "statement": "Reversing the endpoints of an undirected relation leaves its canonical tuple unchanged.",
+      "lean_statement": "∀ {α : Type} [LinearOrder α] (a b : α), Esm.Determinism.edgeEndpoints a b = Esm.Determinism.edgeEndpoints b a",
+      "status": "proven",
+      "theorem": "Esm.Determinism.edgeEndpoints_swap"
+    },
+    {
+      "id": "P-determinism-dense-rank-bijective",
+      "clauses": [
+        "conf.5.5.pure-function-of-total-order",
+        "spec.9.8.3.rank-of-contract"
+      ],
+      "statement": "The zero-based rank of an emitted distinct key is a bijection to the positions of the output list.",
+      "lean_statement": "∀ {α : Type} [LinearOrder α] (keys : List α), Function.Bijective (Esm.Determinism.denseRank (Esm.Determinism.distinct keys))",
+      "status": "proven",
+      "theorem": "Esm.Determinism.denseRank_bijective"
+    },
+    {
+      "id": "P-determinism-dense-rank-count-lt",
+      "clauses": [
+        "conf.5.5.pure-function-of-total-order",
+        "spec.9.8.3.rank-of-contract"
+      ],
+      "statement": "The zero-based rank of a distinct key equals the number of distinct keys strictly smaller than it.",
+      "lean_statement": "∀ {α : Type} [LinearOrder α] (keys : List α) (key : { k // k ∈ Esm.Determinism.distinct keys }), (Esm.Determinism.denseRank (Esm.Determinism.distinct keys) key).val = ((Esm.Determinism.distinct keys).filter (fun value => decide (value < key.val))).length",
+      "status": "proven",
+      "theorem": "Esm.Determinism.denseRank_eq_count_lt"
+    },
+    {
+      "id": "P-determinism-equality-match-members",
+      "clauses": [
+        "conf.5.5.pure-function-of-total-order",
+        "conf.5.5.1.join-output-sorted"
+      ],
+      "statement": "A key and pair of positions occur in the equality match set exactly when both positioned input rows have that key.",
+      "lean_statement": "∀ {α : Type} [LinearOrder α] (left right : List (α × Int)) (key : α) (i j : Int), toLex (key, toLex (i, j)) ∈ Esm.Determinism.equalityMatches left right ↔ (key, i) ∈ left ∧ (key, j) ∈ right",
+      "status": "proven",
+      "theorem": "Esm.Determinism.mem_equalityMatches"
+    },
+    {
+      "id": "P-determinism-equality-match-sorted",
+      "clauses": [
+        "conf.5.5.1.join-output-sorted"
+      ],
+      "statement": "The equality match set is ordered lexicographically by key, left position, and right position.",
+      "lean_statement": "∀ {α : Type} [LinearOrder α] (left right : List (α × Int)), (Esm.Determinism.equalityMatches left right).Pairwise (· < ·)",
+      "status": "proven",
+      "theorem": "Esm.Determinism.equalityMatches_sorted"
+    },
+    {
+      "id": "P-determinism-equality-match-perm",
+      "clauses": [
+        "conf.5.5.pure-function-of-total-order",
+        "conf.5.5.1.join-output-sorted"
+      ],
+      "statement": "Permuting either input's position-tagged rows does not change the equality match set.",
+      "lean_statement": "∀ {α : Type} [LinearOrder α] (a b c d : List (α × Int)), a.Perm b → c.Perm d → Esm.Determinism.equalityMatches a c = Esm.Determinism.equalityMatches b d",
+      "status": "proven",
+      "theorem": "Esm.Determinism.equalityMatches_perm"
+    },
+    {
+      "id": "P-determinism-group-by-sum-sorted",
+      "clauses": [
+        "conf.5.5.1.join-output-sorted"
+      ],
+      "statement": "The keys of an exact additive group-by are strictly ascending.",
+      "lean_statement": "∀ {α β : Type} [LinearOrder α] [AddCommMonoid β] (rows : List (α × β)), ((Esm.Determinism.groupBySum rows).map Prod.fst).Pairwise (· < ·)",
+      "status": "proven",
+      "theorem": "Esm.Determinism.groupBySum_sorted"
+    },
+    {
+      "id": "P-determinism-group-by-sum-members",
+      "clauses": [
+        "conf.5.5.pure-function-of-total-order",
+        "conf.5.5.1.join-oplus-assoc-comm"
+      ],
+      "statement": "A group-by emits each observed key with the sum of precisely those input values whose rows have that key.",
+      "lean_statement": "∀ {α β : Type} [LinearOrder α] [AddCommMonoid β] (rows : List (α × β)) (key : α) (value : β), (key, value) ∈ Esm.Determinism.groupBySum rows ↔ key ∈ rows.map Prod.fst ∧ value = ((rows.filter fun row => row.1 = key).map Prod.snd).sum",
+      "status": "proven",
+      "theorem": "Esm.Determinism.mem_groupBySum"
+    },
+    {
+      "id": "P-determinism-group-by-sum-perm",
+      "clauses": [
+        "conf.5.5.pure-function-of-total-order",
+        "conf.5.5.1.join-oplus-assoc-comm"
+      ],
+      "statement": "Permuting group-by input rows leaves ordered keys and their exact sums unchanged.",
+      "lean_statement": "∀ {α β : Type} [LinearOrder α] [AddCommMonoid β] (a b : List (α × β)), a.Perm b → Esm.Determinism.groupBySum a = Esm.Determinism.groupBySum b",
+      "status": "proven",
+      "theorem": "Esm.Determinism.groupBySum_perm"
+    }
+  ]
+}

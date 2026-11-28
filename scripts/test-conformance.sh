@@ -65,14 +65,8 @@ CORPUS_MANIFEST="$OUTPUT_DIR/corpus_manifest.json"
 # binding's conformance outputs. On by default, which is what a developer
 # running this script on a laptop wants: one command, everything checked.
 #
-# CI turns it OFF (`--skip-binding-suites`), because there the gate is already
-# satisfied — and satisfied MORE strongly than this script can satisfy it. The
-# `standard-conformance-testing` job carries
-# `needs: [julia-tests, typescript-tests, python-tests, rust-tests, go-tests]`,
-# so it does not start until all five suites have passed, each across its whole
-# version matrix (julia 1.10/1.12/1.13, node 20/22, python 3.9-3.12, rust
-# stable/beta/MSRV, go 1.21/1.22/1.23). Re-running them here repeated that work
-# at ONE pinned version apiece — strictly less coverage, for the entire cost.
+# CI uses `--skip-binding-suites` because the binding matrices handle their
+# suites in parallel with the conformance job.
 #
 # It was not a cheap duplicate, either: it is why this harness had never once
 # finished. Every execution died at the 45-minute wall, and the log of the last
@@ -123,10 +117,8 @@ Usage: test-conformance.sh [--skip-binding-suites]
        test-conformance.sh --compiler-agreement-only <compiler>
 
   --skip-binding-suites   Do not re-run each binding's own test suite before
-                          generating its conformance outputs. Use this only
-                          where that gate is already satisfied — CI passes it
-                          because `needs:` holds the harness behind all five
-                          per-language jobs. Equivalent to setting
+                          generating its conformance outputs. CI runs those
+                          suites in separate jobs. Equivalent to setting
                           ESM_CONFORMANCE_SKIP_BINDING_SUITES=1.
   --compiler-agreement-only <compiler>
                           Run ONLY the compiler-agreement harness self-test and
@@ -174,7 +166,7 @@ run_binding_suite() {
     shift
 
     if [ "$SKIP_BINDING_SUITES" = "1" ]; then
-        log "Skipping the $language test suite — already gated upstream (--skip-binding-suites)"
+        log "Skipping the $language test suite (--skip-binding-suites)"
         return 0
     fi
 
@@ -361,6 +353,20 @@ run_python_tests() {
 }
 
 # Run Rust tests and generate conformance outputs
+# Python adapter runners split the command with shlex. Single-quote each path
+# so a checkout or build directory containing spaces still works.
+rust_adapter_command() {
+    local bin="$1" features="${2:-conformance-adapters}"
+    if [ -n "${ESM_RUST_CONFORMANCE_BIN_DIR:-}" ] && [ "$features" = conformance-adapters ]; then
+        local executable="$ESM_RUST_CONFORMANCE_BIN_DIR/$bin"
+        printf "'%s'" "${executable//\'/\'\\\'\'}"
+    else
+        local manifest="$RUST_DIR/Cargo.toml"
+        printf "cargo run --quiet --manifest-path '%s' --features %s --bin %s --" \
+            "${manifest//\'/\'\\\'\'}" "$features" "$bin"
+    fi
+}
+
 run_rust_tests() {
     log "Running Rust conformance tests..."
 
@@ -375,20 +381,12 @@ run_rust_tests() {
         return 1
     fi
 
-    # Generate conformance outputs.
-    #
-    # `esm` is the `earthsci-ast-cli` package (cli/). The library feature
-    # `earthsci-ast/conformance-adapters` is not needed by `esm` itself (it
-    # only gates the adapter BIN targets, and its one implied feature, `solve`,
-    # is the tool's default `diffsol`). It is here so that every cargo
-    # invocation in this script shares ONE feature resolution of the library:
-    # the determinism / cadence / PDE adapters below all pass it, and cargo
-    # caches builds per feature set, so without it the crate is compiled twice
-    # per run — once for this line and once for the first adapter (#224).
     log "Generating Rust conformance outputs..."
-    cargo run -p earthsci-ast-cli --features earthsci-ast/conformance-adapters --bin esm -- conformance-test "$RUST_OUTPUT" "$CORPUS_MANIFEST"
-
-    return $?
+    if [ -n "${ESM_RUST_CONFORMANCE_BIN_DIR:-}" ]; then
+        "$ESM_RUST_CONFORMANCE_BIN_DIR/esm" conformance-test "$RUST_OUTPUT" "$CORPUS_MANIFEST"
+    else
+        cargo run -p earthsci-ast-cli --features earthsci-ast/conformance-adapters --bin esm -- conformance-test "$RUST_OUTPUT" "$CORPUS_MANIFEST"
+    fi
 }
 
 # Compare outputs between languages and detect divergence.
@@ -476,7 +474,7 @@ run_determinism_conformance_rust() {
         return 1
     fi
     log "Running determinism conformance with the Rust relational engine..."
-    EARTHSCI_DETERMINISM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-determinism-adapter-rust --" \
+    EARTHSCI_DETERMINISM_ADAPTER_RUST="$(rust_adapter_command earthsci-determinism-adapter-rust)" \
         python3 "$SCRIPT_DIR/run-determinism-conformance.py" \
             --bindings rust \
             --output "$OUTPUT_DIR/determinism/rust_report.json"
@@ -580,7 +578,7 @@ run_cadence_conformance_rust() {
         return 1
     fi
     log "Running cadence-partition conformance with the Rust partition pass..."
-    EARTHSCI_CADENCE_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-cadence-adapter-rust --" \
+    EARTHSCI_CADENCE_ADAPTER_RUST="$(rust_adapter_command earthsci-cadence-adapter-rust)" \
         python3 "$SCRIPT_DIR/run-cadence-conformance.py" \
             --bindings rust \
             --output "$OUTPUT_DIR/cadence/rust_report.json"
@@ -668,7 +666,7 @@ run_pde_simulation_conformance_rust() {
         return 1
     fi
     log "Running PDE-simulation conformance with the Rust vectorized simulator..."
-    EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-pde-sim-adapter-rust -- --compiler native" \
+    EARTHSCI_PDE_SIM_ADAPTER_RUST="$(rust_adapter_command earthsci-pde-sim-adapter-rust) --compiler native" \
         python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
             --bindings rust \
             --output "$OUTPUT_DIR/pde_simulation/rust_report.json"
@@ -742,7 +740,7 @@ run_pde_pipeline_conformance_rust() {
         return 1
     fi
     log "Running full-pipeline PDE conformance with the Rust vectorized simulator..."
-    EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-pde-sim-adapter-rust -- --compiler native" \
+    EARTHSCI_PDE_SIM_ADAPTER_RUST="$(rust_adapter_command earthsci-pde-sim-adapter-rust) --compiler native" \
         python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
             --manifest "$PDE_PIPELINE_MANIFEST" \
             --bindings rust \
@@ -860,7 +858,7 @@ run_compiled_rhs_conformance_interpreter_julia() {
 # tape executor) through the `conformance-adapters` feature binary.
 run_compiled_rhs_conformance_interpreter_rust() {
     _run_compiled_rhs_stage rust interpreter "$RUST_DIR" "Rust interpreter" \
-        env EARTHSCI_COMPILED_RHS_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-compiled-rhs-adapter-rust --"
+        env EARTHSCI_COMPILED_RHS_ADAPTER_RUST="$(rust_adapter_command earthsci-compiled-rhs-adapter-rust)"
 }
 
 # Python drives evaluate_rhs (the NumPy interpreter). PYTHONPATH is pinned to this
@@ -917,7 +915,7 @@ run_compiled_rhs_conformance_compiled_rust() {
         log "XLA_EXTENSION_DIR is unset — the Rust compiled stage will report unavailable (run scripts/fetch-xla-extension.sh to enable it)"
     fi
     _run_compiled_rhs_stage rust compiled "$RUST_DIR" "Rust compiled (XlaBuilder)" \
-        env EARTHSCI_COMPILED_RHS_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features $features --bin earthsci-compiled-rhs-adapter-rust --"
+        env EARTHSCI_COMPILED_RHS_ADAPTER_RUST="$(rust_adapter_command earthsci-compiled-rhs-adapter-rust "$features")"
 }
 
 # === Compiler-agreement conformance (compiler_agreement) ===
@@ -1075,7 +1073,7 @@ _run_compiler_agreement_stage() {
             # $XLA_EXTENSION_DIR (scripts/fetch-xla-extension.sh); without it the
             # adapter is built without the feature and answers `unavailable`,
             # which is RED, because rust is `bindings_required` for `xla`.
-            env EARTHSCI_COMPILER_AGREEMENT_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-compiler-agreement-adapter-rust --" \
+            env EARTHSCI_COMPILER_AGREEMENT_ADAPTER_RUST="$(rust_adapter_command earthsci-compiler-agreement-adapter-rust)" \
                 python3 "$COMPILER_AGREEMENT_RUNNER" \
                     --bindings "$binding" --compiler "$compiler" --output "$report" || rc=$?
             ;;
@@ -1118,10 +1116,36 @@ _run_compiler_agreement_stage() {
 # Contract: tests/conformance/<tier>/README.md. Normative: CONFORMANCE_SPEC §5.45.
 INLINE_TESTS_RUNNER="$SCRIPT_DIR/run-inline-tests-conformance.py"
 
-# Every tier whose manifest declares `"runner": "inline_tests"`. Listed
-# explicitly rather than globbed: a tier appears in the gate because someone put
-# it there, and a manifest that lands without a stage should be noticed.
-INLINE_TESTS_TIERS=(broadcast_alignment scalar_operator_semantics faq_pointwise_filter recurrence value_invention_geometry array_expression_forms bool_and_or_reductions native_model_shapes interp_templates datetime_templates relational_templates geometry_templates template_array_args)
+INLINE_TESTS_TIERS=()
+
+discover_inline_test_tiers() {
+    python3 - "$TESTS_DIR/conformance" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+tiers = []
+for path in sorted(root.glob("*/manifest.json")):
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValueError("expected a JSON object")
+        runner = manifest.get("runner", "")
+        if not isinstance(runner, str):
+            raise ValueError("runner must be a string")
+        if runner == "inline_tests":
+            if not isinstance(manifest.get("scope_excluded", {}), dict):
+                raise ValueError("scope_excluded must be an object")
+            tiers.append(path.parent.name)
+    except (OSError, ValueError) as exc:
+        sys.exit(f"{path}: {exc}")
+
+if not tiers:
+    sys.exit(f"{root}: no manifests declare runner 'inline_tests'")
+print("\n".join(tiers))
+PY
+}
 
 run_inline_tests_conformance_self_test() {
     local rc=0 tier manifest
@@ -1244,7 +1268,7 @@ _run_inline_tests_stage() {
                     --adapter-output "$raw_dir/$tier.json" || rc=$?
                 ;;
             rust)
-                env EARTHSCI_INLINE_TESTS_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-inline-tests-adapter-rust --" \
+                env EARTHSCI_INLINE_TESTS_ADAPTER_RUST="$(rust_adapter_command earthsci-inline-tests-adapter-rust)" \
                     python3 "$INLINE_TESTS_RUNNER" --manifest "$manifest" \
                         --bindings "$binding" --compiler "$compiler" --output "$report" || rc=$?
                 ;;
@@ -1565,10 +1589,19 @@ main() {
     log "Starting cross-language conformance testing..."
     log "Project root: $PROJECT_ROOT"
     if [ "$SKIP_BINDING_SUITES" = "1" ]; then
-        log "Per-binding test suites: SKIPPED (gated upstream). Producers still run."
+        log "Per-binding test suites: SKIPPED. Producers still run."
     else
         log "Per-binding test suites: enabled"
     fi
+
+    local inline_test_tiers tier
+    if ! inline_test_tiers="$(discover_inline_test_tiers)"; then
+        error "Could not discover inline-test conformance tiers"
+        exit 1
+    fi
+    while IFS= read -r tier; do
+        INLINE_TESTS_TIERS+=("$tier")
+    done <<< "$inline_test_tiers"
 
     setup_output_dirs
 

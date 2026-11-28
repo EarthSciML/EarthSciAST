@@ -19,7 +19,7 @@ import pytest
 
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.inline_tests import run_inline_tests
-from earthsci_ast.numpy_codegen import _gather_hoisted
+from earthsci_ast.numpy_codegen import _gather_hoisted, compile_box_body
 from earthsci_ast.numpy_interpreter import (
     EvalContext,
     NumpyInterpreterError,
@@ -99,3 +99,51 @@ def test_hoisted_gather_checks_per_axis() -> None:
     zi = (np.array([0, 3]), np.array([0, 0]))  # 1-based rows 1 and 4
     with pytest.raises(NumpyInterpreterError, match="E_TREEWALK_CONSTARRAY_OOB"):
         _gather_hoisted(arr, zi, "tbl")
+
+
+def test_full_elementwise_gather_compiles_only_the_selected_arm() -> None:
+    condition = ExprNode(op="const", value=[[1, 0]])
+    invalid = ExprNode(op="index", args=[_INLINE, 1, 0])
+    branch = ExprNode(op="broadcast", fn="ifelse", args=[condition, "tbl", invalid])
+    base = ExprNode(op="+", args=[branch, 1])
+    gather = ExprNode(op="index", args=[base, 2, "column"])
+    ctx = _ctx(frozenset({"tbl"}))
+    generated = compile_box_body(gather, {})
+    assert generated is not None
+    for compiled in (_compile_expr(gather), generated):
+        ctx.locals["column"] = 1
+        assert compiled(ctx) == 4.0
+        ctx.locals["column"] = 2
+        with pytest.raises(NumpyInterpreterError, match="E_TREEWALK_CONSTARRAY_OOB.*dim 2"):
+            compiled(ctx)
+
+
+def test_partial_elementwise_gather_keeps_the_trailing_axes() -> None:
+    condition = ExprNode(op="const", value=[[1, 0]])
+    branch = ExprNode(op="broadcast", fn="ifelse", args=[condition, "tbl", 9])
+    gather = ExprNode(op="index", args=[branch, 2])
+    np.testing.assert_array_equal(_compile_expr(gather)(_ctx()), [3, 9])
+
+
+@pytest.mark.parametrize(
+    "producer",
+    [
+        ExprNode(op="concat", axis=0, args=[ExprNode(op="const", value=[7]), 8]),
+        ExprNode(op="makearray", regions=[[[1, 1]], [[2, 2]]], values=[7, 8]),
+    ],
+    ids=["concat", "makearray"],
+)
+def test_full_gather_stays_lazy_with_whole_array_operands(producer: ExprNode) -> None:
+    condition = ExprNode(op="const", value=[1, 0])
+    invalid = ExprNode(op="index", args=[_INLINE, 1, 0])
+    branch = ExprNode(op="broadcast", fn="ifelse", args=[condition, producer, invalid])
+    gather = ExprNode(op="index", args=[branch, "position"])
+    generated = compile_box_body(gather, {})
+    assert generated is not None
+    ctx = _ctx()
+    for evaluate in (lambda ctx: eval_expr(gather, ctx), _compile_expr(gather), generated):
+        ctx.locals["position"] = 1
+        assert evaluate(ctx) == 7
+        ctx.locals["position"] = 2
+        with pytest.raises(NumpyInterpreterError, match="E_TREEWALK_CONSTARRAY_OOB.*dim 2"):
+            evaluate(ctx)

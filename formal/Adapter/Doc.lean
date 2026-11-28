@@ -1,4 +1,5 @@
 import Lean.Data.Json
+import Adapter.Decimal
 import Esm.Document.Source.TypstDoc
 
 /-! `esm-lean canon|print-md|parse-md|print-typ|parse-typ <file>`: the document source formats.
@@ -19,7 +20,7 @@ document value type with numbers in the canonical form of CONFORMANCE §5.5.3.1.
 
 namespace Adapter.Doc
 
-open Esm.Document
+open Esm.Document Esm.F64.Decimal
 
 /-! ### Numbers
 
@@ -30,90 +31,15 @@ and in `Int64`, else its shortest round-trip decimal digits. All arithmetic is e
 natural-number fractions (`Float.ofScientific` truncates before it rounds, so it is not
 correctly rounded). Unproved adapter code, pinned by the golden files. -/
 
-/-- `n / d` rounded to a natural number, ties to even (`d > 0`). -/
-def roundHalfEven (n d : Nat) : Nat :=
-  let q := n / d
-  let r := n % d
-  if 2 * r > d then q + 1 else if 2 * r < d then q else if q % 2 = 0 then q else q + 1
-
-/-- The fraction `n / d` times `2^k`. -/
-def scale2 (n d : Nat) (k : Int) : Nat × Nat :=
-  if 0 ≤ k then (n * 2 ^ k.toNat, d) else (n, d * 2 ^ (-k).toNat)
-
-/-- The fraction `n / d` times `10^k`. -/
-def scale10 (n d : Nat) (k : Int) : Nat × Nat :=
-  if 0 ≤ k then (n * 10 ^ k.toNat, d) else (n, d * 10 ^ (-k).toNat)
-
-/-- `⌊log_b (n / d)⌋` for `n, d > 0`: the first guess `g`, moved one step at a time
-(`fuel` bounds the steps). `le e` decides `b^e ≤ n / d`. -/
-def floorLog (le : Int → Bool) (g : Int) : Nat → Int
-  | 0 => g
-  | fuel + 1 =>
-    if !le g then floorLog le (g - 1) fuel
-    else if le (g + 1) then floorLog le (g + 1) fuel
-    else g
-
-/-- `2^e ≤ n / d`. -/
-def pow2Le (n d : Nat) (e : Int) : Bool := let (a, b) := scale2 d 1 e; decide (a ≤ n * b)
-
-/-- `10^e ≤ n / d`. -/
-def pow10Le (n d : Nat) (e : Int) : Bool := let (a, b) := scale10 d 1 e; decide (a ≤ n * b)
-
-/-- The positive fraction `n / d` rounded to binary64, ties to even: `(M, k)` with value
-`M × 2^k`, `M < 2^53`, and `2^52 ≤ M` unless `k = -1074` (a subnormal). `none` when it
-overflows. -/
-def toBinary64 (n d : Nat) : Option (Nat × Int) :=
-  let t := floorLog (pow2Le n d) ((Nat.log2 n : Int) - Nat.log2 d) 4
-  let k := max (t - 52) (-1074)
-  let (a, b) := scale2 n d (-k)
-  let m := roundHalfEven a b
-  let (m, k) := if m = 2 ^ 53 then (2 ^ 52, k + 1) else (m, k)
-  if k > 971 then none else some (m, k)
-
-/-- The digits of a positive natural number, most significant first. -/
-def natDigits (c : Nat) : List Nat := (Nat.toDigits 10 c).map (fun ch => ch.toNat - 48)
-
-/-- The shortest decimal `c × 10^s` that rounds back to the double `(m, k)` (`m > 0`),
-as its digits and the decimal exponent of the first: for each digit count `p` from 1, the
-two `p`-digit decimals around the value; of those that round back, the nearer, and on a
-tie the one with the even last digit (CONFORMANCE §5.5.3.1 rule 2, which writes the other
-one at a power of two when the even one does not round back). -/
-def shortest (m : Nat) (k : Int) : List Nat × Int :=
-  let (vn, vd) := scale2 m 1 k
-  let e10 := floorLog (pow10Le vn vd) ((((natDigits vn).length : Int) - (natDigits vd).length)) 4
-  let back (c : Nat) (s : Int) : Bool :=
-    c > 0 && (let (a, b) := scale10 c 1 s; toBinary64 a b == some (m, k))
-  let out (c : Nat) (s : Int) : List Nat × Int :=
-    let ds := natDigits c
-    ((ds.reverse.dropWhile (· == 0)).reverse, (ds.length : Int) - 1 + s)
-  let rec go : Nat → List Nat × Int
-    | 0 => out (roundHalfEven vn vd) 0
-    | fuel + 1 =>
-      let p := 18 - (fuel + 1)
-      let s := e10 - p + 1
-      let (a, b) := scale10 vn vd (-s)
-      let lo := a / b
-      let hi := if a % b = 0 then lo else lo + 1
-      let dLo := a - lo * b
-      let dHi := hi * b - a
-      match back lo s, back hi s with
-      | true, true =>
-        if dLo < dHi then out lo s else if dHi < dLo then out hi s
-        else if lo % 2 = 0 then out lo s else out hi s
-      | true, false => out lo s
-      | false, true => out hi s
-      | false, false => go fuel
-  go 17
-
-/-- The canonical number a JSON number token `m × 10^-e` is. -/
-def toJNum (m : Int) (e : Nat) : JNum :=
-  if m = 0 then .int 0
-  else if e = 0 ∧ -(2 ^ 63 : Int) ≤ m ∧ m < 2 ^ 63 then .int m
+/-- The canonical number a JSON number token `m × 10^-e` is, if finite. -/
+def toJNum? (m : Int) (e : Nat) : Option JNum :=
+  if m = 0 then some (.int 0)
+  else if e = 0 ∧ -(2 ^ 63 : Int) ≤ m ∧ m < 2 ^ 63 then some (.int m)
   else
     let neg := decide (m < 0)
     match toBinary64 m.natAbs (10 ^ e) with
-    | none => Number.mkDec neg (natDigits m.natAbs) (((natDigits m.natAbs).length : Int) - 1 - e)
-    | some (bm, bk) =>
+    | none => none
+    | some (bm, bk) => some <|
       let z : Int := (if neg then -1 else 1) * (bm * 2 ^ bk.toNat : Nat)
       if 0 ≤ bk ∧ -(2 ^ 63 : Int) ≤ z ∧ z < 2 ^ 63 then .int z
       else if bk < 0 ∧ bm % 2 ^ (-bk).toNat = 0 then
@@ -124,14 +50,22 @@ def toJNum (m : Int) (e : Nat) : JNum :=
 
 instance : Inhabited Json := ⟨.null⟩
 
-/-- A parsed JSON value as a document value. -/
-partial def conv : Lean.Json → Json
-  | .null => .null
-  | .bool b => .bool b
-  | .num n => .num (toJNum n.mantissa n.exponent)
-  | .str s => .str s
-  | .arr a => .arr (a.toList.map conv)
-  | .obj o => .obj (o.toList.map fun (k, v) => (k, conv v))
+/-- A parsed JSON value as a document value. Strict readers reject overflow
+even inside fields that carry plain JSON rather than expressions. -/
+partial def conv (strictNumbers : Bool) : Lean.Json → Except String Json
+  | .null => pure .null
+  | .bool b => pure (.bool b)
+  | .num n =>
+    match toJNum? n.mantissa n.exponent with
+    | some value => pure (.num value)
+    | none =>
+      if strictNumbers then throw "number is outside the finite binary64 range"
+      else
+        let ds := natDigits n.mantissa.natAbs
+        pure (.num (Number.mkDec (decide (n.mantissa < 0)) ds ((ds.length : Int) - 1 - n.exponent)))
+  | .str s => pure (.str s)
+  | .arr a => .arr <$> a.toList.mapM (conv strictNumbers)
+  | .obj o => .obj <$> o.toList.mapM (fun (k, v) => do return (k, ← conv strictNumbers v))
 
 /-- Compact canonical JSON text. -/
 partial def render : Json → String
@@ -222,6 +156,20 @@ def deprecatedTo : String → Option (String × Nat)
   | "pow" => some ("^", 2)
   | _ => none
 
+/-- A `faq` node without its default fields (esm-spec §4.8.2): `reduce: "+"` and
+`semiring: "sum_product"` are the defaults, so they are dropped. A `sum_product` semiring
+goes only with a `reduce` that is absent or `"+"`; otherwise the node is left alone, since
+the semiring is what decides the reduction there. -/
+def faqDefaults (kvs : List (String × Json)) : List (String × Json) :=
+  let plainReduce := match Math.look "reduce" kvs with
+    | none | some (.str "+") => true
+    | _ => false
+  let plainSemiring := match Math.look "semiring" kvs with
+    | none | some (.str "sum_product") => true
+    | _ => false
+  if plainReduce && plainSemiring then kvs.filter (fun kv => kv.1 != "reduce" && kv.1 != "semiring")
+  else kvs
+
 /-- How `spellRules` reads an object: an ordinary object, a name-keyed map, a block of
 operator definitions (a map whose entries are definitions), or one definition (whose
 `units` is a unit expression, not a units string, esm-spec §9.6.1). -/
@@ -229,20 +177,22 @@ inductive Walk where
   | plain | map | defs | defn
 
 /-- The spelling rules of the canonical form: units strings respelled, a dimensionless
-`const` dropping its units, `neg` and `pow` rewritten (and a `broadcast` of `neg`), and the
+`const` dropping its units, `neg` and `pow` rewritten (and a `broadcast` of `neg`), a `faq`
+dropping its default `reduce` and `semiring` (`faqDefaults`), and the
 old names of esm-spec §9.6.12 and §4.2 read as the new ones (`renameKey`, `renameOp`,
 `ivAsTime`). `iv`: the document's renamed independent variable; `ps`: the parameters of the
 enclosing definition. Unproved adapter code, pinned by the
 golden files (`Esm.Document.Notation`). -/
-partial def spellWalk (iv : Option String) (w : Walk) (ps : List String) : Json → Json
-  | .arr xs => .arr (xs.map (spellWalk iv .plain ps))
+partial def spellWalk (iv : Option String) (omitFaqDefaults : Bool)
+    (w : Walk) (ps : List String) : Json → Json
+  | .arr xs => .arr (xs.map (spellWalk iv omitFaqDefaults .plain ps))
   | .obj kvs =>
     match w with
-    | .map => .obj (kvs.map fun (k, v) => (k, spellWalk iv .plain ps v))
+    | .map => .obj (kvs.map fun (k, v) => (k, spellWalk iv omitFaqDefaults .plain ps v))
     | .defs => .obj (kvs.map fun (k, v) =>
         (k, match v with
-          | .obj ekvs => spellWalk iv .defn (paramsOf ekvs) v
-          | _ => spellWalk iv .plain ps v))
+          | .obj ekvs => spellWalk iv omitFaqDefaults .defn (paramsOf ekvs) v
+          | _ => spellWalk iv omitFaqDefaults .plain ps v))
     | _ =>
       let kvs' := Source.sortKeys (kvs.map fun (k, v) =>
         let k := renameKey k
@@ -253,13 +203,13 @@ partial def spellWalk (iv : Option String) (w : Walk) (ps : List String) : Json 
           | _ => (k, .str (Esm.Units.canon u))
         | "units", _ =>
           match w with
-          | .defn => (k, spellWalk iv .plain ps v)
+          | .defn => (k, spellWalk iv omitFaqDefaults .plain ps v)
           | _ => (k, v)
         | "default_units", .str u => (k, .str (Esm.Units.canon u))
         | _, _ =>
           if freeKeys.contains k then (k, v)
-          else if defsKeys.contains k then (k, spellWalk iv .defs ps v)
-          else (k, spellWalk iv (if mapKeys.contains k then .map else .plain) ps v))
+          else if defsKeys.contains k then (k, spellWalk iv omitFaqDefaults .defs ps v)
+          else (k, spellWalk iv omitFaqDefaults (if mapKeys.contains k then .map else .plain) ps v))
       let kvs' := match Math.look "op" kvs' with
         | some (.str o) =>
           let o' := renameOp iv ps o kvs'
@@ -276,6 +226,7 @@ partial def spellWalk (iv : Option String) (w : Walk) (ps : List String) : Json 
         | some (.str "1"), some (.num n) => .num n
         | some (.str "1"), _ => .obj (kvs'.filter (fun kv => kv.1 != "units"))
         | _, _ => .obj kvs'
+      | some (.str "faq"), _ => .obj (if omitFaqDefaults then faqDefaults kvs' else kvs')
       | some (.str o), some (.arr as) =>
         match deprecatedTo o with
         | some (o', n) =>
@@ -292,15 +243,16 @@ partial def spellWalk (iv : Option String) (w : Walk) (ps : List String) : Json 
       | _, _ => .obj kvs'
   | j => j
 
-/-- The spelling rules from the root (`isMap`: the value is a name-keyed map). -/
-def spellRules (isMap : Bool) (j : Json) : Json :=
-  spellWalk (docIndependentVariable j) (if isMap then .map else .plain) [] j
+/-- The spelling rules from the root. Set `isMap` for a name-keyed map.
+Rewriting keeps authored FAQ fields as structural match constraints. -/
+def spellRules (isMap : Bool) (j : Json) (omitFaqDefaults : Bool := true) : Json :=
+  spellWalk (docIndependentVariable j) omitFaqDefaults (if isMap then .map else .plain) [] j
 
 /-- A number token with an exponent, respelled so `Lean.Json.parse` still sees a decimal.
 `Lean.Json.parse` folds a positive exponent into the mantissa, so `1.999999999999999e16`
 and the integer token `19999999999999990` parse alike; padding the fraction with zeros past
 the exponent (`1.9999999999999990e16`) keeps the value and keeps a fraction digit, so
-`toJNum` reads it as the decimal token it is. Exponents above 400 are left alone (such a
+`toJNum?` reads it as the decimal token it is. Exponents above 400 are left alone (such a
 value is outside `Int64`, so it is rounded either way). -/
 def padExponent (t : List Char) : List Char :=
   match t.span (fun c => c != 'e' && c != 'E') with
@@ -329,12 +281,14 @@ partial def padExponents (cs : List Char) (inStr : Bool) (acc : Array Char) : Ar
       padExponents rest false (acc ++ (padExponent tok).toArray)
     else padExponents r false (acc.push c)
 
-def readDoc (path : String) : IO Json := do
+def readDoc (path : String) (strictNumbers : Bool := false) : IO Json := do
   let text ← IO.FS.readFile path
   let text := String.ofList (padExponents text.toList false #[]).toList
   match Lean.Json.parse text with
-  | .ok j => pure (conv j)
   | .error e => throw (IO.userError s!"{path}: not JSON: {e}")
+  | .ok j => match conv strictNumbers j with
+    | .ok doc => pure doc
+    | .error e => throw (IO.userError s!"{path}: {e}")
 
 def main (mode : String) (args : List String) : IO UInt32 := do
   let [path] := args | IO.eprintln s!"usage: esm-lean {mode} <file>"; return 2

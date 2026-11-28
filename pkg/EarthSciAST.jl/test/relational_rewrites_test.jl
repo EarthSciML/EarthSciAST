@@ -150,15 +150,21 @@ const _RR_CASES = [
 
 @testset "lib/relational.esm template forms of the relational fixtures" begin
     @testset "relational template forms match the goldens" begin
+        derived = Dict{Tuple{String, Int}, Any}()
         @testset "$(e.id) case $i [$(compiler)]" for (e, i, case) in _RR_CASES,
                 compiler in (:interpreter, :native)
             cmp = e.compare
             model = String(e.models[1])
             tpl = _rr_path(e)
             gold = _RR_GOLDEN[String(e.id)].cases[i]
+            function value_invention()
+                return get!(derived, (String(e.id), i)) do
+                    _rr_vi(tpl, case, model)
+                end
+            end
             # Derived sets: members and extents, from value invention.
             if haskey(cmp, :sets)
-                tp_vi = _rr_vi(tpl, case, model)
+                tp_vi = value_invention()
                 for s in cmp.sets
                     faq = String(s.faq)
                     tp_members = tp_vi.members[faq]
@@ -177,7 +183,7 @@ const _RR_CASES = [
                 rvar = String(cmp.rank.variable)
                 want = Float64.(collect(gold.rank.values))
                 @test _rr_bits(vec(observed_field(tp_prob, rvar))) == _rr_bits(want)
-                tp_members = _rr_vi(tpl, case, model).members[faq]
+                tp_members = value_invention().members[faq]
                 @test [_rr_rank_of(m, tp_members) for m in tp_members] == want
             end
             if haskey(cmp, :rank_lookup)

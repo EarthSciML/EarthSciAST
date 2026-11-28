@@ -34,8 +34,13 @@ print(sf::Sf, s::Sym, e) = MPrint.print(sf, s, e)
 `s` (`nothing` when it does not read)."""
 parse_toks(sf::Sf, s::Sym, toks::AbstractVector{<:Tok}) = MParse.parse_toks(sf, s, toks)
 
-"""`Math.printLatex` (RoundTripLatex.lean)."""
-print_latex(s::Sym, e)::String = String(MLatex.render(print(SF_LATEX, s, e)))
+"""`Math.printLatex` (RoundTripLatex.lean): an expression (an `==` at its top is a
+comparison, as in an event's condition, and prints as any expression does)."""
+print_latex(s::Sym, e)::String = String(MLatex.render(MPrint.pa(MPrint.Ctx(SF_LATEX, s), 1, e)))
+
+"""`Math.printLatexEqn` (RoundTripLatex.lean): an equation's expression,
+`==(lhs, rhs)` (`Source.eqExpr`), in its defining form when it has one."""
+print_latex_eqn(s::Sym, e)::String = String(MLatex.render(print(SF_LATEX, s, e)))
 
 """`Math.parseLatex` (RoundTripLatex.lean)."""
 function parse_latex(s::Sym, text)
@@ -44,8 +49,13 @@ function parse_latex(s::Sym, text)
     return parse_toks(SF_LATEX, s, toks)
 end
 
-"""`Math.printTypst` (RoundTripTypst.lean)."""
-print_typst(s::Sym, e)::String = String(MTypst.render(print(SF_TYPST, s, e)))
+"""`Math.printTypst` (RoundTripTypst.lean): an expression (an `==` at its top is a
+comparison, as in an event's condition, and prints as any expression does)."""
+print_typst(s::Sym, e)::String = String(MTypst.render(MPrint.pa(MPrint.Ctx(SF_TYPST, s), 1, e)))
+
+"""`Math.printTypstEqn` (RoundTripTypst.lean): an equation's expression,
+`==(lhs, rhs)` (`Source.eqExpr`), in its defining form when it has one."""
+print_typst_eqn(s::Sym, e)::String = String(MTypst.render(print(SF_TYPST, s, e)))
 
 """`Math.parseTypst` (RoundTripTypst.lean)."""
 function parse_typst(s::Sym, text)

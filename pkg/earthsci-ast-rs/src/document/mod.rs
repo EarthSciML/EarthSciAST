@@ -87,8 +87,14 @@ pub fn print_document(
 ///
 /// `expr` is an ESM expression (a number, a name or an operator node) or an
 /// equation, an object with `lhs` and `rhs` (other fields, such as
-/// `_comment`, are not printed), which prints as its two sides around `=` as
-/// in a document (`Source.eqExpr`). `names` plays the part of
+/// `_comment`, are not printed). An equation prints as in a document
+/// (`Source.eqExpr`, `Math.printLatexEqn` / `Math.printTypstEqn`): its two
+/// sides around `=`, except that an equation `x = faq` whose `faq` has output
+/// indices prints in its defining form when that reads back as exactly the
+/// equation, the output indices on the left and their ranges after the right
+/// side (Typst `y_j = sum_(i in S) w_(i, j), j in C`). An expression whose top
+/// is `==` is a comparison and prints as any expression does, never in the
+/// defining form. `names` plays the part of
 /// the variables a component declares: a name in it prints in its declared
 /// shape, and the printer avoids spellings that would collide with it. The
 /// result is what a document display holds, without its delimiters; it is
@@ -100,6 +106,7 @@ pub fn print_math(expr: &serde_json::Value, names: &[String], format: DocumentFo
         json::Json::Obj(kvs) => math::expr::look("lhs", kvs).zip(math::expr::look("rhs", kvs)),
         _ => None,
     };
+    let eqn = sides.is_some();
     let e = match sides {
         Some((lhs, rhs)) => json::Json::Obj(vec![
             (
@@ -114,9 +121,11 @@ pub fn print_math(expr: &serde_json::Value, names: &[String], format: DocumentFo
         names: names.to_vec(),
         templates: Vec::new(),
     };
-    match format {
-        DocumentFormat::Markdown => math::print_latex(&sym, &e),
-        DocumentFormat::Typst => math::print_typst(&sym, &e),
+    match (format, eqn) {
+        (DocumentFormat::Markdown, true) => math::print_latex_eqn(&sym, &e),
+        (DocumentFormat::Markdown, false) => math::print_latex(&sym, &e),
+        (DocumentFormat::Typst, true) => math::print_typst_eqn(&sym, &e),
+        (DocumentFormat::Typst, false) => math::print_typst(&sym, &e),
     }
 }
 
@@ -190,7 +199,9 @@ impl std::error::Error for MathError {}
 ///
 /// `text` is what a document display holds, without its delimiters. Text
 /// whose top is `=` reads as an equation, an object with `lhs` and `rhs`, as
-/// a display does (`Source.eqSides`); any other text reads as an expression.
+/// a display does (`Source.eqSides`), and so does an equation in its defining
+/// form, `y_j = …, j in C`, whose right side reads as the `faq` with output
+/// indices it writes (`Math.unlift`); any other text reads as an expression.
 /// `names` plays the part of the variables a component declares: it decides
 /// how a run of letters reads (in LaTeX, `RT` is the name `RT` when it is
 /// declared, the product of `R` and `T` when they are). No template is in

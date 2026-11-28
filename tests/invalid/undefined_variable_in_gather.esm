@@ -1,0 +1,59 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "UnboundConstGatherOperand",
+    "description": "A gather under max must fault when its base has no binding (CONFORMANCE_SPEC \u00a75.23). Expected structural error: undefined_variable at /models/UnboundConstGatherOperand/equations/0/rhs.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {},
+  "models": {
+    "UnboundConstGatherOperand": {
+      "variables": {
+        "g": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "g",
+          "rhs": {
+            "op": "max",
+            "args": [
+              0,
+              {
+                "op": "index",
+                "args": [
+                  "missingFactor",
+                  1
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 0,
+        "abs": 0
+      },
+      "tests": [
+        {
+          "id": "probe",
+          "time_span": {
+            "start": 0,
+            "end": 1
+          },
+          "assertions": [
+            {
+              "variable": "g",
+              "time": 0,
+              "expected": -1
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

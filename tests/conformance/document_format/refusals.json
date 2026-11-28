@@ -308,11 +308,83 @@
       "error": "parse_error"
     },
     {
+      "id": "defining_out_expression",
+      "kind": "refusal",
+      "description": "A left-side subscript that is an expression is no output index.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y_(j + 1) = sum_(i in S) w_(i, j), j in C $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "defining_out_number",
+      "kind": "refusal",
+      "description": "A left-side subscript that is a number other than 1 is no output index.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny_{2} = \\sum_{i \\in S} w_{i, j}, j \\in C\n$$\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "defining_out_twice",
+      "kind": "refusal",
+      "description": "A name twice among the left side's subscripts is refused.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y_(j, j) = sum_(i in S) w_(i, j), j in C $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "defining_row_not_output",
+      "kind": "refusal",
+      "description": "A range row after the right side for a name not among the left side's subscripts is refused (it would be a hidden reduction).",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y_j = sum_(i in S) w_(i, j), k in C $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "defining_row_twice",
+      "kind": "refusal",
+      "description": "Two range rows for one output index are refused.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny_{j} = \\sum_{i \\in S} w_{i, j}, j \\in C, j \\in S\n$$\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "defining_sum_no_range",
+      "kind": "refusal",
+      "description": "A right-side reduction with no range of its own is refused in the defining form.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y_j = sum w_(i, j), j in C $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "defining_limits_no_range",
+      "kind": "refusal",
+      "description": "A \\limits reduction with no range of its own is refused in the defining form.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny_{j} = \\sum\\limits w_{i, j}, j \\in C\n$$\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "defining_sum_filter_only",
+      "kind": "refusal",
+      "description": "A right-side reduction with only a filter is refused in the defining form.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y_j = sum_(j > 1) w_(i, j), j in C $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "defining_sum_over_output",
+      "kind": "refusal",
+      "description": "A right-side reduction ranging over an output index is refused.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny_{j, i} = \\sum_{i \\in S} w_{i, j}, j \\in C\n$$\n",
+      "error": "parse_error"
+    },
+    {
       "id": "bracket_inner_set",
       "kind": "refusal",
       "description": "With output indices the set goes on the bracket only: a set on the reduction inside the bracket is refused, the bracket's own set beside it or not.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum_{j \\in C}^{\\{f\\}} w_{i, j}\\right]^{\\{f\\}}_{i \\in S}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\n\\frac{\\mathrm{d} y}{\\mathrm{d} t} = \\left[\\sum_{j \\in C}^{\\{f\\}} w_{i, j}\\right]^{\\{f\\}}_{i \\in S}\n$$\n",
       "error": "parse_error"
     },
     {
@@ -320,7 +392,7 @@
       "kind": "refusal",
       "description": "A set on the reduction inside the bracket, none on the bracket: refused.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum_{j \\in C}^{\\{f\\}} w_{i, j}\\right]_{i \\in S}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\n\\frac{\\mathrm{d} y}{\\mathrm{d} t} = \\left[\\sum_{j \\in C}^{\\{f\\}} w_{i, j}\\right]_{i \\in S}\n$$\n",
       "error": "parse_error"
     },
     {
@@ -328,7 +400,7 @@
       "kind": "refusal",
       "description": "A set on the reduction inside lr([…]) is refused.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([sum_(j in C)^({f}) w_(i, j)])^({f})_(i in S) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ (dif y)/(dif t) = lr([sum_(j in C)^({f}) w_(i, j)])^({f})_(i in S) $\n",
       "error": "parse_error"
     },
     {
@@ -336,7 +408,7 @@
       "kind": "refusal",
       "description": "A set on the reduction inside lr([…]), none on the bracket: refused.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([sum_(j in C)^({f}) w_(i, j)])_(i in S) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ (dif y)/(dif t) = lr([sum_(j in C)^({f}) w_(i, j)])_(i in S) $\n",
       "error": "parse_error"
     },
     {
@@ -344,7 +416,7 @@
       "kind": "refusal",
       "description": "A \\limits operator inside the bracket: no set on the bracket either.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum\\limits_{j \\in C} w_{i, j}\\right]^{\\{w\\}}_{i \\in S}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\n\\frac{\\mathrm{d} y}{\\mathrm{d} t} = \\left[\\sum\\limits_{j \\in C} w_{i, j}\\right]^{\\{w\\}}_{i \\in S}\n$$\n",
       "error": "parse_error"
     },
     {
@@ -352,7 +424,7 @@
       "kind": "refusal",
       "description": "limits(sum) inside lr([…]): no set on the bracket either.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([limits(sum)_(j in C) w_(i, j)])^({w})_(i in S) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ (dif y)/(dif t) = lr([limits(sum)_(j in C) w_(i, j)])^({w})_(i in S) $\n",
       "error": "parse_error"
     },
     {
@@ -433,6 +505,86 @@
       "description": "The array form is for more than 10 columns; a narrower matrix is a bmatrix.",
       "surface": "markdown",
       "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{cc}1 & 2 \\\\ 3 & 4 \\end{array}\\right]\n$$\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_letter_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a letter prints as a name (a), never upright.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"a\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_greek_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a Greek name prints as its symbol (alpha).",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"alpha\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_euler_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a letter prints as a name, never upright.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"e\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_subscript_shape_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: the x_i shape prints x_(upright(\"i\")).",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"x_i\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_formula_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a formula prints upright(\"NO\")_2.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"NO2\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_empty_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: an empty name is no name.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_digit_start_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a name starts with a letter or _.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"2lev\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_space_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a name is an identifier.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"le v\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_non_ascii_typst",
+      "kind": "refusal",
+      "description": "An upright set name is read only as the printer writes one, a word that would otherwise print italic: a name is an ASCII identifier.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"lév\")) w_i $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "set_upright_dotted_letter_typst",
+      "kind": "refusal",
+      "description": "Each segment of an upright scoped set name is read by the set rule: a letter segment is never upright.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in upright(\"lev\")\".\"upright(\"a\")) w_i $\n",
       "error": "parse_error"
     }
   ]

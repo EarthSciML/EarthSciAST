@@ -20,11 +20,9 @@ include("testutils.jl")
 const _ACT = EarthSciAST
 const _ACT_REPO = normpath(joinpath(@__DIR__, "..", "..", ".."))
 
-function _act_problem(path, compiler)
-    # The starting values the documents' ODE states leave to the harness
-    # (esm-spec §11.4).
+function _act_problem(file, compiler, u0)
     return _ACT.Internal.counting() do
-        _ACT.esm_problem(path, (0.0, 1.0); compiler = compiler, u0 = harness_u0(path))
+        _ACT.esm_problem(file, (0.0, 1.0); compiler = compiler, u0 = u0)
     end
 end
 
@@ -38,8 +36,12 @@ end
 # du under native and the interpreter, at a state perturbed off the initial one
 # (no exact zeros), matched by state name.
 function _act_agree(path)
-    pn, tally = _act_problem(path, :native)
-    pi_, _ = _act_problem(path, :interpreter)
+    file = _ACT.load_path(path)
+    # The starting values the documents' ODE states leave to the harness
+    # (esm-spec §11.4).
+    u0 = harness_u0(path)
+    pn, tally = _act_problem(file, :native, u0)
+    pi_, _ = _act_problem(file, :interpreter, u0)
     u = Float64[pn.u0[i] + 0.41 + 0.017 * sin(1.3i) for i in eachindex(pn.u0)]
     ui = similar(pi_.u0)
     for (k, j) in pi_.var_map
@@ -112,11 +114,11 @@ end
         @test !haskey(tiers, :percell_build)
     end
 
+    # Both regrid cases use the same native and interpreter builds.
+    regrid = _act_agree(_act_fixture("tests/conformance/scaling/fixtures/regrid/regrid_N100.esm"))
+
     @testset "a materialized observed over a join-gated producer" begin
-        # The scaling tier's regrid: F_rg[j] = Σ_i W[i,j]·F_src[i] over the
-        # bin-join candidates, with F_src a state, read by D(F_tgt).
-        path = _act_fixture("tests/conformance/scaling/fixtures/regrid/regrid_N100.esm")
-        same, tally, tiers, (pn, u), (pi_, ui) = _act_agree(path)
+        same, tally, tiers, (pn, u), (pi_, ui) = regrid
         @test same
         @test get(tally, :percell_acc, 0) == 0
         @test !haskey(tiers, :percell_build)
@@ -141,9 +143,7 @@ end
         # which reads only a build constant and a parameter: the nest folds the
         # entries the gate admits at the current `p`, and D(F_tgt) is computed
         # in the same pass from the value it stores.
-        path = _act_fixture("tests/conformance/scaling/fixtures/regrid/regrid_N100.esm")
-        same, tally, _, (pn, u), (pi_, ui) = _act_agree(path)
-        @test same
+        _, tally, _, (pn, u), (pi_, ui) = regrid
         @test get(tally, :array_contraction_consumer, 0) == 1
         f = pn.f!
         # The observed fill stages the right-hand side runs before its state stage.
@@ -488,7 +488,7 @@ end
         open(io -> JSON3.write(io, mk(bad)), path, "w")
         for c in (:native, :interpreter)
             err = try
-                pr, _ = _act_problem(path, c)
+                pr, _ = _act_problem(path, c, harness_u0(path))
                 _act_du(pr, pr.u0 .+ 0.5)
                 nothing
             catch e

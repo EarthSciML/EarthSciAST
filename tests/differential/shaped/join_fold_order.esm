@@ -1,0 +1,417 @@
+{
+ "esm": "2.4.0",
+ "metadata": {
+  "name": "static_join_composite",
+  "description": "Composite and split equality gates admit the same tuples. The scalar fold keeps row order, the filter removes one matched pair, and the unmatched output row receives zero.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ]
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": 4
+  },
+  "chosen": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "Probe": {
+   "variables": {
+    "left_group": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "right_group": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "chosen"
+     ]
+    },
+    "left_bucket": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "right_bucket": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "chosen"
+     ]
+    },
+    "payload": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "ordered": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "split": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "reordered": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "filtered": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "matched": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "left_group",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       10,
+       20,
+       10,
+       90
+      ]
+     }
+    },
+    {
+     "lhs": "right_group",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       10,
+       20,
+       10
+      ]
+     }
+    },
+    {
+     "lhs": "left_bucket",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1,
+       1,
+       1,
+       2
+      ]
+     }
+    },
+    {
+     "lhs": "right_bucket",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1,
+       1,
+       2
+      ]
+     }
+    },
+    {
+     "lhs": "payload",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       10000000000000000,
+       1,
+       -10000000000000000,
+       2
+      ]
+     }
+    },
+    {
+     "lhs": "ordered",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "l": {
+        "from": "rows"
+       },
+       "r": {
+        "from": "chosen"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "l"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "left_group",
+          "right_group"
+         ],
+         [
+          "left_bucket",
+          "right_bucket"
+         ]
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "split",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "l": {
+        "from": "rows"
+       },
+       "r": {
+        "from": "chosen"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "l"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "left_group",
+          "right_group"
+         ]
+        ]
+       },
+       {
+        "on": [
+         [
+          "left_bucket",
+          "right_bucket"
+         ]
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "reordered",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "l": {
+        "from": "rows"
+       },
+       "r": {
+        "from": "chosen"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "l"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "left_bucket",
+          "right_bucket"
+         ]
+        ]
+       },
+       {
+        "on": [
+         [
+          "left_group",
+          "right_group"
+         ]
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "filtered",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "l": {
+        "from": "rows"
+       },
+       "r": {
+        "from": "chosen"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": 1,
+      "join": [
+       {
+        "on": [
+         [
+          "left_group",
+          "right_group"
+         ],
+         [
+          "left_bucket",
+          "right_bucket"
+         ]
+        ]
+       }
+      ],
+      "filter": {
+       "op": "!=",
+       "args": [
+        "l",
+        3
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "matched",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "l"
+      ],
+      "ranges": {
+       "l": {
+        "from": "rows"
+       },
+       "r": {
+        "from": "chosen"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "right_group",
+        "r"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "left_group",
+          "right_group"
+         ],
+         [
+          "left_bucket",
+          "right_bucket"
+         ]
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "tolerance": {
+    "rel": 0,
+    "abs": 0
+   },
+   "tests": [
+    {
+     "id": "probe",
+     "time_span": {
+      "start": 0,
+      "end": 1
+     },
+     "assertions": [
+      {
+       "variable": "ordered",
+       "time": 0,
+       "expected": 0
+      },
+      {
+       "variable": "split",
+       "time": 0,
+       "expected": 0
+      },
+      {
+       "variable": "reordered",
+       "time": 0,
+       "expected": 0
+      },
+      {
+       "variable": "filtered",
+       "time": 0,
+       "expected": 2
+      },
+      {
+       "variable": "matched",
+       "time": 0,
+       "expected": 10,
+       "coords": {
+        "rows": 1
+       }
+      },
+      {
+       "variable": "matched",
+       "time": 0,
+       "expected": 20,
+       "coords": {
+        "rows": 2
+       }
+      },
+      {
+       "variable": "matched",
+       "time": 0,
+       "expected": 10,
+       "coords": {
+        "rows": 3
+       }
+      },
+      {
+       "variable": "matched",
+       "time": 0,
+       "expected": 0,
+       "coords": {
+        "rows": 4
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

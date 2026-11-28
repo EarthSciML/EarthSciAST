@@ -7,7 +7,7 @@
  */
 
 import type { Json } from '../json.js'
-import { nameOk, parseTypst, printTypst, typstLex, type Sym } from '../math/index.js'
+import { nameOk, parseTypst, printTypst, printTypstEqn, typstLex, type Sym } from '../math/index.js'
 import { chars, type Chars } from '../number.js'
 import { bareKey } from '../strings.js'
 import * as typstDict from '../typst-dict.js'
@@ -52,7 +52,7 @@ import {
 } from './typst.js'
 
 /** `Typ.typOf`: an equation's Typst math under the symbol table `s`. */
-const typOf = (s: Sym, e: Eqn): string => printTypst(s, eqExpr(e))
+const typOf = (s: Sym, e: Eqn): string => printTypstEqn(s, eqExpr(e))
 
 /** `Typ.prT`: its `_comment` as a `//` comment line, then the equation. */
 const prT = (s: Sym, e: Eqn): string =>

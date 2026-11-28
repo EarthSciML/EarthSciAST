@@ -1558,6 +1558,37 @@ pub fn faq_ok(f: &FaqForm) -> bool {
         })
 }
 
+/// `Math.upSet`: a segment of an index set's name prints upright in a Typst range row
+/// when it would otherwise print `italic("…")`.
+pub fn up_set(sf: Sf, g: &[char]) -> bool {
+    sf == Sf::Typst && seg_ok(g) && !is_single(g) && sub_parts(g).is_none() && !is_formula(g)
+}
+
+/// `Math.setSegToks`: one segment of an index set's name.
+pub fn set_seg_toks(sf: Sf, g: &[char]) -> Vec<Tok> {
+    if up_set(sf, g) {
+        vec![Tok::Ups(vec![(g.iter().collect(), String::new())])]
+    } else {
+        seg_toks(sf, g)
+    }
+}
+
+/// `Math.setToks`: the tokens of an index set's name in a range row.
+pub fn set_toks(c: Ctx, s: &str) -> Vec<Tok> {
+    if explicit_name(c.s, s) {
+        vec![Tok::It(s.to_string())]
+    } else {
+        let cs: Vec<char> = s.chars().collect();
+        sep_by(
+            &[kw(Kw::Sdot)],
+            split_dots(&cs)
+                .iter()
+                .map(|g| set_seg_toks(c.sf, g))
+                .collect(),
+        )
+    }
+}
+
 /// `Math.rowToks`: a range row: `a \le k \le b`, `k \in S`, `k \in S(i, j)`.
 pub fn row_toks(c: Ctx, kv: (&str, &Json)) -> Vec<Tok> {
     let (k, v) = kv;
@@ -1571,12 +1602,12 @@ pub fn row_toks(c: Ctx, kv: (&str, &Json)) -> Vec<Tok> {
         ]),
         Json::Obj(kvs) => match kvs.as_slice() {
             [(f, Json::Str(s))] if f == "from" => {
-                cat(&[&name_toks(c, k), &[kw(Kw::Inn)], &name_toks(c, s)])
+                cat(&[&name_toks(c, k), &[kw(Kw::Inn)], &set_toks(c, s)])
             }
             [(f, Json::Str(s)), (o, Json::Arr(ps))] if f == "from" && o == "of" => cat(&[
                 &name_toks(c, k),
                 &[kw(Kw::Inn)],
-                &name_toks(c, s),
+                &set_toks(c, s),
                 &[kw(Kw::Lp)],
                 &sep_by(
                     &[kw(Kw::Comma)],
@@ -2378,7 +2409,237 @@ pub fn pa(c: Ctx, l: usize, e: &Json) -> Vec<Tok> {
     pr(c, e).at(c.sf, l)
 }
 
-/// `Math.print`: the tokens of a whole expression.
+// ## The defining form of an equation
+//
+// An equation whose right side is a `faq` with output indices,
+// `x = [body]_(s ∈ S)`, prints with the output indices on its left side and
+// their ranges after its right side, `x_s = body, s ∈ S`. The right side is the
+// reduction over the remaining ranges (a `faq` with no output indices), or the
+// body alone when the `faq` reduces nothing and carries nothing else. The reader
+// takes a trailing `, rows` after a whole equation back to the `faq`
+// ([`unlift`]); the printer uses the form only when that gives back exactly the
+// equation ([`lift_ok`]), and the bracket form otherwise.
+
+/// `Math.sortKVs`: sort bindings by key (insertion, from the end of the list).
+pub fn sort_kvs(xs: Vec<(String, Json)>) -> Vec<(String, Json)> {
+    let mut out = Vec::new();
+    for kv in xs.into_iter().rev() {
+        out = ins_kv(kv, out);
+    }
+    out
+}
+
+/// `Math.isRedNode`: a `faq` node with no output indices.
+pub fn is_red_node(j: &Json) -> bool {
+    match j {
+        Json::Obj(kvs) => matches!(
+            (look("op", kvs), look("output_idx", kvs)),
+            (Some(Json::Str(o)), Some(Json::Arr(os))) if o == "faq" && os.is_empty()
+        ),
+        _ => false,
+    }
+}
+
+/// The equation node `{"args": [a, b], "op": o}` with exactly these two
+/// entries: its arguments.
+fn node2<'a>(j: &'a Json, o: &str) -> Option<&'a [Json]> {
+    match j {
+        Json::Obj(kvs) => match kvs.as_slice() {
+            [(ka, Json::Arr(xs)), (ko, Json::Str(op))] if ka == "args" && ko == "op" && op == o => {
+                Some(xs)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `Math.distinctNames`: no name occurs twice.
+pub fn distinct_names<S: AsRef<str>>(ks: &[S]) -> bool {
+    ks.iter()
+        .enumerate()
+        .all(|(i, k)| !ks[i + 1..].iter().any(|k2| k2.as_ref() == k.as_ref()))
+}
+
+/// `Math.defOutsOK`: the left side's subscripts `os` and the ranges `rows`
+/// after the right side are those of a defining form: each subscript a name or
+/// `1` ([`out_ok`], as the bracket form's entries), no name twice, and each row
+/// the range of one of the subscripts, at most once. A subscript with no row is
+/// an output index with no range, as in the bracket form.
+pub fn def_outs_ok(os: &[Json], rows: &[(String, Json)]) -> bool {
+    let names = out_names(os);
+    let keys: Vec<&str> = rows.iter().map(|kv| kv.0.as_str()).collect();
+    os.iter().all(out_ok)
+        && distinct_names(&names)
+        && keys.iter().all(|k| names.iter().any(|n| n == k))
+        && distinct_names(&keys)
+}
+
+/// `Math.unlift`: the equation `x_(os) = rhs` with the ranges `rows` of its
+/// output indices, as the equation it writes: `x = faq` with the output indices
+/// `os` and the rows' ranges, over `rhs` read as the reduction (a `faq` with no
+/// output indices that ranges over at least one index, none of them an output
+/// index) or as the body. Nothing else is a defining form ([`def_outs_ok`]): a
+/// reduction with no range of its own (`sum v_j`, `limits(sum) v_j`,
+/// `sum_(j > 1) v_j`) would read as reducing what it does not, and the printer
+/// writes the bracket form for it.
+pub fn unlift(q: &Json, rows: &[(String, Json)]) -> Option<Json> {
+    let [lhs, rhs] = node2(q, "==")? else {
+        return None;
+    };
+    let [Json::Str(x), os @ ..] = node2(lhs, "index")? else {
+        return None;
+    };
+    if !def_outs_ok(os, rows) {
+        return None;
+    }
+    let f = match rhs {
+        Json::Obj(kvs) if is_red_node(rhs) => {
+            let Some(Json::Obj(rest)) = look("ranges", kvs) else {
+                return None;
+            };
+            let names = out_names(os);
+            if rest.is_empty() || rest.iter().any(|kv| names.contains(&kv.0)) {
+                return None;
+            }
+            let mut rs = rest.clone();
+            rs.extend(rows.iter().cloned());
+            let mut fs = vec![
+                ("output_idx".to_string(), Json::Arr(os.to_vec())),
+                ("ranges".to_string(), Json::Obj(sort_kvs(rs))),
+            ];
+            fs.extend(
+                kvs.iter()
+                    .filter(|kv| kv.0 != "output_idx" && kv.0 != "ranges")
+                    .cloned(),
+            );
+            Json::Obj(sort_kvs(fs))
+        }
+        _ => Json::Obj(vec![
+            ("args".to_string(), Json::Arr(Vec::new())),
+            ("expr".to_string(), rhs.clone()),
+            ("op".to_string(), Json::Str("faq".to_string())),
+            ("output_idx".to_string(), Json::Arr(os.to_vec())),
+            ("ranges".to_string(), Json::Obj(sort_kvs(rows.to_vec()))),
+        ]),
+    };
+    Some(Json::Obj(vec![
+        ("args".to_string(), Json::Arr(vec![Json::Str(x.clone()), f])),
+        ("op".to_string(), Json::Str("==".to_string())),
+    ]))
+}
+
+/// `Math.liftParts`: the parts of the defining form of an equation `x = faq`:
+/// the equation `x_(os) = rhs` and the ranges of the output indices, when the
+/// left side is a name that takes a subscript and the `faq` has output indices.
+pub fn lift_parts(e: &Json) -> Option<(Json, Vec<(String, Json)>)> {
+    let [Json::Str(x), Json::Obj(kvs)] = node2(e, "==")? else {
+        return None;
+    };
+    let (Some(Json::Str(o)), Some(Json::Arr(os)), Some(Json::Obj(rs))) = (
+        look("op", kvs),
+        look("output_idx", kvs),
+        look("ranges", kvs),
+    ) else {
+        return None;
+    };
+    if o != "faq" || os.is_empty() || !plain_last(x) {
+        return None;
+    }
+    let outs: Vec<&str> = os
+        .iter()
+        .filter_map(|o| match o {
+            Json::Str(k) => Some(k.as_str()),
+            _ => None,
+        })
+        .collect();
+    let rows: Vec<(String, Json)> = outs
+        .iter()
+        .filter_map(|k| look(k, rs).map(|v| (k.to_string(), v.clone())))
+        .collect();
+    let rest: Vec<(String, Json)> = rs
+        .iter()
+        .filter(|kv| !outs.contains(&kv.0.as_str()))
+        .cloned()
+        .collect();
+    let bare = rest.is_empty()
+        && kvs.iter().all(|(k, v)| {
+            matches!(k.as_str(), "expr" | "op" | "output_idx" | "ranges")
+                || (k == "args" && matches!(v, Json::Arr(xs) if xs.is_empty()))
+        });
+    let body = look("expr", kvs).cloned().unwrap_or(Json::Null);
+    let rhs = if bare && !is_red_node(&body) {
+        body
+    } else {
+        let mut fs = vec![("output_idx".to_string(), Json::Arr(Vec::new()))];
+        if !rest.is_empty() {
+            fs.push(("ranges".to_string(), Json::Obj(rest)));
+        }
+        fs.extend(
+            kvs.iter()
+                .filter(|kv| kv.0 != "output_idx" && kv.0 != "ranges")
+                .cloned(),
+        );
+        let rk = sort_kvs(fs);
+        // The reduction must have its native spelling (`faqForm` and `faqOK`).
+        match faq_form(&rk) {
+            Some(f) if faq_ok(&f) => {}
+            _ => return None,
+        }
+        Json::Obj(rk)
+    };
+    let mut ia = vec![Json::Str(x.clone())];
+    ia.extend(os.iter().cloned());
+    let lhs = Json::Obj(vec![
+        ("args".to_string(), Json::Arr(ia)),
+        ("op".to_string(), Json::Str("index".to_string())),
+    ]);
+    let q = Json::Obj(vec![
+        ("args".to_string(), Json::Arr(vec![lhs, rhs])),
+        ("op".to_string(), Json::Str("==".to_string())),
+    ]);
+    Some((q, rows))
+}
+
+/// `Math.liftOK`: the defining form is used: it reads back as exactly `e`.
+pub fn lift_ok(e: &Json, q: &Json, rows: &[(String, Json)]) -> bool {
+    !rows.is_empty()
+        && is_e(q)
+        && rows.iter().all(|(k, v)| {
+            name_ok(k)
+                && range_ok(v)
+                && match v {
+                    Json::Arr(xs) if xs.len() == 2 => is_e(&xs[0]) && is_e(&xs[1]),
+                    _ => true,
+                }
+        })
+        && match unlift(q, rows) {
+            Some(e2) => jbeq(&e2, e),
+            None => false,
+        }
+}
+
+/// `Math.defRowsToks`: the range rows after a defining equation, separated by
+/// commas.
+pub fn def_rows_toks(c: Ctx, rows: &[(String, Json)]) -> Vec<Tok> {
+    sep_by(
+        &[Tok::Kw(Kw::Comma)],
+        rows.iter().map(|(k, v)| row_toks(c, (k, v))).collect(),
+    )
+}
+
+/// `Math.print`: the tokens of a whole expression: an equation `x = faq` with
+/// output indices in its defining form when that reads back, otherwise as any
+/// expression.
 pub fn print(sf: Sf, s: &Sym, e: &Json) -> Vec<Tok> {
-    pa(Ctx { sf, s }, 1, e)
+    let c = Ctx { sf, s };
+    if let Some((q, rows)) = lift_parts(e)
+        && lift_ok(e, &q, &rows)
+    {
+        let mut out = pa(c, 1, &q);
+        out.push(Tok::Kw(Kw::Comma));
+        out.extend(def_rows_toks(c, &rows));
+        return out;
+    }
+    pa(c, 1, e)
 }

@@ -478,6 +478,89 @@ end
         @test err !== nothing && occursin("faq_bare_array_operand", sprint(showerror, err))
     end
 
+    @testset "faq_bare_array_operand: a shape inferred from the definition" begin
+        # `a_val` declares no shape; a faq on its definition's value path, at
+        # the top or nested under `k * …`, makes it an array over `a_rows`.
+        # validate reads declarations only; the build reads the inferred
+        # shape and refuses the bare read in `y`'s filter (esm-spec §4.3.1).
+        idx(v, s) = Dict{String, Any}("op" => "index", "args" => Any[v, s])
+        producer = Dict{String, Any}(
+            "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+            "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "a_rows")),
+            "expr" => idx("base", "i")
+        )
+        for rhs in (producer, Dict{String, Any}("op" => "*", "args" => Any["k", producer]))
+            doc = Dict{String, Any}(
+                "esm" => "2.3.0",
+                "metadata" => Dict{String, Any}("name" => "inferred_bare"),
+                "index_sets" => Dict{String, Any}(
+                    "a_rows" => Dict{String, Any}("kind" => "interval", "size" => 2),
+                    "c_rows" => Dict{String, Any}("kind" => "interval", "size" => 2)
+                ),
+                "models" => Dict{String, Any}(
+                    "M" => Dict{String, Any}(
+                        "variables" => Dict{String, Any}(
+                            "a_val" => Dict{String, Any}("type" => "unknown", "units" => "1"),
+                            "c_val" => Dict{String, Any}(
+                                "type" => "unknown", "units" => "1", "shape" => Any["c_rows"]
+                            ),
+                            "y" => Dict{String, Any}(
+                                "type" => "unknown", "units" => "1",
+                                "shape" => Any["a_rows", "c_rows"]
+                            ),
+                            "base" => Dict{String, Any}(
+                                "type" => "parameter", "units" => "1",
+                                "shape" => Any["a_rows"], "default" => Any[1.0, 2.0]
+                            ),
+                            "k" => Dict{String, Any}(
+                                "type" => "parameter", "units" => "1", "default" => 2.0
+                            )
+                        ),
+                        "equations" => Any[
+                            Dict{String, Any}("lhs" => "a_val", "rhs" => rhs),
+                            Dict{String, Any}(
+                                "lhs" => "c_val",
+                                "rhs" => Dict{String, Any}(
+                                    "op" => "const", "args" => Any[], "value" => Any[10.0, 20.0]
+                                )
+                            ),
+                            Dict{String, Any}(
+                                "lhs" => "y",
+                                "rhs" => Dict{String, Any}(
+                                    "op" => "faq", "args" => Any[], "output_idx" => Any["i", "g"],
+                                    "ranges" => Dict{String, Any}(
+                                        "i" => Dict{String, Any}("from" => "a_rows"),
+                                        "g" => Dict{String, Any}("from" => "c_rows")
+                                    ),
+                                    "filter" => Dict{String, Any}(
+                                        "op" => ">", "args" => Any["a_val", 1.5]
+                                    ),
+                                    "expr" => Dict{String, Any}(
+                                        "op" => "*", "args" => Any[idx("a_val", "i"), idx("c_val", "g")]
+                                    )
+                                )
+                            ),
+                        ]
+                    )
+                )
+            )
+            text = JSON3.write(doc)
+            @test !any(
+                e -> e.error_type == "faq_bare_array_operand",
+                EarthSciAST.validate_text(text).structural_errors
+            )
+            for compiler in (:interpreter, :native)
+                err = try
+                    EarthSciAST.esm_problem(EarthSciAST.load_string(text), (0.0, 0.0); compiler)
+                    nothing
+                catch e
+                    e
+                end
+                @test err !== nothing && occursin("faq_bare_array_operand", sprint(showerror, err))
+            end
+        end
+    end
+
     @testset "ragged_values_not_gathered (shared pin)" begin
         name = "ragged_values_not_gathered.esm"
         pins = JSON3.read(

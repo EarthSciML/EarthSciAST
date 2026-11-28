@@ -1,0 +1,25 @@
+{
+  "fixture": "static_named_broadcast",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "named_axes",
+      "assertion_idx": 1,
+      "variable": "named",
+      "actual": 28.0
+    },
+    {
+      "test_id": "named_axes",
+      "assertion_idx": 2,
+      "variable": "named",
+      "actual": 8.0
+    },
+    {
+      "test_id": "named_axes",
+      "assertion_idx": 3,
+      "variable": "product",
+      "actual": 80.0
+    }
+  ]
+}

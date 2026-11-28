@@ -520,9 +520,9 @@
       "kind": "print",
       "description": "Output indices in brackets; several ranges, then the filter, stacked.",
       "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": [{"args": ["w", "i"], "op": "index"}, {"args": ["v", "j"], "op": "index"}], "op": "*"}, "filter": {"args": [{"args": ["w", "i"], "op": "index"}, 0], "op": ">"}, "op": "faq", "output_idx": ["j"], "ranges": {"i": {"from": "S"}, "j": {"from": "C"}}}}], "variables": {"v": {"type": "parameter"}, "w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "math": {"latex": "y = \\left[\\sum_{\\substack{i \\in S \\\\ w_{i} > 0}} w_{i} v_{j}\\right]_{j \\in C}", "typst": "y = lr([sum_(i in S \\ w_i > 0) w_i v_j])_(j in C)"},
-      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$v$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum_{\\substack{i \\in S \\\\ w_{i} > 0}} w_{i} v_{j}\\right]_{j \\in C}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($v$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([sum_(i in S \\ w_i > 0) w_i v_j])_(j in C) $\n"
+      "math": {"latex": "y_{j} = \\sum_{\\substack{i \\in S \\\\ w_{i} > 0}} w_{i} v_{j}, j \\in C", "typst": "y_j = sum_(i in S \\ w_i > 0) w_i v_j, j in C"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$v$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny_{j} = \\sum_{\\substack{i \\in S \\\\ w_{i} > 0}} w_{i} v_{j}, j \\in C\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($v$)\n\n#param($w$)\n\n#var($y$)\n\n$ y_j = sum_(i in S \\ w_i > 0) w_i v_j, j in C $\n"
     },
     {
       "id": "faq_ranges",
@@ -532,6 +532,87 @@
       "math": {"latex": "y = \\sum_{\\substack{i \\in S \\\\ k \\in R(i) \\\\ 0 \\le m \\le 2}} w_{i, k, m}", "typst": "y = sum_(i in S \\ k in R(i) \\ 0 <= m <= 2) w_(i, k, m)"},
       "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nR:\n  kind: \"ragged\"\n  of:\n    - \"S\"\n  offsets: \"off\"\n  values: \"vals\"\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{\\substack{i \\in S \\\\ k \\in R(i) \\\\ 0 \\le m \\le 2}} w_{i, k, m}\n$$\n",
       "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  R: (\n    kind: \"ragged\",\n    of: (\n      \"S\",\n    ),\n    offsets: \"off\",\n    values: \"vals\",\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in S \\ k in R(i) \\ 0 <= m <= 2) w_(i, k, m) $\n"
+    },
+    {
+      "id": "faq_set_upright",
+      "kind": "print",
+      "description": "A word-named index set is upright in Typst (k in upright(\"lev\")), as is the set of a ragged range; an output index's range row too. LaTeX prints it as a name.",
+      "esm": {"esm": "2.4.0", "index_sets": {"bins": {"kind": "ragged", "of": ["lev"], "offsets": "off", "values": "vals"}, "lev": {"kind": "interval", "size": 3}, "tracer": {"kind": "interval", "size": 2}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": [{"args": ["u", "k", "s"], "op": "index"}, {"args": ["q", "k", "m"], "op": "index"}], "op": "*"}, "op": "faq", "output_idx": ["s"], "ranges": {"k": {"from": "lev"}, "m": {"from": "bins", "of": ["k"]}, "s": {"from": "tracer"}}}}], "variables": {"q": {"type": "parameter"}, "u": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y_{s} = \\sum_{\\substack{k \\in \\mathit{lev} \\\\ m \\in \\mathit{bins}(k)}} u_{k, s} q_{k, m}, s \\in \\mathit{tracer}", "typst": "y_s = sum_(k in upright(\"lev\") \\ m in upright(\"bins\")(k)) u_(k, s) q_(k, m), s in upright(\"tracer\")"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nbins:\n  kind: \"ragged\"\n  of:\n    - \"lev\"\n  offsets: \"off\"\n  values: \"vals\"\nlev:\n  kind: \"interval\"\n  size: 3\ntracer:\n  kind: \"interval\"\n  size: 2\n```\n\n::model[M]\n\n:param[$q$]{}\n\n:param[$u$]{}\n\n:var[$y$]{}\n\n$$\ny_{s} = \\sum_{\\substack{k \\in \\mathit{lev} \\\\ m \\in \\mathit{bins}(k)}} u_{k, s} q_{k, m}, s \\in \\mathit{tracer}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  bins: (\n    kind: \"ragged\",\n    of: (\n      \"lev\",\n    ),\n    offsets: \"off\",\n    values: \"vals\",\n  ),\n  lev: (\n    kind: \"interval\",\n    size: 3,\n  ),\n  tracer: (\n    kind: \"interval\",\n    size: 2,\n  ),\n))\n\n#model(\"M\")\n\n#param($q$)\n\n#param($u$)\n\n#var($y$)\n\n$ y_s = sum_(k in upright(\"lev\") \\ m in upright(\"bins\")(k)) u_(k, s) q_(k, m), s in upright(\"tracer\") $\n"
+    },
+    {
+      "id": "faq_set_upright_dotted",
+      "kind": "print",
+      "description": "Each segment of a scoped set name follows the set rule on its own: a word segment is upright (upright(\"lev\")\".\"upright(\"top\")), a letter keeps its name form (a\".\"upright(\"bins\")).",
+      "esm": {"esm": "2.4.0", "index_sets": {"a.bins": {"kind": "ragged", "of": ["lev.top"], "offsets": "off", "values": "vals"}, "lev.top": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": [{"args": ["u", "k"], "op": "index"}, {"args": ["q", "k", "m"], "op": "index"}], "op": "*"}, "op": "faq", "output_idx": [], "ranges": {"k": {"from": "lev.top"}, "m": {"from": "a.bins", "of": ["k"]}}}}], "variables": {"q": {"type": "parameter"}, "u": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = \\sum_{\\substack{k \\in \\mathit{lev}.\\mathit{top} \\\\ m \\in a.\\mathit{bins}(k)}} u_{k} q_{k, m}", "typst": "y = sum_(k in upright(\"lev\")\".\"upright(\"top\") \\ m in a\".\"upright(\"bins\")(k)) u_k q_(k, m)"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\n\"a.bins\":\n  kind: \"ragged\"\n  of:\n    - \"lev.top\"\n  offsets: \"off\"\n  values: \"vals\"\n\"lev.top\":\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$q$]{}\n\n:param[$u$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{\\substack{k \\in \\mathit{lev}.\\mathit{top} \\\\ m \\in a.\\mathit{bins}(k)}} u_{k} q_{k, m}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  \"a.bins\": (\n    kind: \"ragged\",\n    of: (\n      \"lev.top\",\n    ),\n    offsets: \"off\",\n    values: \"vals\",\n  ),\n  \"lev.top\": (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($q$)\n\n#param($u$)\n\n#var($y$)\n\n$ y = sum_(k in upright(\"lev\")\".\"upright(\"top\") \\ m in a\".\"upright(\"bins\")(k)) u_k q_(k, m) $\n"
+    },
+    {
+      "id": "faq_defining_bare",
+      "kind": "print",
+      "description": "An equation x = faq whose faq reduces nothing and carries nothing else: the defining form is the body alone, y_i = w_i, i in S.",
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "S"}}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y_{i} = w_{i}, i \\in S", "typst": "y_i = w_i, i in S"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny_{i} = w_{i}, i \\in S\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y_i = w_i, i in S $\n"
+    },
+    {
+      "id": "faq_bracket_derivative",
+      "kind": "print",
+      "description": "Output indices on a right side whose left side is not a name (here a derivative): the bracket form, [ … ]_(i in S).",
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["y"], "op": "D", "wrt": "t"}, "rhs": {"args": [], "expr": {"args": ["w", "i", "j"], "op": "index"}, "op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "S"}, "j": {"from": "C"}}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "\\frac{\\mathrm{d} y}{\\mathrm{d} t} = \\left[\\sum_{j \\in C} w_{i, j}\\right]_{i \\in S}", "typst": "(dif y)/(dif t) = lr([sum_(j in C) w_(i, j)])_(i in S)"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\n\\frac{\\mathrm{d} y}{\\mathrm{d} t} = \\left[\\sum_{j \\in C} w_{i, j}\\right]_{i \\in S}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ (dif y)/(dif t) = lr([sum_(j in C) w_(i, j)])_(i in S) $\n"
+    },
+    {
+      "id": "faq_bracket_limits_noreduce",
+      "kind": "print",
+      "description": "A \\limits faq with output indices that reduces nothing keeps the bracket form: y_j = limits(sum) w_j, j in C would read as a sum.",
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["w"], "expr": {"args": ["w", "j"], "op": "index"}, "op": "faq", "output_idx": ["j"], "ranges": {"j": {"from": "C"}}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = \\left[\\sum\\limits w_{j}\\right]_{j \\in C}", "typst": "y = lr([limits(sum) w_j])_(j in C)"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum\\limits w_{j}\\right]_{j \\in C}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([limits(sum) w_j])_(j in C) $\n"
+    },
+    {
+      "id": "faq_bracket_reduction_body",
+      "kind": "print",
+      "description": "A faq with output indices whose body is itself a reduction and that reduces nothing else keeps the bracket form: y_j = sum sum_(i in S) …, j in C would read as two sums.",
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": [], "expr": {"args": ["w", "i", "j"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}}}, "op": "faq", "output_idx": ["j"], "ranges": {"j": {"from": "C"}}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = \\left[\\sum\\sum_{i \\in S} w_{i, j}\\right]_{j \\in C}", "typst": "y = lr([sum sum_(i in S) w_(i, j)])_(j in C)"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum\\sum_{i \\in S} w_{i, j}\\right]_{j \\in C}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([sum sum_(i in S) w_(i, j)])_(j in C) $\n"
+    },
+    {
+      "id": "faq_bracket_output_filter_only",
+      "kind": "print",
+      "description": "A filter on a faq that reduces nothing keeps the bracket form: y_j = sum_(j > 1) w_j, j in C would read as a sum over j.",
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": ["w", "j"], "op": "index"}, "filter": {"args": ["j", 1], "op": ">"}, "op": "faq", "output_idx": ["j"], "ranges": {"j": {"from": "C"}}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = \\left[\\sum_{j > 1} w_{j}\\right]_{j \\in C}", "typst": "y = lr([sum_(j > 1) w_j])_(j in C)"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum_{j > 1} w_{j}\\right]_{j \\in C}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([sum_(j > 1) w_j])_(j in C) $\n"
+    },
+    {
+      "id": "faq_defining_unranged_output",
+      "kind": "print",
+      "description": "An output index with no range stays on the left side with no row: y_(i, j) = sum_(k in S) w_(i, j, k), i in S.",
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": ["w", "i", "j", "k"], "op": "index"}, "op": "faq", "output_idx": ["i", "j"], "ranges": {"i": {"from": "S"}, "k": {"from": "S"}}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y_{i, j} = \\sum_{k \\in S} w_{i, j, k}, i \\in S", "typst": "y_(i, j) = sum_(k in S) w_(i, j, k), i in S"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny_{i, j} = \\sum_{k \\in S} w_{i, j, k}, i \\in S\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y_(i, j) = sum_(k in S) w_(i, j, k), i in S $\n"
+    },
+    {
+      "id": "faq_set_shapes",
+      "kind": "print",
+      "description": "A set named by a subscript shape (x_i) or a formula (NO) prints as that name, not upright text.",
+      "esm": {"esm": "2.4.0", "index_sets": {"NO": {"kind": "interval", "size": 2}, "x_i": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "x_i"}}}, {"args": [], "expr": {"args": ["w", "j"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"j": {"from": "NO"}}}], "op": "+"}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = \\sum_{i \\in x_{\\mathrm{i}}} w_{i} + \\sum_{j \\in \\mathrm{NO}} w_{j}", "typst": "y = sum_(i in x_(upright(\"i\"))) w_i + sum_(j in upright(\"NO\")) w_j"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\n\"NO\":\n  kind: \"interval\"\n  size: 2\nx_i:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{i \\in x_{\\mathrm{i}}} w_{i} + \\sum_{j \\in \\mathrm{NO}} w_{j}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  NO: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  x_i: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in x_(upright(\"i\"))) w_i + sum_(j in upright(\"NO\")) w_j $\n"
     },
     {
       "id": "faq_call_semiring",

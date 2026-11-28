@@ -18,8 +18,8 @@
 use super::ir::Instr;
 use super::template_fixtures::{argmin_doc, calendar_doc, cells, overlap_doc, relational_doc};
 use super::test_support::{
-    apply, compile, count_where, d_lhs, document, faq, fast_dy, idx, ix, library, op, oracle_ab,
-    seeded_state,
+    ab_check_at_times, apply, compile, count_where, d_lhs, document, faq, fast_dy, idx, ix,
+    library, op, oracle_ab, seeded_state,
 };
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -50,9 +50,9 @@ fn calendar_templates_match_the_oracle() {
 
 #[test]
 fn overlap_area_templates_lower_and_match_the_oracle() {
-    for spherical in [false, true] {
-        oracle_ab(overlap_doc(spherical));
-    }
+    let (planar, _) = oracle_ab(overlap_doc(false));
+    assert_unique_build_time_instructions(&planar);
+    oracle_ab(overlap_doc(true));
 }
 
 #[test]
@@ -144,21 +144,35 @@ fn successor_subscripts_bounded_by_their_condition() {
 }
 
 /// The scaling family's conservative regrid with its overlap areas written
-/// as the planar template, `dx` the bin width.
-fn template_regrid(n: usize, dx: f64) -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../tests/conformance/scaling/fixtures/regrid/regrid_N{n}.esm"
-    ));
+/// as the planar template, using a prefix of the source cells and selected
+/// target cells. `dx` is the bin width.
+fn template_regrid(src_n: usize, targets: &[usize], dx: f64) -> Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/scaling/fixtures/regrid/regrid_N100.esm");
     let mut doc: Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture")).expect("parses");
+    doc["index_sets"]["src_cells"]["size"] = json!(src_n);
+    doc["index_sets"]["tgt_cells"]["size"] = json!(targets.len());
     let m = &mut doc["models"]["Regrid"];
     for eq in m["equations"].as_array_mut().expect("equations") {
-        if eq["lhs"] == json!("A_ij") {
-            eq["rhs"]["expr"] = apply(
-                "overlap_area_planar",
-                json!({"ring_a": "src_poly", "cell_a": "i", "nv_a": 4,
+        match eq["lhs"].as_str() {
+            Some("src_poly") => {
+                let rings = eq["rhs"]["value"].as_array_mut().expect("polygon rings");
+                assert!(rings.len() >= src_n);
+                rings.truncate(src_n);
+            }
+            Some("tgt_poly") => {
+                let rings = eq["rhs"]["value"].as_array_mut().expect("polygon rings");
+                *rings = targets.iter().map(|&i| rings[i].clone()).collect();
+            }
+            Some("A_ij") => {
+                eq["rhs"]["expr"] = apply(
+                    "overlap_area_planar",
+                    json!({"ring_a": "src_poly", "cell_a": "i", "nv_a": 4,
                        "ring_b": "tgt_poly", "cell_b": "j", "nv_b": 4}),
-            );
+                )
+            }
+            _ => {}
         }
     }
     m["variables"]["dx"]["default"] = json!(dx);
@@ -199,16 +213,36 @@ fn widest_own(prog: &super::ir::TapeProgram) -> usize {
 /// the whole box, as before, with the same agreement.
 #[test]
 fn gated_pointwise_faq_compacts_to_its_candidate_cells() {
-    let n = 100;
-    let sparse = super::test_support::ab_check(template_regrid(n, 2.0), 0.5, 2.0);
+    // Only the first two source and target cells share a bin. The four
+    // admitted pairs have zero, half and full overlaps, and their 64 vertex
+    // pairs fit within the 8 × 9 output box.
+    let sparse_src = 8;
+    let sparse_targets = [0, 1, 20, 21, 22, 23, 24, 25, 26];
+    // The RHS has no time input.
+    let times = &[0.37];
+    let sparse = ab_check_at_times(
+        template_regrid(sparse_src, &sparse_targets, 2.0),
+        0.5,
+        2.0,
+        times,
+    );
     assert!(
-        widest(&sparse) <= n * n,
+        widest(&sparse) <= sparse_src * sparse_targets.len(),
         "the overlap body ran over a box of {} elements",
         widest(&sparse)
     );
-    let dense = super::test_support::ab_check(template_regrid(n, 1.0e6), 0.5, 2.0);
+
+    // A single bin admits all 20 pairs, including zero and nonzero overlaps.
+    let dense_src = 5;
+    let dense_targets = [0, 1, 2, 3];
+    let dense = ab_check_at_times(
+        template_regrid(dense_src, &dense_targets, 1.0e6),
+        0.5,
+        2.0,
+        times,
+    );
     assert!(
-        widest(&dense) >= n * n * 4,
+        widest(&dense) >= dense_src * dense_targets.len() * 4,
         "a gate keeping every cell is not compacted"
     );
 }
@@ -587,11 +621,8 @@ fn large_or_faulting_scalar_branches_keep_the_jump() {
 
 /// The repeated build-time work of the overlap template (its fan areas and
 /// ramps, lowered once per box they are read at) is computed once: no two
-/// pure CONST instructions of the program are the same computation, fused or
-/// not. The oracle's bits.
-#[test]
-fn repeated_build_time_instructions_are_computed_once() {
-    let (prog, _) = oracle_ab(overlap_doc(false));
+/// pure CONST instructions of the program are the same computation.
+fn assert_unique_build_time_instructions(prog: &super::ir::TapeProgram) {
     let canon: Vec<u32> = (0..prog.tables.slots.len() as u32).collect();
     let guarded = prog.guarded_positions();
     let mut seen = HashSet::new();
@@ -599,7 +630,7 @@ fn repeated_build_time_instructions_are_computed_once() {
         if guarded[pc] {
             continue;
         }
-        if let Some(k) = super::dedup::key(&prog, pc, &prog.instrs[pc], &canon) {
+        if let Some(k) = super::dedup::key(prog, pc, &prog.instrs[pc], &canon) {
             assert!(seen.insert(k.clone()), "repeated: {:?}", prog.instrs[pc]);
         }
     }

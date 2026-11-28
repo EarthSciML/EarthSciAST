@@ -19,8 +19,8 @@ _mtr(dir, f) = joinpath(_MTR_DIR, dir, f)
 _mtr_block(reg) = EarthSciAST.emit_esm_string(
     OrderedDict{String, Any}("operators" => OrderedDict{String, Any}(reg))
 )
-_mtr_flat(p) = _mtr_block(EarthSciAST.flatten(EarthSciAST.load_path(p)).template_registry)
-_mtr_loaded(p) = _mtr_block(EarthSciAST.load_path(p).component_templates["models.Host"])
+_mtr_flat(file) = _mtr_block(EarthSciAST.flatten(file).template_registry)
+_mtr_loaded(file) = _mtr_block(file.component_templates["models.Host"])
 
 # du at a fixed state, by variable name.
 function _mtr_du(file)
@@ -34,9 +34,10 @@ end
 @testset "mounted template registries (esm-spec §9.6.4 rule 1)" begin
     @testset "mount_registry_merge goldens" begin
         d = "mount_registry_merge"
-        @test _mtr_flat(_mtr(d, "fixture.esm")) == read(_mtr(d, "flattened_registry.esm"), String)
-        @test _mtr_flat(_mtr(d, "inline_form.esm")) == read(_mtr(d, "inline_flattened_registry.esm"), String)
-        @test _mtr_loaded(_mtr(d, "fixture.esm")) == read(_mtr(d, "loaded_registry.esm"), String)
+        file = EarthSciAST.load_path(_mtr(d, "fixture.esm"))
+        @test _mtr_flat(file) == read(_mtr(d, "flattened_registry.esm"), String)
+        @test _mtr_flat(EarthSciAST.load_path(_mtr(d, "inline_form.esm"))) == read(_mtr(d, "inline_flattened_registry.esm"), String)
+        @test _mtr_loaded(file) == read(_mtr(d, "loaded_registry.esm"), String)
         p = _mtr(d, "inline_form.esm")
         emitted = EarthSciAST.emit_esm_string(EarthSciAST.emit_document(JSON3.read(read(p, String)), dirname(p)))
         @test emitted == read(_mtr(d, "inline_emitted.esm"), String)
@@ -44,10 +45,9 @@ end
 
     @testset "mount_shared_definition: one leaf mounted twice" begin
         d = "mount_shared_definition"
-        p = _mtr(d, "fixture.esm")
-        @test _mtr_flat(p) == read(_mtr(d, "flattened_registry.esm"), String)
-        @test _mtr_loaded(p) == read(_mtr(d, "loaded_registry.esm"), String)
-        file = EarthSciAST.load_path(p)
+        file = EarthSciAST.load_path(_mtr(d, "fixture.esm"))
+        @test _mtr_flat(file) == read(_mtr(d, "flattened_registry.esm"), String)
+        @test _mtr_loaded(file) == read(_mtr(d, "loaded_registry.esm"), String)
         reg = file.component_templates["models.Host"]
         # One definition per leaf template, in the leaf's own names.
         @test sort!(collect(keys(reg))) == ["Host.rate", "Sub1.rate", "loss", "pull"]
@@ -82,10 +82,9 @@ end
         # the models Host mounts, at any depth (Sub, Sub's own mount Deep, and
         # Bare, which declares no templates), as on an authored subsystem's.
         d = "mount_host_rule"
-        p = _mtr(d, "fixture.esm")
-        @test _mtr_loaded(p) == read(_mtr(d, "loaded_registry.esm"), String)
-        @test _mtr_flat(p) == read(_mtr(d, "flattened_registry.esm"), String)
-        file = EarthSciAST.load_path(p)
+        file = EarthSciAST.load_path(_mtr(d, "fixture.esm"))
+        @test _mtr_loaded(file) == read(_mtr(d, "loaded_registry.esm"), String)
+        @test _mtr_flat(file) == read(_mtr(d, "flattened_registry.esm"), String)
         @test EarthSciAST.emit_esm_string(EarthSciAST.serialize_esm_file(EarthSciAST.expanded_file(file))) ==
             read(_mtr(d, "expanded.esm"), String)
         sub = file.models["Host"].subsystems["Sub"]

@@ -6,7 +6,16 @@ import Esm.Closed.Interp.Rounding
 import Esm.Closed.Interp.Bilinear64
 import Esm.Closed.Interp.Template
 import Esm.Expr.Core
+import Esm.Expr.ArrayProofs
+import Esm.Expr.ArrayConformance
+import Esm.Expr.Canonical
+import Esm.Expr.Canonical.Typed
 import Esm.Expr.Template
+import Esm.Expr.ExpansionProofs
+import Esm.Rewrite.Engine
+import Esm.Rewrite.Match
+import Esm.Rewrite.Imports
+import Esm.Rewrite.Metaparameters
 import Esm.Lib.Interp
 import Esm.Closed.Interp.TemplateAst
 import Esm.Lib.Calendar
@@ -19,7 +28,9 @@ import Esm.Closed.Geometry.TemplateAst
 import Esm.Closed.Geometry.Padding
 import Esm.Closed.Relational.Keys
 import Esm.Closed.Relational.Count
+import Esm.Determinism
 import Esm.Closed.Enums
+import Esm.Semiring.Laws
 import Esm.Units.Identities
 import Esm.Units.GrammarLaws
 import Esm.Units.Exec
@@ -30,6 +41,7 @@ import Esm.Digits
 import Esm.Units.Canonical
 import Esm.Units.Typeset
 import Esm.Units.CanonicalExamples
+import Esm.Units.ScalarCheck
 import Esm.Document.Notation
 import Esm.Document.Json
 import Esm.Document.Number

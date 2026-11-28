@@ -1012,6 +1012,12 @@ end
         @test_throws ESM_DE.DirectEmitError EXT_DE.DirectEmitOptions(
             Dict("ESM_DIRECT_EMIT_READ" => "gahter")
         )
+        # The template-call placement reads its own variable, refused the same way.
+        @test EXT_DE.DirectEmitOptions(Dict{String, String}()).calls === :functions
+        @test EXT_DE.DirectEmitOptions(Dict("ESM_DIRECT_EMIT_CALLS" => "inline")).calls === :inline
+        @test_throws ESM_DE.DirectEmitError EXT_DE.DirectEmitOptions(
+            Dict("ESM_DIRECT_EMIT_CALLS" => "sometimes")
+        )
         # THE ONE THING THAT FORCES THE WIDE FORM is a base a 32-bit index
         # cannot address. Nothing a slot map that fits in memory reaches — the
         # boundary is pinned here because no fixture can reach it.

@@ -685,7 +685,25 @@ function _evaluate_assertion(
         obs = _assertion_observed(
             backend_prob, insp, eval_file, owner, loc, ctx, state, Float64(sim.t[ti]), var_map
         )
-        obs === nothing && _refuse_unmatched_assertion(var_map, a, owner, loc, "scalar state")
+        if obs === nothing
+            # An element name (`z[2,3]`) of an ARRAY observed reads that one
+            # cell of its field (§6.6.5): its shape declared, or the one the
+            # build gave a variable declared without one (esm-spec §4.3.4).
+            elem = _parse_cell_key(loc)
+            elem === nothing || (
+                obs = _assertion_observed(
+                    backend_prob, insp, eval_file, owner, first(elem), ctx, state,
+                    Float64(sim.t[ti]), var_map
+                )
+            )
+            obs === nothing && _refuse_unmatched_assertion(var_map, a, owner, loc, "scalar state")
+            field, cell_tuples = obs
+            pos = findfirst(==(last(elem)), cell_tuples)
+            pos === nothing && throw(
+                InlineTestError("no grid sample at cell [$(join(last(elem), ","))] of '$(a.variable)'")
+            )
+            return field[pos]
+        end
         field, cell_tuples = obs
         # A SHAPED observed named by a bare assertion is a different error from
         # an absent one: §6.6.5 says pick a cell with `coords` or collapse the
@@ -813,7 +831,7 @@ function _assertion_observed(backend_prob, insp, file, owner, loc, ctx, state, t
         err isa SimulateError || rethrow()
         return nothing
     end
-    shape = something(model.variables[loc].shape, String[])
+    shape = _observed_shape(model, model.variables[loc], ctx, owner, loc)
     exts = _shape_extents(insp, file, shape)
     cells = (exts === nothing || prod(exts; init = 1) != length(vals)) ?
         [Int[i] for i in eachindex(vals)] : _row_major_cells(exts)

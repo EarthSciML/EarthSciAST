@@ -54,6 +54,27 @@ contracted(json) = (
 
 @testset "geometry sweep rank specialization" begin
 
+    @testset "zero codegen budget walks small geometry sweeps in a non-strict build" begin
+        doc = _agg(["i", "j"], ["i" => "I", "j" => "J"], jop("*", jidx("A", "i", "j"), "s"))
+        strict = EA._compiler_plan(:native)
+        lax = EA._plan_with(strict; strict = false)
+        for (plan, budget, copies, emits) in (
+                (lax, "1000", 1, true), (lax, "0", 1, false),
+                (lax, "0", 4, true), (strict, "0", 1, true),
+            )
+            field = repeat(A, copies, 1)
+            env = merge(ENV0, Dict("A" => field))
+            idx = merge(IDX, Dict("I" => size(field, 1)))
+            got, counts = withenv("ESS_CODEGEN_NODE_BUDGET" => budget) do
+                EA._with_compiler_plan(plan) do
+                    EA.Internal.counting(() -> materialize(doc, env, idx))
+                end
+            end
+            @test (get(counts, :geo_kernel, 0) > 0) == emits
+            @test bitsame(got, field .* ENV0["s"])
+        end
+    end
+
     @testset "MAP sweeps at ranks 1, 2 and 3" begin
         Aij = jidx("A", "i", "j")
         Bij = jidx("B", "i", "j")

@@ -114,18 +114,109 @@ theorem of_strs : ∀ (ps : List Json), ps.all (fun p => match p with | .str q =
   | .null :: _, h | .bool _ :: _, h | .num _ :: _, h | .arr _ :: _, h | .obj _ :: _, h
   | .math _ :: _, h => by simp at h
 
+/-! ## Index set names -/
+
+/-- `pSeg` never reads an upright word that `upSet` sets upright: it reads an upright
+token only as a formula, and `upSet` excludes formulas. -/
+theorem pSeg_upSet (sf : Sf) (g : String) (r : List Tok) (h : upSet sf g.toList = true) :
+    pSeg sf (.ups [(g, "")] :: r) = none := by
+  simp only [upSet, Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at h
+  obtain ⟨⟨⟨⟨hsf, -⟩, -⟩, -⟩, hf⟩ := h
+  simp [pSeg, formulaOf, hsf, hf]
+
+/-- The set-segment reader extends the name-segment reader. -/
+theorem pSetSeg_of_pSeg (sf : Sf) (ts : List Tok) (p : List Char × List Tok)
+    (h : pSeg sf ts = some p) : pSetSeg sf ts = some p := by
+  unfold pSetSeg
+  split
+  · rename_i g r
+    split
+    · rename_i hu; rw [pSeg_upSet sf g r hu] at h; simp at h
+    · exact h
+  · exact h
+
+theorem setSeg_read (sf : Sf) (g : List Char) (hg : segOK g = true) (rest : List Tok)
+    (hr : subPat sf rest = false) : pSetSeg sf (setSegToks sf g ++ rest) = some (g, rest) := by
+  unfold setSegToks
+  split
+  · rename_i hu
+    simp [pSetSeg, String.toList_ofList, hu]
+  · exact pSetSeg_of_pSeg sf _ _ (seg_read sf g hg rest hr)
+
+theorem pSetLoop_stop (sf : Sf) (f : Nat) (acc : List Char) (rest : List Tok)
+    (hr : ∀ r, rest ≠ .kw .sdot :: r) : pSetLoop sf (f + 1) acc rest = some (acc, rest) := by
+  rw [pSetLoop]
+  exact fun r h => hr r h
+
+theorem setLoop_read (sf : Sf) : ∀ (gs : List (List Char)), (∀ g ∈ gs, segOK g = true) →
+    ∀ (acc : List Char) (rest : List Tok) (f : Nat), NameStop sf rest → gs.length < f →
+    pSetLoop sf f acc ((gs.flatMap fun g => .kw .sdot :: setSegToks sf g) ++ rest) =
+      some (acc ++ gs.flatMap (fun g => '.' :: g), rest)
+  | [], _, acc, rest, f, hr, hf => by
+    obtain ⟨f', rfl⟩ : ∃ f', f = f' + 1 := ⟨f - 1, by simp at hf; omega⟩
+    simpa using pSetLoop_stop sf f' acc rest hr.1
+  | g :: gs, hg, acc, rest, f, hr, hf => by
+    obtain ⟨f', rfl⟩ : ∃ f', f = f' + 1 := ⟨f - 1, by simp at hf; omega⟩
+    have hseg : pSetSeg sf (setSegToks sf g ++ ((gs.flatMap fun g => .kw .sdot :: setSegToks sf g) ++ rest)) =
+        some (g, (gs.flatMap fun g => .kw .sdot :: setSegToks sf g) ++ rest) := by
+      apply setSeg_read sf g (hg g (by simp))
+      cases gs with
+      | nil => simpa using hr.2
+      | cons h hs => exact subPat_head _ _ _ (by simp)
+    simp only [List.flatMap_cons, List.cons_append, List.append_assoc]
+    rw [pSetLoop, hseg]
+    simp only
+    rw [setLoop_read sf gs (fun x hx => hg x (by simp [hx])) _ rest f' hr (by simp at hf; omega)]
+    simp
+
+theorem length_flatMap_sdot_set (sf : Sf) (gs : List (List Char)) :
+    gs.length ≤ (gs.flatMap fun g => Tok.kw .sdot :: setSegToks sf g).length := by
+  induction gs with
+  | nil => simp
+  | cons g gs ih => simp only [List.flatMap_cons, List.length_append, List.length_cons]; omega
+
+/-- **Set names read back.** Each segment reads back, upright or as a name segment. -/
+theorem pSet_setToks (c : Ctx) (s : String) (hs : nameOK s = true) (rest : List Tok)
+    (hr : NameStop c.sf rest) : pSet c.sf (setToks c s ++ rest) = some (s, rest) := by
+  unfold setToks
+  split
+  · simp only [List.cons_append, List.nil_append, pSet, pSetSeg, pSeg]
+    rw [pSetLoop_stop c.sf _ _ rest hr.1]
+    simp
+  · have hsegs := splitDots_ne s.toList
+    have hall : ∀ g ∈ splitDots s.toList, segOK g = true := by
+      intro g hg; unfold nameOK at hs; exact List.all_eq_true.mp hs g hg
+    obtain ⟨g, gs, hgs⟩ := List.exists_cons_of_ne_nil hsegs
+    rw [hgs] at hall ⊢
+    simp only [List.map_cons, sepBy_cons, List.flatMap_map, List.append_assoc]
+    unfold pSet
+    have h1 : pSetSeg c.sf (setSegToks c.sf g ++ ((gs.flatMap fun h => [Tok.kw .sdot] ++ setSegToks c.sf h) ++ rest)) =
+        some (g, (gs.flatMap fun h => [Tok.kw .sdot] ++ setSegToks c.sf h) ++ rest) := by
+      apply setSeg_read c.sf g (hall g (by simp))
+      cases gs with
+      | nil => simpa using hr.2
+      | cons h hs => exact subPat_head _ _ _ (by simp)
+    rw [h1]
+    simp only [List.singleton_append]
+    rw [setLoop_read c.sf gs (fun x hx => hall x (by simp [hx])) g rest _ hr
+      (by have := length_flatMap_sdot_set c.sf gs; simp only [List.length_append]; omega)]
+    simp only [Option.map_some]
+    congr
+    rw [← joinDots_cons', ← hgs, joinDots_splitDots, String.ofList_toList]
+
 theorem rowToks_fromOf (c : Ctx) (P : Json → Out) (k s : String) (qs : List String) :
     rowToks c P (k, .obj [("from", .str s), ("of", .arr (qs.map .str))]) =
-      nameToks c k ++ .kw .inn :: nameToks c s ++ .kw .lp :: (sepBy [.kw .comma] (qs.map (nameToks c)) ++ [.kw .rp]) := by
+      nameToks c k ++ .kw .inn :: setToks c s ++ .kw .lp :: (sepBy [.kw .comma] (qs.map (nameToks c)) ++ [.kw .rp]) := by
   simp [rowToks, List.map_map, Function.comp_def]
 
-/-- A printed range row reads back as that range. -/
-theorem pRow_range (c : Ctx) (P : Json → Out) (k : String) (v : Json) (hk : nameOK k = true)
+/-- A printed range row reads back as that range, whatever follows it that neither continues
+an expression nor a name nor opens a call. -/
+theorem pRow_range_gen (c : Ctx) (P : Json → Out) (k : String) (v : Json) (hk : nameOK k = true)
     (hv : rangeOK v = true) (hM : ∀ a b, v = .arr [a, b] → M c a ∧ M c b ∧ P a = pr c a ∧ P b = pr c b)
     (isEnd : Tok → Bool) (hle : isEnd (.kw .le) = false) (hin : isEnd (.kw .inn) = false)
-    (E : Kw) (hE : EndTok E) (R : List Tok) (f : Nat)
+    (X : List Tok) (hXf : Fol c.sf 4 X) (hXs : NameStop c.sf X) (hXlp : ∀ r, X ≠ .kw .lp :: r) (f : Nat)
     (hf : 30 * (rowToks c P (k, v)).length + 11 ≤ f) :
-    pRow c (f + 1) isEnd (rowToks c P (k, v) ++ .kw E :: R) = some (.rng k v, .kw E :: R) := by
+    pRow c (f + 1) isEnd (rowToks c P (k, v) ++ X) = some (.rng k v, X) := by
   obtain ⟨g, rfl⟩ : ∃ g, f = g + 4 := ⟨f - 4, by omega⟩
   unfold rangeOK at hv
   split at hv
@@ -138,11 +229,11 @@ theorem pRow_range (c : Ctx) (P : Json → Out) (k : String) (v : Json) (hk : na
     simp only [List.length_append, List.length_cons] at hf
     simp only [List.append_assoc, List.cons_append]
     have hA := fun n (hn : need 4 ((pr c a).at c.sf 4).length ≤ n) =>
-      pAdd_at ha (.kw .le :: (nameToks c k ++ .kw .le :: ((pr c b).at c.sf 4 ++ .kw E :: R)))
+      pAdd_at ha (.kw .le :: (nameToks c k ++ .kw .le :: ((pr c b).at c.sf 4 ++ X)))
         (fol4_kw _ .le (Or.inl rfl) _) n hn
     have hK := fun n (hn : need 4 (nameToks c k).length ≤ n) =>
-      pAdd_name c k hk (.kw .le :: ((pr c b).at c.sf 4 ++ .kw E :: R)) (fol4_kw _ .le (Or.inl rfl) _) n hn
-    have hB := pAdd_at hb (.kw E :: R) (endTok_fol hE 4 (by omega) R) (g + 3) (by unfold need; omega)
+      pAdd_name c k hk (.kw .le :: ((pr c b).at c.sf 4 ++ X)) (fol4_kw _ .le (Or.inl rfl) _) n hn
+    have hB := pAdd_at hb X hXf (g + 3) (by unfold need; omega)
     have hor := pOr_cmp c g _ _ _ a (.str k) .le "<=" (hA (g + 1) (by unfold need; omega)) rfl
       (hK g (by unfold need; omega)) (fun _ e => by cases e) (fun _ e => by cases e)
     rw [pRow, hor]; simp only [hle, Bool.false_eq_true, ↓reduceIte]
@@ -151,21 +242,21 @@ theorem pRow_range (c : Ctx) (P : Json → Out) (k : String) (v : Json) (hk : na
     rw [hK (g + 3) (by unfold need; omega)]; simp only
     rw [hB]
   · rename_i s
-    have ht : rowToks c P (k, .obj [("from", .str s)]) = nameToks c k ++ .kw .inn :: nameToks c s := by
+    have ht : rowToks c P (k, .obj [("from", .str s)]) = nameToks c k ++ .kw .inn :: setToks c s := by
       simp [rowToks]
     rw [ht] at hf ⊢
     simp only [List.length_append, List.length_cons] at hf
     simp only [List.append_assoc, List.cons_append]
     have hK := fun n (hn : need 4 (nameToks c k).length ≤ n) =>
-      pAdd_name c k hk (.kw .inn :: (nameToks c s ++ .kw E :: R)) (fol4_kw _ .inn (Or.inr (Or.inl rfl)) _) n hn
+      pAdd_name c k hk (.kw .inn :: (setToks c s ++ X)) (fol4_kw _ .inn (Or.inr (Or.inl rfl)) _) n hn
     have hor := pOr_noncmp c g _ _ (.str k) .inn (hK (g + 1) (by unfold need; omega)) rfl (by decide) (by decide)
     rw [pRow, hor]; simp only [hin, Bool.false_eq_true, ↓reduceIte]
     rw [pRange, hK (g + 3) (by unfold need; omega)]
     simp only
-    rw [pName_nameToks c s hv _ (endTok_stop hE R)]
+    rw [pSet_setToks c s hv _ hXs]
     split
-    · rename_i heq; simp only [Option.some.injEq, Prod.mk.injEq, List.cons.injEq, Tok.kw.injEq] at heq
-      exact absurd heq.2.1 (endTok_ne_lp hE)
+    · rename_i heq; simp only [Option.some.injEq, Prod.mk.injEq] at heq
+      exact absurd heq.2 (hXlp _)
     · rename_i n r2 _ heq; simp only [Option.some.injEq, Prod.mk.injEq] at heq
       obtain ⟨rfl, rfl⟩ := heq; rfl
     · rename_i heq; cases heq
@@ -178,20 +269,31 @@ theorem pRow_range (c : Ctx) (P : Json → Out) (k : String) (v : Json) (hk : na
     simp only [List.length_append, List.length_cons] at hf
     simp only [List.append_assoc, List.cons_append, List.nil_append]
     have hK := fun n (hn : need 4 (nameToks c k).length ≤ n) =>
-      pAdd_name c k hk (.kw .inn :: (nameToks c s ++ .kw .lp :: (sepBy [.kw .comma] (qs.map (nameToks c)) ++
-        .kw .rp :: .kw E :: R))) (fol4_kw _ .inn (Or.inr (Or.inl rfl)) _) n hn
+      pAdd_name c k hk (.kw .inn :: (setToks c s ++ .kw .lp :: (sepBy [.kw .comma] (qs.map (nameToks c)) ++
+        .kw .rp :: X))) (fol4_kw _ .inn (Or.inr (Or.inl rfl)) _) n hn
     have hor := pOr_noncmp c g _ _ (.str k) .inn (hK (g + 1) (by unfold need; omega)) rfl (by decide) (by decide)
     rw [pRow, hor]; simp only [hin, Bool.false_eq_true, ↓reduceIte]
     rw [pRange, hK (g + 3) (by unfold need; omega)]
     simp only
-    rw [pName_nameToks c s hs _ (nameStop_kw c.sf .lp (by decide) (by decide) _)]
+    rw [pSet_setToks c s hs _ (nameStop_kw c.sf .lp (by decide) (by decide) _)]
     simp only
     have hlen := length_le_sepBy [.kw .comma] (by simp) (qs.map (nameToks c)) (by
       intro x hx; obtain ⟨q, _, rfl⟩ := List.mem_map.1 hx
       obtain ⟨t, tr, he, -⟩ := nameToks_head c q; rw [he]; simp)
-    rw [pNames_read c (.kw .rp :: .kw E :: R) (nameStop_kw c.sf .rp (by decide) (by decide) _)
+    rw [pNames_read c (.kw .rp :: X) (nameStop_kw c.sf .rp (by decide) (by decide) _)
       (fun _ e => by cases e) qs hqne hq _ (by simp at hlen ⊢; omega)]
   · cases hv
+
+/-- A printed range row reads back as that range, before an end token. -/
+theorem pRow_range (c : Ctx) (P : Json → Out) (k : String) (v : Json) (hk : nameOK k = true)
+    (hv : rangeOK v = true) (hM : ∀ a b, v = .arr [a, b] → M c a ∧ M c b ∧ P a = pr c a ∧ P b = pr c b)
+    (isEnd : Tok → Bool) (hle : isEnd (.kw .le) = false) (hin : isEnd (.kw .inn) = false)
+    (E : Kw) (hE : EndTok E) (R : List Tok) (f : Nat)
+    (hf : 30 * (rowToks c P (k, v)).length + 11 ≤ f) :
+    pRow c (f + 1) isEnd (rowToks c P (k, v) ++ .kw E :: R) = some (.rng k v, .kw E :: R) :=
+  pRow_range_gen c P k v hk hv hM isEnd hle hin (.kw E :: R) (endTok_fol hE 4 (by omega) R)
+    (endTok_stop hE R) (fun r e => by
+      simp only [List.cons.injEq, Tok.kw.injEq] at e; exact endTok_ne_lp hE e.1) f hf
 
 /-- Rows separated by `sep` and closed by `close` read back, each row as printed. -/
 theorem pRows_read (c : Ctx) (sep close : Kw) (hsc : sep ≠ close) (R : List Tok) :
@@ -215,6 +317,31 @@ theorem pRows_read (c : Ctx) (sep close : Kw) (hsc : sep ≠ close) (R : List To
     simp only [List.map_cons] at ih
     rw [pRows, hp p (by simp) sep (Or.inl rfl) _ g (by omega)]
     simp only [↓reduceIte]
+    rw [ih]; rfl
+
+/-- Rows separated by commas, to the end of the input, read back, each row as printed. -/
+theorem pTail_read (c : Ctx) :
+    ∀ (rs : List (Row × List Tok)), rs ≠ [] →
+      (∀ p ∈ rs, ∀ X, (X = [] ∨ ∃ R, X = .kw .comma :: R) → ∀ f, 30 * p.2.length + 11 ≤ f →
+        pRow c (f + 1) (isKw .comma) (p.2 ++ X) = some (p.1, X)) →
+      ∀ f, 30 * (sepBy [.kw .comma] (rs.map Prod.snd)).length + 12 ≤ f →
+      pTail c (f + 1) (sepBy [.kw .comma] (rs.map Prod.snd)) = some (rs.map Prod.fst)
+  | [], h, _, _, _ => absurd rfl h
+  | [p], _, hp, f, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by omega⟩
+    simp only [List.map_cons, List.map_nil, sepBy] at hf ⊢
+    have h := hp p (by simp) [] (Or.inl rfl) g (by omega)
+    rw [List.append_nil] at h
+    rw [pTail, h]
+  | p :: q :: rs, _, hp, f, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by omega⟩
+    simp only [List.map_cons, sepBy_cons2, List.length_append, List.length_cons] at hf ⊢
+    simp only [List.append_assoc, List.cons_append, List.nil_append]
+    have ih := pTail_read c (q :: rs) (by simp) (fun z hz => hp z (by simp [hz])) g
+      (by simp only [List.map_cons] at hf ⊢; omega)
+    simp only [List.map_cons] at ih
+    rw [pTail, hp p (by simp) _ (Or.inr ⟨_, rfl⟩) g (by omega)]
+    simp only
     rw [ih]; rfl
 
 /-- The LaTeX subscript, as `pRedBody` reads it. -/

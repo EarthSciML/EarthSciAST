@@ -132,13 +132,19 @@ mutable struct _DECtx
     # A binary32 fragment's declared-binary64 comparison keys
     # (`_DEExactKeys`, fragment.jl), or `nothing`.
     keys64::Any
+    # The template call whose body this context emits as a function
+    # (`_DECallFrame`, calls.jl), or `nothing` outside a function body.
+    frame::Any
+    # The function callables of this emission, by key (calls.jl): one object
+    # per key, so Reactant's call cache emits each function once.
+    callfns::Dict{Any, Any}
 end
 
 function _DECtx(
         n_states::Int, n_total::Int, p, t::_DEVal, uval::Union{Nothing, _DEVal},
         bufs, hostkeys::Vector{Vector{Float64}}, names::Dict{Int, String},
         opts::DirectEmitOptions; precision = Float64, tree_fold = false, windows = nothing,
-        keys64 = nothing
+        keys64 = nothing, frame = nothing, callfns = Dict{Any, Any}()
     )
     ue = _DEMap(n_total)
     if uval !== nothing
@@ -160,7 +166,7 @@ function _DECtx(
         Dict{Vector{_MLIR.IR.Value}, _DEVal}(),
         Dict{Tuple{_MLIR.IR.Value, Vector{Int}}, _DEVal}(),
         Dict{Tuple{Int, Vector{Int}}, _MLIR.IR.Value}(),
-        Dict{Symbol, Int}(), Int32(0), :none, keys64
+        Dict{Symbol, Int}(), Int32(0), :none, keys64, frame, callfns
     )
 end
 

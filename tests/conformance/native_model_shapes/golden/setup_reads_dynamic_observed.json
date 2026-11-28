@@ -1,0 +1,55 @@
+{
+  "fixture": "setup_reads_dynamic_observed",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "C",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "C",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "A",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "A",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "A",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "s",
+      "actual": 0.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "T",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "T",
+      "actual": 4.0
+    }
+  ]
+}

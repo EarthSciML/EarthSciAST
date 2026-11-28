@@ -79,6 +79,10 @@ _plain_eq(a::Float64, b::Float64, ceq::F = (===)) where {F} = a === b
 _plain_eq(a::ASTExpr, b::ASTExpr, ceq::F = (===)) where {F} = ceq(a, b)::Bool
 _plain_eq(a::IndexSetRef, b::IndexSetRef, ceq::F = (===)) where {F} =
     a.from == b.from && a.of == b.of
+# Iterating an on clause exposes only its key pairs. Its selected range
+# symbols also distinguish two otherwise identical self-join expressions.
+_plain_eq(a::_OnJoinSpec, b::_OnJoinSpec, ceq::F = (===)) where {F} =
+    a.syms == b.syms && _plain_eq(a.pairs, b.pairs, ceq)
 function _plain_eq(a::AbstractVector, b::AbstractVector, ceq::F = (===)) where {F}
     a === b && return true
     typeof(a) === typeof(b) || return false
@@ -109,6 +113,7 @@ _plain_hash(x::Int64, h::UInt) = hash(x, hash(0x69, h))
 _plain_hash(x::Float64, h::UInt) = hash(reinterpret(UInt64, x), hash(0x66, h))
 _plain_hash(x::ASTExpr, h::UInt) = hash(objectid(x), hash(0x65, h))
 _plain_hash(x::IndexSetRef, h::UInt) = hash(x.of, hash(x.from, hash(0x72, h)))
+_plain_hash(x::_OnJoinSpec, h::UInt) = hash(x.syms, _plain_hash(x.pairs, hash(0x6a, h)))
 function _plain_hash(x::AbstractVector, h::UInt)
     h = hash(objectid(typeof(x)), hash(0x76, h))
     h = hash(length(x), h)

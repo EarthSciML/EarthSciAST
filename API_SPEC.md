@@ -401,9 +401,14 @@ not a typed file. A printer puts the document in canonical form first, so
 result is in canonical form.
 
 `print_math(expr, names, format)` prints one expression, or one equation (an
-object with `lhs` and `rhs`, printed as its two sides around `=`), as the math a
-document display holds, without its delimiters: LaTeX for `markdown`, Typst
-math for `typst`. `names` plays the part of the names a component declares
+object with `lhs` and `rhs`), as the math a document display holds, without its
+delimiters: LaTeX for `markdown`, Typst math for `typst`. An equation prints as
+in a document: its two sides around `=`, except that an equation `x = faq`
+whose `faq` has output indices prints in its defining form when that reads back
+as exactly the equation, the output indices on the left side and their ranges
+after the right side (Typst `y_j = sum_(i in S) w_(i, j), j in C`). An
+expression whose top is `==` is a comparison and prints as any expression does,
+never in the defining form. `names` plays the part of the names a component declares
 (its variables, species and parameters, and the document's index sets): a name
 in it prints in its declared shape and the printer avoids spellings that would
 collide with it. No template is in scope. The golden set's `math` field is
@@ -416,8 +421,10 @@ which they read through its serialized form.
 reads one expression, or one equation, with the document readers' math parser
 (`Math.parseLatex` / `Math.parseTypst`) under the same declared names, no
 template in scope, and inside the same reader bounds as a document read. Text
-whose top is `=` reads as an equation (`{lhs, rhs}`), as a display does; any
-other text reads as an expression. It refuses as the document readers do, with
+whose top is `=` reads as an equation (`{lhs, rhs}`), as a display does, and
+so does an equation in its defining form (`y_j = …, j in C`), whose right side
+reads as the `faq` with output indices it writes; any other text reads as an
+expression. It refuses as the document readers do, with
 `removed_op` or `parse_error` (below). `expression_names(expr)` lists the
 names an expression or equation uses (its string leaves under `lhs`, `rhs` and
 `args`), in order of first use: the `names` to show an expression on its own.
@@ -575,7 +582,7 @@ Divergences:
 | `substitute(expr, bindings) -> Expr` | capture-free substitution | no, anywhere |
 | `canonicalize(expr) -> Expr` | RFC §5.4 canonical form | yes, `CanonicalizeError` |
 | `canonical_json(expr) -> str` | canonical serialization | yes, `CanonicalizeError` |
-| `canonicalize_document(doc) -> doc` | every units string of a decoded JSON document in the canonical unit spelling (esm-spec §4.8.2), the deprecated `neg`/`pow` rewritten to `-`/`^` (esm-spec §4.2), every number in canonical form (CONFORMANCE_SPEC §5.5.3.1); nothing else changes | no, anywhere |
+| `canonicalize_document(doc) -> doc` | every units string of a decoded JSON document in the canonical unit spelling (esm-spec §4.8.2), the deprecated `neg`/`pow` rewritten to `-`/`^` (esm-spec §4.2), a `faq` node's default `reduce: "+"` / `semiring: "sum_product"` dropped, every number in canonical form (CONFORMANCE_SPEC §5.5.3.1); nothing else changes | no, anywhere |
 
 Divergences:
 
@@ -644,7 +651,10 @@ additionally overload on `Model` / `ReactionSystem` (`flatten_model` in Rust).
 
 Julia's `FlattenedSystem` also carries the optional `initialization_equations`
 field (esm-libraries-spec §4.7.5 step 4), named by flatten; the other bindings
-leave it out. Julia builds a `FlattenedSystem` with one keyword constructor,
+leave it out. From esm 2.5.0 a loader moves a document's
+`initialization_equations` into `equations` as `ic` equations (esm-spec
+§11.4.4), so the field is empty for a document the loader rewrote. Julia
+builds a `FlattenedSystem` with one keyword constructor,
 `FlattenedSystem(; fields...)`, and copies one with `FlattenedSystem(flat;
 fields...)`; its three subset maps are read off their parent maps.
 
@@ -802,9 +812,15 @@ The state a Problem integrates from at `tspan[0]`, one value per state element,
 aligned with the Problem's state names (Rust: `prob.state_variable_names()`, the
 flattened element names a `Solution`'s state rows carry). It is built exactly as
 a solve builds it, without integrating: per element, the first of the Problem's
-`u0` entry, an initialization equation (esm-spec §6.2), an `ic` equation or
-field initial condition (§11.4, §11.4.1), and the declared `default`, with the
-Problem's `p` (else the parameter defaults) bound in every initial condition's
+`u0` entry (then a run-time override) for an ODE state, an initialization
+equation — an explicit `ic` equation or field initial condition, or the solve
+of the initialization system (esm-spec §11.4, §11.4.1, §11.4.3) — the `u0`
+entry of an algebraic unknown no initialization equation reaches, and the
+declared `default`. A `u0` entry of an algebraic unknown is otherwise a
+starting guess for the initialization solve, never a constraint, so a full
+`u0` is never refused for naming algebraic unknowns (esm-spec §11.4.3,
+"Precedence"). The Problem's
+`p` (else the parameter defaults) is bound in every initial condition's
 scope (§6.6.5). So it depends on neither `tspan` nor any solver option, and a
 field `ic` reads the forcing as construction bound it, without the
 discrete-cadence fields a solve refreshes, so it gives the same state before and
@@ -930,6 +946,7 @@ docstring repeats:
 | `malformed_index` | an `index` node with no operand |
 | `subscript_rank_mismatch` | a gather whose subscript count is not the array's rank |
 | `subscript_not_static` | a subscript that is not an integer function of the loop indices and build-time tables |
+| `positional_gather` | an elementwise combination with an anonymous array operand, which broadcasts positionally (esm-spec §4.3.4) |
 | `gathered_reduction_shape` | a gathered reduction whose output indices do not match its subscripts |
 | `region_value_shape` | a `makearray` region value whose rank does not match the region |
 | `region_multi_index` | a `makearray` region selected by a subscript of several loop indices |
@@ -1718,16 +1735,24 @@ keep their global 1-based values.
   State-free observeds keep their whole-domain build-time values and are
   gathered per lane, or computed per lane, bitwise equal. A read that leaves
   the cell (pointwise) or the column (column) is refused with
-  `compiler_refused_rule`, naming the rule and saying "lane".
+  `compiler_refused_rule`, naming the rule and saying "lane", except in an
+  observed of `t` (not of a state), which is computed over the whole domain
+  instead (see "A time per lane"). A shape-less elementwise observed reads
+  each operand by index-set name (esm-spec §4.3.4) in a lane as in the
+  whole-domain program, whatever order the operands list their sets in.
 - **Array `faq` reads.** An array `faq` read at loop subscripts (a whole-array
-  right-hand side `D(x) = faq{…}`, or a `makearray` region value) is its body at
+  right-hand side `D(x) = faq{…}`, an observed of a state or of `t` defined
+  whole, `x = faq{…}`, or a `makearray` region value) is its body at
   the lane's cell, and a range that is not an output index stays a contraction.
   Each output axis must run over exactly what reads it: the whole lane set
   (`from` that set with no `of`, or `[1, n]`), the range of a non-lane loop
   variable that starts at 1, or a `makearray` region's own bounds. A value that
   does not fit, a computed subscript, a nested binder that would capture a
-  renamed index, and an array `faq` carrying `args`, `key`, `join` or
-  `distinct` are refused.
+  renamed index, and an array `faq` carrying a `key`, a `join`, `distinct`, or
+  an `args` list holding anything but the names of its operand arrays are
+  refused. An `args` list of operand names (esm-spec §4.3.1, the form the
+  planner writes for a time-blended data field) carries no meaning of its own
+  and does not stop the lane form.
 - **Pre-gathered inputs.** `lane_inputs` returns per-lane buffers for every
   non-state input, `gather_lane_inputs!` fills them for a `cells` list, and the
   pre-gathered evaluation reads them in place of the gathers. Its results are
@@ -1741,11 +1766,13 @@ keep their global 1-based values.
   0-d observed that depends on `t` is one value per lane, an array observed of
   `t` with a lane form is computed per lane, and a pre-gathered read never
   involves `t`; a batch at mixed times is evaluated in one pass. An observed
-  of `t` the state equations reach that has no lane form (for example one
-  written over a set that is not a lane set) does not stop the build: the
-  one-time call is unchanged, and a call whose lanes `1..n` have different
-  times is an error naming that observed (Rust `RhsError::MixedTimes`, Julia
-  `ArgumentError`).
+  of `t` the state equations reach that has no lane form (one written over a
+  set that is not a lane set, or one that reads other cells of a lane set,
+  such as `q[i] = Σ_m s[m]/(i+m)`) does not stop the build: it, and every
+  observed of `t` it reads, is computed over the whole domain once per call;
+  the one-time call is unchanged, and a call whose lanes `1..n` have different
+  times is an error naming those observeds (Rust `RhsError::MixedTimes`,
+  Julia `ArgumentError`).
 - **Cost.** A call does work proportional to its lanes, never to the domain.
   Each observed of a state or of `t` that has a lane form is computed per
   lane, in a call at one time too; only one with no lane form (and the
@@ -1840,9 +1867,9 @@ offset of its first element (0-based in Rust, 1-based in Julia) and its shape
 root). `KernelSet`, `Kernel` and `KernelSpec` are `Send + Sync + Clone` in Rust;
 `KernelWorkspace` is `Send` and not `Sync`, as `RhsWorkspace` is.
 
-##### The four classes (normative)
+##### The five classes (normative)
 
-`strip` is a set drawn from four classes. Empty is the default and changes
+`strip` is a set drawn from five classes. Empty is the default and changes
 nothing; an unknown class name, and `wiener`, are an argument error. The build
 removes, for each requested class, every construct of that class from what it
 lowers. It removes them from the same flattened system the right-hand side is
@@ -1871,6 +1898,14 @@ build would otherwise refuse is either removed or still refused.
   the unknowns a stripped equation reads) leave the state layout `u` and form
   the layout `z`. An observed that reads a `z` unknown stays an observed and
   reads it as an input.
+- **`initialization`** *(esm 2.5.0)* — the truly implicit part of the
+  initialization system (esm-spec §11.4.3): the equations that must be solved
+  simultaneously, or that are not explicit in their unknown. The explicit
+  initial conditions and the triangular part are still evaluated by the
+  build. Each starting value of the removed part is left at its starting point
+  (the supplied value of an algebraic unknown, else its `guesses` entry, else
+  its declared default) in the Problem's initial state, for the caller to
+  solve from.
 
 Classification is unchanged: `ode_states`, `observed_unknowns` and
 `algebraic_unknowns` are properties of the model, not of the build. Wiener noise
@@ -1890,7 +1925,8 @@ byte for byte. It has exactly these keys:
 
 ```json
 {"algebraic":{"residuals":[…],"unknowns":[…],"z0":[…],"z_layout":{…}},
- "events":[…],"parameter_updates":[…],"strip":[…]}
+ "events":[…],"initialization":{"residuals":[…],"unknowns":[…],"x0":[…]},
+ "parameter_updates":[…],"strip":[…]}
 ```
 
 - **`strip`** — the requested classes, ascending.
@@ -1922,9 +1958,12 @@ byte for byte. It has exactly these keys:
 - **`algebraic`** — `unknowns`: the `z` unknowns in `z` layout order;
   `z_layout`: name → `{"base", "shape"}`, `base` the 1-based offset of the
   block's first element in `z` and `shape` its extents (`[]` for a scalar);
-  `z0`: the Problem's starting value of every `z` element, in `z` order (the
-  `ic` equation's value, else the declared default — the warm start for
-  consistent initialization); `residuals`: one
+  `z0`: the warm start of every `z` element for the caller's consistent
+  initialization, in `z` order. The build does not solve the stripped
+  algebraic equations at `t0`, so `z0` is the element's explicit `ic` value,
+  else the caller's `u0` entry, else its `guesses` entry, else its declared
+  default (a `u0` entry of an algebraic unknown is a starting guess, esm-spec
+  §11.4.3); `residuals`: one
   `{"id", "origin", "shape", "expr"}` per stripped implicit equation, `expr`
   the residual `{"op": "-", "args": [lhs, rhs]}` of the flattened equation
   exactly (`g = lhs − rhs`, never simplified), `shape` its extents, `origin`
@@ -1932,6 +1971,15 @@ byte for byte. It has exactly these keys:
   `<prefix>.residual[j]`, `j` 1-based over that origin's implicit equations in
   flattened order. An `algebraic` that was not requested, or removed nothing,
   is `{"residuals":[],"unknowns":[],"z0":[],"z_layout":{}}`.
+- **`initialization`** *(esm 2.5.0)* — the removed implicit part of the
+  initialization system: `unknowns`, its starting values as element names
+  (`M.x`, `F.u[2]`) in flattened order; `x0`, the starting point of each
+  (supplied value of an algebraic unknown, else `guesses` entry, else
+  default), in the same order; `residuals`, one `{"id", "origin", "shape",
+  "expr"}` per removed equation, `expr` the residual
+  `{"op": "-", "args": [lhs, rhs]}` with its `ic` terms kept, and `id`
+  `<prefix>.initialization[j]`. Not requested, or nothing removed, it is
+  `{"residuals":[],"unknowns":[],"x0":[]}`.
 
 **Order is deterministic.** Events are listed by origin — the models in
 document order, each followed by its inline subsystems in declaration order,
@@ -2070,6 +2118,11 @@ Julia's `operator_ir(prob; unspecified_eltype = Float32)` requests binary32
 for the selected StableHLO evaluation group. `emit_fragment` uses the IR's
 resolved element type. A supplied `eltype` must agree with the IR. The native
 `rhs_program` refuses this choice with `float32_unsupported`.
+`emit_fragment(ir; calls = :functions)`, the default, emits the operator once
+per trace as a private function, and each template instance it references
+once per argument shape, with a `func.call` at every use; template references
+stay references in the emitted module. `calls = :inline` places each body at
+its use.
 
 ### 5.9 Reference resolution
 

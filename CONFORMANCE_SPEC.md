@@ -1695,10 +1695,20 @@ per-file extension). The five rows, with their normative identities:
 | `semiring` | ⊕ (reduce) | `0̄` (empty ⊕) | ⊗ | `1̄` (empty ⊗) | Domain | Role |
 |---|---|---|---|---|---|---|
 | `sum_product` *(default)* | `+` | `0` | `×` | `1` | ℝ | einsum / FVM-diffusion & ESD discretization |
-| `max_product` | `max` | `−∞` | `×` | `1` | ℝ≥0 | best-path / saturation |
+| `max_product` | `max` | `−∞` | `×` | `1` | ℝ≥0 with an adjoined bottom | best-path / saturation |
 | `min_sum` *(tropical)* | `min` | `+∞` | `+` | `0` | ℝ∪{+∞} | shortest-path / least-cost |
 | `max_sum` | `max` | `−∞` | `+` | `0` | ℝ∪{−∞} | longest-path |
 | `bool_and_or` *(relational)* | `∨` (or) | `false` (`0`) | `∧` (and) | `true` (`1`) | 𝔹 | existence / `distinct` / join |
+
+For `max_product`, the domain describes the exact algebra. Multiplication
+of finite factors agrees with ordinary multiplication on nonnegative reals,
+and the adjoined bottom absorbs multiplication in that algebra. In a
+document, `semiring: "max_product"` selects `max` with empty result `−∞`.
+The factors and terms follow the ordinary expression rules, including
+negative numeric values. The semiring laws about multiplication apply
+only on the stated exact domain. A `*` expression that uses the empty
+result follows ordinary numeric multiplication. For example, in binary64,
+`0 × (−∞)` yields NaN.
 
 The enum spelling is normative: `"sum_product"`, `"max_product"`, `"min_sum"`,
 `"max_sum"`, `"bool_and_or"`. The schema (`esm-schema.json`, the `semiring`
@@ -6903,6 +6913,12 @@ An exclusion that no longer excludes anything — the binding ran the fixture
 cleanly — is reported as a **stale-exclusion note**, not a failure. Failing the
 binding that got better is the one way a ratchet can run backwards.
 
+The optional Lean interpreter can score the scalar part of a fixture through
+`lean_assertion_exclusions`. This manifest field maps assertion variable names
+to reasons for excluding them from the Lean interpreter's coverage. The runner
+reports every such assertion by test ID and index. The complete fixture still
+runs through the ordinary binding adapters with the same golden.
+
 #### 5.45.4 The tiers of this family
 
 | Tier | What it gates |
@@ -7505,16 +7521,18 @@ vocabulary.
 
 **Decision pinned.** `initial_state(prob)` (API_SPEC §5.8) returns the state a
 solve of `prob` starts from, one value per state element, without integrating:
-per element the first of the Problem's `u0` entry, an initialization equation
-(esm-spec §6.2), an `ic` equation or field initial condition (§11.4, §11.4.1),
-and the declared `default`, with the Problem's `p` (else the parameter defaults)
+per element the first of the Problem's `u0` entry of an ODE state, an
+initialization equation (an explicit `ic` equation or field initial condition,
+or the solve of the initialization system: esm-spec §11.4, §11.4.1, §11.4.3),
+the `u0` entry of an algebraic unknown no initialization equation reaches, and
+the declared `default`, with the Problem's `p` (else the parameter defaults)
 bound in every initial condition's scope (§6.6.5). It MUST equal, bit for bit,
 the state at `tspan[0]` of a solve of the same Problem.
 
 **Reason.** A host that drives its own integrator (an operator-splitting
 planner, a restart writer) needs the initial state as the binding builds it, and
-the declared defaults are not it: an `ic` equation, a field `ic` or an
-initialization equation overrides them, and only the build knows which applies.
+the declared defaults are not it: an initialization equation (an `ic`
+equation, a field `ic` or the initialization system) overrides them, and only the build knows which applies.
 Before the accessor a Rust caller recovered it by solving over a zero-length
 span, which is what each case is checked against.
 

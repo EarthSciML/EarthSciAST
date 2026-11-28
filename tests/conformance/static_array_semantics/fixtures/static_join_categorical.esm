@@ -1,0 +1,101 @@
+{
+ "esm": "2.4.0",
+ "metadata": {
+  "name": "static_join_categorical",
+  "description": "The left loop symbol and the right index-set key read categorical members. Equality follows member values even when gather positions differ.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ]
+ },
+ "index_sets": {
+  "left_axis": {
+   "kind": "categorical",
+   "members": [
+    "β",
+    "a",
+    "β",
+    "x"
+   ]
+  },
+  "right_axis": {
+   "kind": "categorical",
+   "members": [
+    "β",
+    "a",
+    "z"
+   ]
+  }
+ },
+ "models": {
+  "CategoricalJoin": {
+   "variables": {
+    "matched": {
+     "type": "unknown",
+     "units": "1"
+    }
+   },
+   "equations": [
+    {
+     "lhs": "matched",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "l": {
+        "from": "left_axis"
+       },
+       "r": {
+        "from": "right_axis"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          10,
+          "l"
+         ]
+        },
+        "r"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "l",
+          "right_axis"
+         ]
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "tolerance": {
+    "rel": 0,
+    "abs": 0
+   },
+   "tests": [
+    {
+     "id": "probe",
+     "time_span": {
+      "start": 0,
+      "end": 1
+     },
+     "assertions": [
+      {
+       "variable": "matched",
+       "time": 0,
+       "expected": 64
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

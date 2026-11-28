@@ -13,14 +13,15 @@
 //! vertex reductions over source x target x vertex x vertex and refused ("a
 //! rank-0 output's promoted box is too large").
 //!
-//! In the large case the source grid is 200 x 200 cells and the target
-//! 15 x 15, so that promoted box is 40 000 x 225 x 4 x 4 = 144 000 000
-//! elements, over the budget. Driven, the narrow phase runs over the
+//! The large case lays a coarse target grid over a fine source grid, so each
+//! target's candidate list is long, and the source × target × vertex × vertex
+//! box exceeds the promoted-box budget. Driven, the narrow phase runs over the
 //! candidate pairs only.
 
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::extension::broad_phase::{overlap_enum_visits, reset_overlap_enum_visits};
+use earthsci_ast::simulate_array::tape::MAX_PROMOTED_ELEMS;
 use earthsci_ast::{
     Compiler, EsmProblem, ProblemOptions, Remake, esm_problem, observed_field, remake,
 };
@@ -162,11 +163,7 @@ fn bits(p: &EsmProblem, name: &str) -> Vec<u64> {
 /// a pruned pair, which holds the identity.
 fn check_areas(p: &EsmProblem, sx: usize, sy: usize, tx: usize, ty: usize) {
     let area = (L / tx as f64) * (L / ty as f64);
-    let a_j: Vec<f64> = observed_field(p, "A_j")
-        .expect("A_j")
-        .iter()
-        .copied()
-        .collect();
+    let a_j = observed_field(p, "A_j").expect("A_j");
     assert_eq!(a_j.len(), tx * ty);
     for (j, a) in a_j.iter().enumerate() {
         assert!(
@@ -174,23 +171,12 @@ fn check_areas(p: &EsmProblem, sx: usize, sy: usize, tx: usize, ty: usize) {
             "A_j[{j}] = {a}, want {area}"
         );
     }
-    // Row-major over (src_cells, tgt_cells).
-    let a_ij: Vec<f64> = observed_field(p, "A_ij")
-        .expect("A_ij")
-        .iter()
-        .copied()
-        .collect();
+    let a_ij = observed_field(p, "A_ij").expect("A_ij");
+    assert_eq!(a_ij.shape(), &[sx * sy, tx * ty]);
     let src_area = (L / sx as f64) * (L / sy as f64);
-    assert!(
-        (a_ij[0] - src_area).abs() < 1e-12,
-        "A_ij[1, 1] = {}",
-        a_ij[0]
-    );
-    assert_eq!(
-        a_ij[(sx * sy - 1) * tx * ty],
-        0.0,
-        "a pruned pair is the identity"
-    );
+    let first = a_ij[[0, 0]];
+    assert!((first - src_area).abs() < 1e-12, "A_ij[1, 1] = {first}");
+    assert_eq!(a_ij[[sx * sy - 1, 0]], 0.0, "a pruned pair is the identity");
 }
 
 /// The gate is driven under both compilers, which agree bit for bit.
@@ -223,9 +209,27 @@ fn a_parameter_ring_stack_gate_is_driven_and_both_compilers_agree() {
 /// too large").
 #[test]
 fn native_compiles_a_ring_stack_gate_too_large_to_run_dense() {
-    let (sx, sy, tx, ty) = (200usize, 200usize, 15usize, 15usize);
+    // A coarse target grid over a fine source grid, so each target cell's
+    // candidate list is a long run of source cells (a block of about
+    // (sx / tx) x (sy / ty) of them, plus the ones touching its edges). The
+    // coprime grid sizes avoid shared interior boundaries.
+    let (sx, sy, tx, ty) = (173usize, 173usize, 17usize, 17usize);
+    assert!(
+        sx * sy * tx * ty * 4 * 4 > MAX_PROMOTED_ELEMS,
+        "the dense narrow phase must exceed the promoted-box budget"
+    );
     let (native, _) = build(&doc(sx, sy, tx, ty), Compiler::Native);
     check_areas(&native, sx, sy, tx, ty);
+    // Every target overlaps at least the source cells wholly inside it.
+    let inside = (sx / tx - 1) * (sy / ty - 1);
+    let a_ij = observed_field(&native, "A_ij").expect("A_ij");
+    for (j, column) in a_ij.axis_iter(ndarray::Axis(1)).enumerate() {
+        let overlaps = column.iter().filter(|&&a| a > 0.0).count();
+        assert!(
+            overlaps >= inside,
+            "target {j} overlaps {overlaps} source cells, want at least {inside}"
+        );
+    }
 }
 
 /// Two builds on ONE thread whose gates name the same ring stacks at the same
@@ -234,17 +238,18 @@ fn native_compiles_a_ring_stack_gate_too_large_to_run_dense() {
 /// cache across builds, so it must key the index by the rings' contents, not
 /// only their names: keyed by name, the second build was served the first
 /// build's candidate pairs and silently lost the overlaps the shift created.
-/// Each build is checked against `native`, which builds its own pairs.
+/// Each build is checked against `native`, which builds its own pairs. A
+/// third build then changes the grid sizes under the same names.
 #[test]
 fn two_builds_with_the_same_ring_names_and_different_geometry_both_answer_correctly() {
     let (sx, sy, tx, ty) = (12usize, 12usize, 3usize, 3usize);
-    let doc = doc(sx, sy, tx, ty);
+    let base = doc(sx, sy, tx, ty);
     let shifted = || HashMap::from([("tgt_x0".to_string(), 0.5 * L / tx as f64)]);
 
-    let (first, _) = build(&doc, Compiler::Interpreter);
-    let (second, _) = build_with(&doc, Compiler::Interpreter, shifted());
-    let (native_first, _) = build(&doc, Compiler::Native);
-    let (native_second, _) = build_with(&doc, Compiler::Native, shifted());
+    let (first, _) = build(&base, Compiler::Interpreter);
+    let (second, _) = build_with(&base, Compiler::Interpreter, shifted());
+    let (native_first, _) = build(&base, Compiler::Native);
+    let (native_second, _) = build_with(&base, Compiler::Native, shifted());
 
     assert_eq!(bits(&first, "A_ij"), bits(&native_first, "A_ij"));
     assert_eq!(bits(&second, "A_ij"), bits(&native_second, "A_ij"));
@@ -254,6 +259,13 @@ fn two_builds_with_the_same_ring_names_and_different_geometry_both_answer_correc
         bits(&second, "A_ij"),
         "the shift changes the overlaps"
     );
+
+    // A third build on the same thread over grids of other sizes, under the
+    // same ring names, is served its own pairs too: every target's covered
+    // area is its own.
+    let (sx, sy, tx, ty) = (10usize, 10usize, 4usize, 4usize);
+    let (third, _) = build(&doc(sx, sy, tx, ty), Compiler::Interpreter);
+    check_areas(&third, sx, sy, tx, ty);
 }
 
 /// The model `doc` builds, as a mutable JSON object.

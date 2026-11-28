@@ -175,6 +175,15 @@ diagnostic_code_registry! {
     /// esm-2.4.0 name (`operators`, `operator_imports`) at the wire boundary
     /// (esm-spec §9.6.12 "Old names (no refusal)"). One warning per document.
     DEPRECATED_FIELD = "deprecated_field";
+    /// esm 2.5.0 (esm-spec §11.4.3 "Balance"): the initialization system is
+    /// over- or under-determined, or no assignment of one equation to each
+    /// unknown exists. Registered with the spec; not raised until the
+    /// initialization system is implemented.
+    IC_SYSTEM_UNBALANCED = "ic_system_unbalanced";
+    /// esm 2.5.0 (esm-spec §11.4.3 "Solving"): the solve of the initialization
+    /// system did not converge or converged to a non-finite value. This
+    /// binding has no nonlinear solver and never raises it.
+    IC_SYSTEM_UNSOLVED = "ic_system_unsolved";
     /// A rewrite-target op (§4.2) reached evaluation or compilation without
     /// being lowered (esm-spec §9.6.6); refused through `OpError::Unlowered`.
     UNLOWERED_OPERATOR = "unlowered_operator";
@@ -891,6 +900,8 @@ mod error_code_tests {
             "faq_bare_array_operand",
             "faq_version_too_old",
             "ic_in_reaction_system",
+            "ic_system_unbalanced",
+            "ic_system_unsolved",
             "indexed_definition_unsupported_form",
             "invalid_broadcast_fn",
             "invalid_enums_block",

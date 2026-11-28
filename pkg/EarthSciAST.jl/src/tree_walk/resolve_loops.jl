@@ -140,17 +140,18 @@ function _resolve_scalar_faq(faq_expr::OpExpr, rc::_ResolveCtx)
     oplus, zerobar = _aggregate_oplus_identity(faq_expr.semiring, faq_expr.reduce)
     # Every range key contracts (a scalar aggregate has no output indices).
     contract_names = _contracted_index_names(ranges_dict, ())
+    gates = faq_expr.join_gates
     # A contracted bound may be a per-cell index expression (a ragged set's
     # `index(n_edges_on_cell, i)`); the outer loop variable is already a
     # literal in `body` and `ranges` here, so the bound evaluates against the
     # const arrays with no index bound.
     contract_iters = _contract_iters_at(
-        contract_names, [ranges_dict[n] for n in contract_names], _EMPTY_IDX_ENV, rc.const_arrays
+        contract_names, [ranges_dict[n] for n in contract_names], _EMPTY_IDX_ENV,
+        rc.const_arrays; canonical = _has_equality_join(gates)
     )
     # Build-time join gates and the run-time filter guard (§5.3 / §7.2). Every
     # join key of a scalar aggregate is a contracted symbol, so the binding is
     # the contraction tuple.
-    gates = faq_expr.join_gates
     filt0 = faq_expr.filter
     if isempty(contract_names) && gates === nothing && filt0 === nothing
         return _resolve_indices(body, rc)

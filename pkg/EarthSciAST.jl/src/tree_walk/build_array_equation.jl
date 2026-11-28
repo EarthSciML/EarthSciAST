@@ -510,10 +510,9 @@ function _unwrap_identity_gather(
     # `bare`.
     cnames = _contracted_index_names(newranges, idx_names)
     # No contraction ⇒ the gather form already lowers identically. Keep it —
-    # unless the producer carries a filter, which the affine tier does not model
-    # inside a gather, and the bare form puts on the body as its `ifelse` guard
-    # (`_compile_faq_equation!`), the value the gather form's resolve computes.
-    isempty(cnames) && bare.filter === nothing && return rhs
+    # unless the producer carries a gate or filter. The bare form exposes them
+    # to the compile-once tiers.
+    isempty(cnames) && bare.filter === nothing && bare.join_gates === nothing && return rhs
     all(n -> haskey(ranges_dict, n), idx_names) || return rhs
     # A forward prefix scan, a constant-bound contraction, a join-gated or a
     # ragged one: each is a tier's in the bare form (the scan tier, the affine
@@ -1263,7 +1262,7 @@ function _offer(::_AffineTier, a::_FaqEq, sc::_FaqScope, st::_FaqRun)
         kernels === nothing || _tally_cascade!(:affine_reduce)
     end
     body = kernels !== nothing ? nothing :
-        isempty(a.contract_names) ? a.rhs_body :
+        isempty(a.contract_names) ? (a.gates === nothing ? a.rhs_body : nothing) :
         scan !== nothing ?
         _sub_preserving(
             a.rhs_body, Dict{String, ASTExpr}(scan[3] => VarExpr(a.idx_names[scan[1]]))
@@ -1794,7 +1793,15 @@ function _compile_cell_program(
         prepare = identity, nest_scalar_loops::Bool = false, memo::_MaybeMemo = nothing,
         compile_declines::Bool = false
     )
-    term = filt === nothing ? body : OpExpr("ifelse", ASTExpr[filt, body, NumExpr(zerobar)])
+    pointwise = isempty(contract_names) && gates !== nothing ? _array_contraction_table(
+            Base.RefValue{Int}[], idx_names, cell_iters, contract_names,
+            contract_ranges, contract_const, gates, oplus, zerobar, sc.cs.const_registry
+        ) : nothing
+    term = if pointwise !== nothing && last(pointwise.seg) == 1
+        NumExpr(zerobar)  # every output is rejected, so no body is read
+    else
+        filt === nothing ? body : OpExpr("ifelse", ASTExpr[filt, body, NumExpr(zerobar)])
+    end
     isempty(sc.resolved_obs) || (term = _sub_preserving(term, sc.resolved_obs))
     term = prepare(term)
     got = _resolve_array_contraction_term(
@@ -1809,7 +1816,7 @@ function _compile_cell_program(
         (compile_declines && err isa EarthSciASTError) || rethrow()
         return _Decline(:symbolic_body_did_not_lower, sprint(showerror, err))
     end
-    isempty(contract_names) && return _CellProgram(out_refs, node, nothing)
+    isempty(contract_names) && return _CellProgram(out_refs, node, pointwise)
     # A reverse window folds descending, which the static form's ascending
     # loops do not; its table lists each cell's entries from the top down.
     rev = _reverse_window(filt, contract_names, idx_names)
@@ -1992,11 +1999,17 @@ function _ac_table_fill!(
     nc = length(contract_names)
     # A ragged range whose parent is contracted: each cell lists its nest.
     deps = _contracted_parent_deps(contract_names, contract_ranges)
+    canonical = _has_equality_join(agg_gates)
     c = 0
     for idx_tuple in cells
         c += 1
         for d in eachindex(idx_names)
             idx_env[idx_names[d]] = idx_tuple[d]
+        end
+        if nc == 0
+            # In a pointwise join the sole candidate is the output tuple itself.
+            seg[c + 1] = seg[c] + Int(_join_admits(agg_gates, idx_env))
+            continue
         end
         for d in 1:nc
             deps === nothing || break
@@ -2009,7 +2022,9 @@ function _ac_table_fill!(
         end
         # A reverse window's entries run from the top down (`_reverse_window`).
         run = deps !== nothing ?
-            _contract_nest(contract_names, contract_ranges, deps, idx_env, const_registry) :
+            _contract_nest(
+                contract_names, contract_ranges, deps, idx_env, const_registry; canonical
+            ) :
             reverse ? [collect(Int, Iterators.reverse(iters[1]))] : iters
         _foreach_aggregate_term(
             nothing, contract_names, run, agg_gates, nothing,
@@ -2050,6 +2065,7 @@ function _compile_faq_percell!(
     rhs_oplus = a.oplus
     rhs_zerobar = a.zerobar
     agg_gates = a.gates
+    canonical = _has_equality_join(agg_gates)
     agg_filter = a.filter
     resolved_obs = sc.resolved_obs
     cs = sc.cs
@@ -2080,6 +2096,10 @@ function _compile_faq_percell!(
             # The cell the LHS writes to.
             idx = _claim_cell!(covered, _lhs_cell_slot_at(a.lhs_body, idx_exprs, var_map)...)
 
+            if isempty(contract_names) && !_join_admits(agg_gates, idx_env)
+                push!(cell_entries, (idx, _compile_in(cs, NumExpr(rhs_zerobar), cell_memo)))
+                continue
+            end
             # Substitute output loop vars into the RHS body.
             sub_rhs_outer = _sub_preserving(a.rhs_body, idx_exprs)
 
@@ -2134,7 +2154,7 @@ function _compile_faq_percell!(
                 # nest instead (`_contract_iters_at`).
                 cell_contract_iters = _contract_iters_at(
                     contract_names, contract_ranges, idx_env,
-                    const_registry, contract_const
+                    const_registry, contract_const; canonical
                 )
                 # Joins and filters (§5.3 / §7.2) via the shared `_foreach_aggregate_term` core:
                 # a join-rejected combination is dropped (so a degenerate join

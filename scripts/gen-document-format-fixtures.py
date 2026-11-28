@@ -725,6 +725,106 @@ def operators(g):
         ),
     )
     E(
+        "faq_set_upright",
+        'A word-named index set is upright in Typst (k in upright("lev")), as is the set '
+        "of a ragged range; an output index's range row too. LaTeX prints it as a name.",
+        faq(
+            op("*", idx("u", "k", "s"), idx("q", "k", "m")),
+            {"k": {"from": "lev"}, "m": {"from": "bins", "of": ["k"]}, "s": {"from": "tracer"}},
+            output_idx=["s"],
+        ),
+        names=("u", "q"),
+        index_sets={
+            "lev": {"kind": "interval", "size": 3},
+            "tracer": {"kind": "interval", "size": 2},
+            "bins": {"kind": "ragged", "of": ["lev"], "offsets": "off", "values": "vals"},
+        },
+    )
+    E(
+        "faq_set_upright_dotted",
+        "Each segment of a scoped set name follows the set rule on its own: a word segment "
+        'is upright (upright("lev")"."upright("top")), a letter keeps its name form '
+        '(a"."upright("bins")).',
+        faq(
+            op("*", idx("u", "k"), idx("q", "k", "m")),
+            {"k": {"from": "lev.top"}, "m": {"from": "a.bins", "of": ["k"]}},
+        ),
+        names=("u", "q"),
+        index_sets={
+            "lev.top": {"kind": "interval", "size": 3},
+            "a.bins": {"kind": "ragged", "of": ["lev.top"], "offsets": "off", "values": "vals"},
+        },
+    )
+    E(
+        "faq_defining_bare",
+        "An equation x = faq whose faq reduces nothing and carries nothing else: the defining "
+        "form is the body alone, y_i = w_i, i in S.",
+        faq(idx("w", "i"), {"i": {"from": "S"}}, output_idx=["i"]),
+        names=("w",),
+        index_sets=SETS,
+    )
+    E(
+        "faq_bracket_derivative",
+        "Output indices on a right side whose left side is not a name (here a derivative): "
+        "the bracket form, [ … ]_(i in S).",
+        faq(idx("w", "i", "j"), {"i": {"from": "S"}, "j": {"from": "C"}}, output_idx=["i"]),
+        names=("w",),
+        index_sets=SETS,
+        lhs=op("D", "y", wrt="t"),
+    )
+    E(
+        "faq_bracket_limits_noreduce",
+        "A \\limits faq with output indices that reduces nothing keeps the bracket form: "
+        "y_j = limits(sum) w_j, j in C would read as a sum.",
+        faq(idx("w", "j"), {"j": {"from": "C"}}, output_idx=["j"], args=["w"]),
+        names=("w",),
+        index_sets=SETS,
+    )
+    E(
+        "faq_bracket_reduction_body",
+        "A faq with output indices whose body is itself a reduction and that reduces nothing "
+        "else keeps the bracket form: y_j = sum sum_(i in S) …, j in C would read as two sums.",
+        faq(
+            faq(idx("w", "i", "j"), {"i": {"from": "S"}}),
+            {"j": {"from": "C"}},
+            output_idx=["j"],
+        ),
+        names=("w",),
+        index_sets=SETS,
+    )
+    E(
+        "faq_bracket_output_filter_only",
+        "A filter on a faq that reduces nothing keeps the bracket form: "
+        "y_j = sum_(j > 1) w_j, j in C would read as a sum over j.",
+        faq(idx("w", "j"), {"j": {"from": "C"}}, output_idx=["j"], filter=op(">", "j", 1)),
+        names=("w",),
+        index_sets=SETS,
+    )
+    E(
+        "faq_defining_unranged_output",
+        "An output index with no range stays on the left side with no row: "
+        "y_(i, j) = sum_(k in S) w_(i, j, k), i in S.",
+        faq(
+            idx("w", "i", "j", "k"),
+            {"i": {"from": "S"}, "k": {"from": "S"}},
+            output_idx=["i", "j"],
+        ),
+        names=("w",),
+        index_sets=SETS,
+    )
+    E(
+        "faq_set_shapes",
+        "A set named by a subscript shape (x_i) or a formula (NO) prints as that name, not "
+        "upright text.",
+        op(
+            "+",
+            faq(idx("w", "i"), {"i": {"from": "x_i"}}),
+            faq(idx("w", "j"), {"j": {"from": "NO"}}),
+        ),
+        names=("w",),
+        index_sets={"x_i": {"kind": "interval", "size": 3}, "NO": {"kind": "interval", "size": 2}},
+    )
+    E(
         "faq_call_semiring",
         "A faq with a semiring other than sum_product prints in the call form, its fields "
         "as named arguments.",
@@ -1608,6 +1708,75 @@ def documents(g):
         document(models={"Box": box_model(description="The box model.")}),
     )
     P(
+        "description_verbatim",
+        "A description whose text is safe to typeset as Typst markup is written verbatim in "
+        "Typst, #description[...]: code spans, nested brackets, lists and an underscore "
+        "inside a word are kept as written.",
+        document(
+            models={
+                "Box": box_model(
+                    description="Mixes `q` over [lev, [tracer]]; see grids/column_1d.\n- one\n- two"
+                )
+            }
+        ),
+    )
+    P(
+        "description_string",
+        "A description that is not safe to typeset as Typst markup (here a * for "
+        "multiplication, a $, a #, an @, an underscore outside a word, a // and a <) is "
+        'written in Typst as a string, #description("...").',
+        document(
+            models={"Box": box_model(description='Loss is k * c, $5 per #2 @ x_ y // "z" <a>')}
+        ),
+    )
+    V(
+        "description_escaped",
+        "A Typst description written with its markup characters escaped by a backslash, as "
+        "earlier documents were, reads as the unescaped text.",
+        document(models={"Box": box_model(description="First-order *loss* [x]")}),
+        typ,
+        [
+            (
+                '#description("First-order *loss* [x]")',
+                "#description[First\\-order \\*loss\\* \\[x\\]]",
+            )
+        ],
+    )
+    P(
+        "description_string_shorthand",
+        "A description with a Typst shorthand (here ~, -- and ...) or a bracket inside a "
+        "code span is written in Typst as a string: as markup it would typeset differently "
+        "from the text, or not compile.",
+        document(models={"Box": box_model(description="Valid for ~10--20 km... see index [`]`].")}),
+    )
+    V(
+        "description_raw_span",
+        "In a hand-written Typst description, a code span's characters are literal (a "
+        "backslash or bracket inside one is kept as written), and outside one \\u{...} is a "
+        "code point.",
+        document(models={"Box": box_model(description="Use `\\n` or `]` here, caf\u00e9.")}),
+        typ,
+        [
+            (
+                '#description("Use `\\\\n` or `]` here, caf\u00e9.")',
+                "#description[Use `\\n` or `]` here, caf\\u{e9}.]",
+            )
+        ],
+    )
+    V(
+        "description_like_prose",
+        "A line that only starts like a description opener (here #description-note[...]) is "
+        "prose, which the reader skips.",
+        document(models={"Box": box_model(description="The box model.")}),
+        typ,
+        [
+            (
+                "#description[The box model.]",
+                "#description-note[An aside.]\n\n#description[The box model.]",
+            )
+        ],
+    )
+    P(
         "declarations",
         "Variables and parameters are :var and :param directives (Typst #var, #param), "
         "the other fields attributes; a list-valued field is a quoted flow collection.",
@@ -1926,6 +2095,38 @@ def documents(g):
                     guesses={"c": op("+", "u", 1)},
                 )
             }
+        ),
+    )
+    P(
+        "block_math_comparison_faq",
+        "An == in a path block is a comparison, not an equation: a faq with output indices "
+        "on its right side keeps the bracket form, never the defining form y_i = …, i in S.",
+        document(
+            models={
+                "M": box_model(
+                    variables={
+                        "c": {"type": "unknown", "units": "kg/m^3", "default": 0},
+                        "u": {"type": "parameter", "units": "m/s", "default": 1},
+                        "w": {"type": "parameter"},
+                        "y": {"type": "parameter"},
+                    },
+                    discrete_events=[
+                        {
+                            "name": "match",
+                            "trigger": {
+                                "type": "condition",
+                                "expression": op(
+                                    "==",
+                                    "y",
+                                    faq(idx("w", "i"), {"i": {"from": "S"}}, output_idx=["i"]),
+                                ),
+                            },
+                            "affects": [{"lhs": "c", "rhs": 0}],
+                        }
+                    ],
+                )
+            },
+            index_sets=SETS,
         ),
     )
     P(
@@ -2621,6 +2822,87 @@ def refusals(g):
         "parse_error",
         [("limits(sum)_(i in S) w_i", "limits(sum)_(i in S)^({f}) w_i")],
     )
+    # The defining form of an equation x = faq reads only what the printer writes: each
+    # left-side subscript a name or 1, no name twice, each row the range of one of them,
+    # and a right-side reduction ranging over an index of its own, not an output index.
+    dfn = expr_doc(
+        faq(idx("w", "i", "j"), {"i": {"from": "S"}, "j": {"from": "C"}}, output_idx=["j"]),
+        ("w",),
+        index_sets=SETS,
+    )
+    R(
+        "defining_out_expression",
+        "A left-side subscript that is an expression is no output index.",
+        dfn,
+        typ,
+        "parse_error",
+        [("$ y_j = ", "$ y_(j + 1) = ")],
+    )
+    R(
+        "defining_out_number",
+        "A left-side subscript that is a number other than 1 is no output index.",
+        dfn,
+        md,
+        "parse_error",
+        [("y_{j} = ", "y_{2} = ")],
+    )
+    R(
+        "defining_out_twice",
+        "A name twice among the left side's subscripts is refused.",
+        dfn,
+        typ,
+        "parse_error",
+        [("$ y_j = ", "$ y_(j, j) = ")],
+    )
+    R(
+        "defining_row_not_output",
+        "A range row after the right side for a name not among the left side's subscripts "
+        "is refused (it would be a hidden reduction).",
+        dfn,
+        typ,
+        "parse_error",
+        [(", j in C $", ", k in C $")],
+    )
+    R(
+        "defining_row_twice",
+        "Two range rows for one output index are refused.",
+        dfn,
+        md,
+        "parse_error",
+        [(r", j \in C", r", j \in C, j \in S")],
+    )
+    R(
+        "defining_sum_no_range",
+        "A right-side reduction with no range of its own is refused in the defining form.",
+        dfn,
+        typ,
+        "parse_error",
+        [("sum_(i in S) w_(i, j)", "sum w_(i, j)")],
+    )
+    R(
+        "defining_limits_no_range",
+        "A \\limits reduction with no range of its own is refused in the defining form.",
+        dfn,
+        md,
+        "parse_error",
+        [(r"\sum_{i \in S} w_{i, j}", r"\sum\limits w_{i, j}")],
+    )
+    R(
+        "defining_sum_filter_only",
+        "A right-side reduction with only a filter is refused in the defining form.",
+        dfn,
+        typ,
+        "parse_error",
+        [("sum_(i in S) w_(i, j)", "sum_(j > 1) w_(i, j)")],
+    )
+    R(
+        "defining_sum_over_output",
+        "A right-side reduction ranging over an output index is refused.",
+        dfn,
+        md,
+        "parse_error",
+        [(r"y_{j} = \sum_{i \in S}", r"y_{j, i} = \sum_{i \in S}")],
+    )
     bset = expr_doc(
         faq(
             idx("w", "i", "j"),
@@ -2630,6 +2912,8 @@ def refusals(g):
         ),
         ("w", "f"),
         index_sets=SETS,
+        # a derivative on the left keeps the bracket form (only `x = faq` has a defining form)
+        lhs=op("D", "y", wrt="t"),
     )
     R(
         "bracket_inner_set",
@@ -2678,6 +2962,8 @@ def refusals(g):
         ),
         ("w",),
         index_sets=SETS,
+        # a derivative on the left keeps the bracket form (only `x = faq` has a defining form)
+        lhs=op("D", "y", wrt="t"),
     )
     R(
         "bracket_set_limits",
@@ -2797,6 +3083,40 @@ def refusals(g):
             (r"\begin{bmatrix}", r"\left[\begin{array}{cc}"),
             (r"\end{bmatrix}", r" \end{array}\right]"),
         ],
+    )
+    st = expr_doc(
+        faq(idx("w", "i"), {"i": {"from": "lev"}}),
+        ("w",),
+        index_sets={"lev": {"kind": "interval", "size": 3}},
+    )
+    for cid, spelled, why in [
+        ("letter", "a", "a letter prints as a name (a), never upright"),
+        ("greek", "alpha", "a Greek name prints as its symbol (alpha)"),
+        ("euler", "e", "a letter prints as a name, never upright"),
+        ("subscript_shape", "x_i", 'the x_i shape prints x_(upright("i"))'),
+        ("formula", "NO2", 'a formula prints upright("NO")_2'),
+        ("empty", "", "an empty name is no name"),
+        ("digit_start", "2lev", "a name starts with a letter or _"),
+        ("space", "le v", "a name is an identifier"),
+        ("non_ascii", "l\u00e9v", "a name is an ASCII identifier"),
+    ]:
+        R(
+            f"set_upright_{cid}_typst",
+            "An upright set name is read only as the printer writes one, a word that would "
+            f"otherwise print italic: {why}.",
+            st,
+            typ,
+            "parse_error",
+            [('upright("lev")', f'upright("{spelled}")')],
+        )
+    R(
+        "set_upright_dotted_letter_typst",
+        "Each segment of an upright scoped set name is read by the set rule: a letter "
+        "segment is never upright.",
+        st,
+        typ,
+        "parse_error",
+        [('upright("lev")', 'upright("lev")"."upright("a")')],
     )
     return a
 

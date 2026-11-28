@@ -1864,6 +1864,37 @@ func psPEulerExp(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 	return prNode("exp", []Json{y}), r, true
 }
 
+// psPSetSeg is `Math.pSetSeg`: one segment of an index set's name: an upright
+// word `upSet` sets upright, or a name segment.
+func psPSetSeg(sf Sf, ts []Tok) ([]rune, []Tok, bool) {
+	if len(ts) > 0 && ts[0].K == TUps && len(ts[0].Ups) == 1 && ts[0].Ups[0].B == "" {
+		if g := []rune(ts[0].Ups[0].A); prUpSet(sf, g) {
+			return g, ts[1:], true
+		}
+	}
+	return psPSeg(sf, ts)
+}
+
+// psPSet is `Math.pSet`: an index set's name, its segments joined by the scope
+// dot.
+func psPSet(sf Sf, ts []Tok) (string, []Tok, bool) {
+	acc, r, ok := psPSetSeg(sf, ts)
+	if !ok {
+		return "", nil, false
+	}
+	acc = append([]rune(nil), acc...)
+	for len(r) > 0 && r[0].isKw(KwSdot) {
+		g, r2, ok := psPSetSeg(sf, r[1:])
+		if !ok {
+			return "", nil, false
+		}
+		acc = append(acc, '.')
+		acc = append(acc, g...)
+		r = r2
+	}
+	return string(acc), r, true
+}
+
 // psPRange is `Math.pRange`: a range row: `k \in S`, `k \in S(i, j)`,
 // `a \le k \le b`.
 func psPRange(c Ctx, f int, ts []Tok) (Row, []Tok, bool) {
@@ -1876,7 +1907,7 @@ func psPRange(c Ctx, f int, ts []Tok) (Row, []Tok, bool) {
 		return Row{}, nil, false
 	}
 	if k, isStr := x.(string); isStr && at(r, 0, KwInn) {
-		s, r2, ok := psPName(c.sf, r[1:])
+		s, r2, ok := psPSet(c.sf, r[1:])
 		if !ok {
 			return Row{}, nil, false
 		}
@@ -2366,11 +2397,54 @@ func psPEscArgs(c Ctx, f int, ts []Tok) ([]Json, []Tok, bool) {
 // read with at level l.
 func psNeed(l, n int) int { return 30*n + max(12-l, 0) }
 
-// psParseToks is `Math.parseToks` (Induct.lean): read a whole token list.
+// psParseToks is `Math.parseToks` (Induct.lean): read a whole token list: an
+// expression, or an equation in its defining form (`x_s = …, s ∈ S`,
+// prUnlift).
 func psParseToks(lim *Lim, sf Sf, s *Sym, ts []Tok) (Json, bool) {
-	e, r, ok := psPOr(Ctx{sf: sf, s: s, lim: lim}, psNeed(1, len(ts)), ts)
-	if !ok || len(r) != 0 {
+	c := Ctx{sf: sf, s: s, lim: lim}
+	f := psNeed(1, len(ts))
+	e, r, ok := psPOr(c, f, ts)
+	if !ok {
 		return nil, false
 	}
-	return e, true
+	if len(r) == 0 {
+		return e, true
+	}
+	if !at(r, 0, KwComma) {
+		return nil, false
+	}
+	rows, ok := psPTail(c, f, r[1:])
+	if !ok {
+		return nil, false
+	}
+	rg, _, hasFl, ok := psRowParts(rows)
+	if !ok || hasFl {
+		return nil, false
+	}
+	return prUnlift(e, rg)
+}
+
+// psPTail is `Math.pTail`: range rows separated by commas, to the end of the
+// input: the ranges of a defining equation's output indices.
+func psPTail(c Ctx, f int, ts []Tok) ([]Row, bool) {
+	var out []Row
+	isEnd := func(t Tok) bool { return t.isKw(KwComma) }
+	for {
+		if f == 0 {
+			return nil, false
+		}
+		f--
+		row, r, ok := psPRow(c, f, isEnd, ts)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, row)
+		if len(r) == 0 {
+			return out, true
+		}
+		if !at(r, 0, KwComma) {
+			return nil, false
+		}
+		ts = r[1:]
+	}
 }

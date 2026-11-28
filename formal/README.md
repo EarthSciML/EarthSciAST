@@ -21,6 +21,7 @@ It serves two purposes:
 | `Esm/Expr/` | The Expression AST, its evaluator and template expansion (the slice built so far is listed in `Core.lean`) |
 | `Esm/Lib/` | Standard-library templates as ASTs, generated from `lib/*.esm` by `scripts/gen-lib-templates.py` (`--check` runs in CI) |
 | `Esm/Closed/` | Reference definitions (interpolation, calendar, keys and ranks, planar overlap) and the theorems that each standard-library template, expanded and evaluated, computes its reference |
+| `Esm/Determinism.lean` | Ordered distinct keys, dense ranks, exact equality matches and exact additive group-by (CONFORMANCE §5.5). The determinism harness compares model output on the existing producer fixtures and their input variants. |
 | `Esm/Document/Source/` | ESM documents as Markdown and Typst sources: the skeleton with its path-keyed fallback, the math entries (equations, initialization equations, constraints, reactions, templates and rules), the two containers, and their round-trip and prose-independence theorems (`parseMd_printMd`, `parseTyp_printTyp`) |
 | `Adapter/Main.lean` | The `esm-lean` executable used by the conformance runners (also `print-md`, `parse-md`, `print-typ`, `parse-typ`, `canon`, which generate the golden set in `tests/conformance/document_format/` through `scripts/gen-document-format-fixtures.py`; `formal-audit.py fixtures` checks it is current) |
 | `inventory/*.json` | Every normative (`MUST`) clause of the two spec files, classified |
@@ -30,8 +31,18 @@ It serves two purposes:
 
 ## Building locally
 
-The toolchain and Mathlib cache are large. On the cluster, keep them on
-`/projects` or `/scratch` — never `/` or `/tmp`, which are RAM-backed:
+On the Illinois cluster, the pinned Lean and Mathlib install lives on project
+storage. Use it from an EarthSciAST checkout with matching dependency pins.
+
+```bash
+lean_bundle=/projects/illinois/eng/cee/ctessum/ctessum/libs/earthsci-lean/v4.35.0
+source "$lean_bundle/env.sh"
+"$lean_bundle/attach" formal
+(cd formal && lake build)
+```
+
+`attach` checks the toolchain and manifest before linking the shared package
+cache. A fresh installation needs a filesystem with room for several GB.
 
 ```bash
 export ELAN_HOME=/projects/illinois/eng/cee/ctessum/ctessum/libs/elan
@@ -41,6 +52,56 @@ lake exe cache get   # prebuilt Mathlib; never build Mathlib from source
 lake build
 python3 ../scripts/formal-audit.py all
 ```
+
+## Static assertion conformance
+
+The Lean adapter reads the original ESM documents and evaluates state-free
+scalar and array observations at the authored times and parameter overrides.
+It supports element names, named-axis `coords`, and the `min`, `max`, `mean`,
+and `integral` field reductions. To score it against the current inline-test
+goldens, run the shared harness from the repository root after `lake build`.
+
+```bash
+EARTHSCI_INLINE_TESTS_ADAPTER_LEAN="python3 scripts/run-lean-inline-tests.py" \
+  python3 scripts/run-inline-tests-conformance.py \
+  --manifest tests/conformance/scalar_operator_semantics/manifest.json \
+  --bindings lean --compiler interpreter
+```
+
+The report lists integrated state assertions and out-of-scope fixtures as
+exclusions. Select the `faq_pointwise_filter`, `array_expression_forms`,
+`broadcast_alignment`, or `static_array_semantics` manifest to score state-free
+array cases. Run `python3 formal/scripts/test_static_array_assertions.py` for
+constant-gather values and faults, indexed observations, and the static array
+operation checks. The shared cases exercise rank-two indexed LHS spellings and
+elementwise gathers, named-axis alias permutation, and whole-array transpose.
+Run `python3 formal/scripts/test_ragged_faq.py` for ragged parent tuples, empty
+reductions, and scoped backing factors.
+
+Static `faq.join.on` gates resolve local loop symbols, interval and categorical
+index sets, and rank-one key columns, including constant computed columns.
+Self-joins honor the default side order and explicit `syms`. The evaluator
+intersects matching partners across gates while keeping the contraction order
+and the authored filter. Overlap joins and gates on ragged or derived axes
+remain open.
+
+The static adapter materializes derived extents and named member-factor arrays
+from top-level `distinct: true` Boolean FAQs with integer keys. Ordinary ragged
+contractions bind positions and gather the values array explicitly. A ragged
+value-invention range binds each member directly (§4.3.1). Nested and imported
+producers, provider-backed data, and broader producer join forms remain open.
+
+A full gather of an elementwise expression with known extents checks every
+subscript and uses the per-cell evaluator at the selected coordinate. An
+elementwise conditional chooses its branch at that coordinate. The array
+proofs cover both this dispatch and the checked gather on successfully
+materialized values. Whole-array operands keep their evaluation scopes.
+Partial gathers keep the trailing axes and use the materialized slice path.
+
+The `static-assertions` executable mode also accepts a JSON array
+of `{test_id, assertion_idx}` requests on stdin and returns binary64 bit
+patterns in the same order. It reports unsupported precision or scaled angle
+units explicitly when a model declares Float32 or requires angle conversion.
 
 ## Rules
 
@@ -64,6 +125,24 @@ python3 ../scripts/formal-audit.py all
 - **Every batch of proofs gets a hollow-proof review** by someone who did not
   write it: a statement that assumes its conclusion, or holds vacuously because
   its hypotheses cannot all be true, passes every automated check.
+
+## Expression property corpus
+
+From the repository root after `lake build`, run the Lean expression
+parse/emit adapter against the shared source fixtures:
+
+```bash
+EARTHSCI_PROPERTY_CORPUS_ADAPTER_LEAN='formal/.lake/build/bin/esm-lean expressions' \
+  python3 scripts/run-property-corpus-conformance.py \
+    --bindings lean --fail-on-source-mismatch --check-number-spelling
+```
+
+The runner checks every `tests/property_corpus/expressions/expr_*.json` against
+`SOURCE`. A fixture with an authored normalization uses its matching
+`tests/property_corpus/expected/` file. This covers bare expression syntax and
+canonical numbers. Document loading and operator resolution require a document
+scope. Include `lean` alongside the other bindings in `--bindings` to score it
+in the full cross-binding run.
 
 ## The clause inventory (`inventory/*.json`)
 
@@ -155,3 +234,64 @@ names that defining file as `defined_by` instead of citing inventory clauses
 `QUESTIONS.md` anchor) or `question` (with `question`: a `QUESTIONS.md` anchor
 `Q-n`). For `proven`, the audit elaborates `example : <lean_statement> :=
 @<theorem>`; for `refuted`, `example : ¬ (<lean_statement>) := @<theorem>`.
+
+## Canonical expression bytes
+
+`esm-lean canonical-json <expression.json>` emits the structural expression
+format of discretization RFC §5.4. This format retains the integer/float token
+kind and signed zero. The `canon` mode applies CONFORMANCE §5.5.3.1's document
+number rules. The expression canonicalizer is an explicit serialization API.
+
+From the repository root after `lake build`, run `python3 scripts/run-canonical-lean.py`
+to check byte equality and fixture-level fixed points against the shared
+`tests/conformance/canonical/` manifest. The scorer also checks the diagnostic
+code of each rejected fixture and exercises signed zero, overflow and literal
+division by zero.
+
+For a product with literal zero factors, the adapter preserves the type and
+sign of the first zero in the flattened, recursively canonicalized argument
+list. The ordering of same-valued, same-kind literals is stable, including
+opposite signs of floating zero. Value fields are literal payloads, and the
+canonical fixture suite lists the supported non-expression fields.
+
+`Esm/Expr/Canonical.lean` proves that flattening, removing or retaining a
+typed identity, sorting, and zero annihilation preserve exact sums or products
+under their respective algebraic laws. The argument-list proofs cover
+flattening with normalized children and stable reordering with a retained
+identity. The binary64 model gives a counterexample to value preservation
+under reordering, also covered by `tests/differential/scalar/canonical_sum_order.esm`.
+
+The wire adapter uses the terminating tree traversal in
+`Esm/Expr/Canonical/Typed.lean`. For arbitrary nesting of field-free sums and
+products over typed numeric literals and references, the kernel checks exact
+value preservation and idempotence of the resulting expression tree. The
+shared byte fixtures cover JSON decoding, emission, and the other operators.
+
+## Rewrite and operator import conformance
+
+`esm-lean rewrite-templates <document.esm> <component>` prints the lowered
+equation or reaction roots. The loader resolves local paths and `esm:std/`
+imports, preserves the effective declaration order, and merges the renamed
+index sets before checking `where` constraints. It carries symbolic edge
+bindings through nested imports and folds structural bounds at document close.
+
+`--emitted` adds the merged index sets and the component's operator registry
+to the expression projection. It keeps authored order, registers rewritten
+body variants in canonical order, and repoints each affected reference.
+`--expanded` prints the explicit expansion of the reachable bodies and counts
+rewrite depth through each reference.
+
+From the repository root, run `python3 scripts/run-lean-rewrite-conformance.py`
+to check those expression roots against the shared `expression_templates`
+fixtures and their load-time diagnostics. For emitted projections, the check
+also compares registry order and reloads the projected result byte for byte.
+The adapter covers a single selected component. URL resolution, library-local
+`enum` calls, subsystem mounts, coupling-level injection, and generated
+time-derivative entries remain separate loader work.
+
+`Esm/Expr/ExpansionProofs.lean` proves that successful runs of the typed
+`expandRefs` traversal are invariant under extra fuel and equivalent name
+lookups. The JSON adapter is checked against the shared fixtures. General
+confluence needs a scope-aware rule for declaration preprocessing. For
+example, eagerly inlining `inner()` with free name `p` into `outer(p)` can
+capture that name when `outer` is later instantiated.

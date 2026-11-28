@@ -15,7 +15,7 @@ open Esm.Document Esm.Document.Math Esm.Document.Source Esm.Document.Strings
 
 /-! ## Equations in Typst math -/
 
-def typOf (S : Sym) (e : Eqn) : List Char := (printTypst S (eqExpr e)).toList
+def typOf (S : Sym) (e : Eqn) : List Char := (printTypstEqn S (eqExpr e)).toList
 
 /-- An equation's math text: its `_comment` as a `//` comment line, then the equation. -/
 def prT (S : Sym) (e : Eqn) : String :=
@@ -66,7 +66,7 @@ theorem ckT_prT (S : Sym) (e : Eqn) (hc : capsT.eqn S e = true) (hl : isE e.lhs 
   simp only [capsT, Bool.and_eq_true, Bool.not_eq_true'] at hc
   obtain ⟨⟨⟨hcm, hd⟩, hp⟩, -⟩ := hc
   have hparse : (parseTypst S (String.ofList (typOf S e))).bind eqSides = some (e.lhs, e.rhs) := by
-    simp only [typOf, String.ofList_toList, parseTypst_printTypst S _ (isE_eqExpr e hl hr),
+    simp only [typOf, String.ofList_toList, parseTypst_printTypstEqn S _ (isE_eqExpr e hl hr),
       Option.bind_some, eqSides_eqExpr]
   obtain ⟨cm, l, r⟩ := e
   unfold ckT prT
@@ -137,7 +137,7 @@ theorem segItems_canon (its : List RItem) : segItems (canonSegs its) = its := by
 
 theorem inert_nl (bol : Bool) (t : List Char) : Inert bol ['\n'] t := by
   refine ⟨?_, ?_, trivial⟩
-  · simp [blockOpen, oDesc, oBlock, oModel, oRs, oEq, oCe_l, oRxn_l, oInit_l, oCons_l, oPlot_l, oSub_l,
+  · simp [blockOpen, descOpen, oDesc, oBlock, oModel, oRs, oEq, oCe_l, oRxn_l, oInit_l, oCons_l, oPlot_l, oSub_l,
       oTmpl_l, oRule_l, pre]
   · simp [declOpen, oVar, oParam, oSpecies, pre]
 

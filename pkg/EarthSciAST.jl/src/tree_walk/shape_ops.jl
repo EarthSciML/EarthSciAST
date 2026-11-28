@@ -19,6 +19,7 @@
 # other symbolic remap needs integer division or a per-cell operand choice and
 # is refused by name.
 const _SHAPE_REMAP_OPS = Tuple(sort!(collect(_ops_with(:shape_remap))))
+_is_inline_const_array(o::OpExpr) = o.op == "const" && o.value isa AbstractVector
 
 _try_const_int(a::ASTExpr, const_arrays) =
 try
@@ -30,7 +31,9 @@ end
 
 # `(lo, ext)` of an array-valued expression the shape-op remap can see through,
 # `(Int[], Int[])` for a scalar, `nothing` when the shape is not known here.
-function _remap_operand_shape(e::ASTExpr, rc::_ResolveCtx)
+# A whole-array operand uses its buffer's rank even when it holds one cell.
+# Elementwise operands still allow a scalar field supplied in a one-cell buffer.
+function _remap_operand_shape(e::ASTExpr, rc::_ResolveCtx; whole::Bool = false)
     array_var_info, const_arrays, pgather = rc.array_var_info, rc.const_arrays, rc.pgather
     e isa NumExpr && return (Int[], Int[])
     e isa IntExpr && return (Int[], Int[])
@@ -44,20 +47,34 @@ function _remap_operand_shape(e::ASTExpr, rc::_ResolveCtx)
             return (ones(Int, length(pgather[n].dims)), copy(pgather[n].dims))
         elseif src === :const
             arr = const_arrays[n]
-            (arr isa AbstractArray && !_is_scalar_const_field(arr)) || return (Int[], Int[])
+            (arr isa AbstractArray && (whole || !_is_scalar_const_field(arr))) ||
+                return (Int[], Int[])
             return (ones(Int, ndims(arr)), collect(Int, size(arr)))
         end
         return (Int[], Int[])
     end
     e isa OpExpr || return nothing
     o = e::OpExpr
-    if o.op == "reshape"
+    if _is_inline_const_array(o)
+        ext = _const_op_dims(o.value)
+        return (ones(Int, length(ext)), ext)
+    elseif o.op == "index"
+        # Infer the rank without evaluating a gather. A partial gather keeps
+        # its established lowering path and cannot be treated as a scalar.
+        isempty(o.args) && return nothing
+        source = _remap_operand_shape(o.args[1], rc; whole = true)
+        (source === nothing || length(source[2]) != length(o.args) - 1) && return nothing
+        return (Int[], Int[])
+    elseif o.op == "const" ||
+            (_is_faq_op(o.op) && isempty(_output_idx_strings(o)))
+        return (Int[], Int[])
+    elseif o.op == "reshape"
         (o.shape === nothing || !all(s -> s isa Integer, o.shape)) && return nothing
         ext = Int[Int(s) for s in o.shape]
         return (ones(Int, length(ext)), ext)
     elseif o.op == "transpose"
         length(o.args) == 1 || return nothing
-        s = _remap_operand_shape(o.args[1], rc)
+        s = _remap_operand_shape(o.args[1], rc; whole = true)
         s === nothing && return nothing
         perm = _transpose_perm(o, length(s[2]))
         return (ones(Int, length(perm)), s[2][perm .+ 1])
@@ -145,7 +162,7 @@ function _index_through_shape_op(o::OpExpr, subs::Vector{ASTExpr}, rc::_ResolveC
     at(d, lo) = ks[d] === nothing ? _remap_shift(subs[d], lo) : IntExpr(Int64(ks[d] - 1 + lo))
     if o.op == "transpose"
         x = o.args[1]
-        xlo, _ = _remap_operand_shape(x, rc)
+        xlo, _ = _remap_operand_shape(x, rc; whole = true)
         perm = _transpose_perm(o, length(ext))
         xs = Vector{ASTExpr}(undef, length(ext))
         for d in eachindex(perm)
@@ -213,10 +230,10 @@ function _index_through_shape_op(o::OpExpr, subs::Vector{ASTExpr}, rc::_ResolveC
     return _shape_remap_refuse(o, "subscript $(kax) is past the joined axis")
 end
 
-# True iff a shape op is an operand of `e`, looking through elementwise ops.
-_mentions_shape_op(e::ASTExpr) = e isa OpExpr && (
-    (e::OpExpr).op in _SHAPE_REMAP_OPS ||
-        (_is_scalar_op((e::OpExpr).op) && _anyof(_mentions_shape_op, (e::OpExpr).args))
+# Anonymous arrays use positional broadcasting, through nested elementwise ops.
+_mentions_anonymous_array(e::ASTExpr) = e isa OpExpr && (
+    _is_inline_const_array(e) || (e::OpExpr).op in _SHAPE_REMAP_OPS ||
+        (_is_scalar_op((e::OpExpr).op) && _anyof(_mentions_anonymous_array, (e::OpExpr).args))
 )
 
 # The subscripts one operand of an elementwise combination is gathered at, under

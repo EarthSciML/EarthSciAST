@@ -430,6 +430,53 @@ def test_assertion_times_inside_the_span_are_sampled():
     assert all(r.actual == pytest.approx(math.exp(-r.time), rel=1e-6) for r in interior)
 
 
+@pytest.mark.parametrize(("op", "zero_sign"), [("min", -1.0), ("max", 1.0)])
+def test_scalar_extrema_preserve_ieee_zero_sign_and_propagate_nan(op: str, zero_sign: float):
+    # Compute negative zero in the AST so number canonicalization cannot
+    # collapse the sign of an integral-valued literal during parsing.
+    neg_zero = {"op": "-", "args": ["zero"]}
+    nan = {"op": "/", "args": [0, 0]}
+    operands = {
+        "positive_first": ["zero", neg_zero],
+        "negative_first": [neg_zero, "zero"],
+        "nan_first": [nan, "zero"],
+        "nan_inside": ["zero", nan, 1],
+    }
+    doc = {
+        "esm": "2.4.0",
+        "metadata": {"name": "scalar_extrema"},
+        "models": {
+            "M": {
+                "variables": {
+                    "zero": {"type": "parameter", "units": "1", "default": 0},
+                    **{name: {"type": "unknown", "units": "1"} for name in operands},
+                },
+                "equations": [
+                    {"lhs": name, "rhs": {"op": op, "args": args}}
+                    for name, args in operands.items()
+                ],
+                "tests": [
+                    {
+                        "id": "extrema",
+                        "time_span": {"start": 0, "end": 1},
+                        "assertions": [
+                            {"variable": name, "time": 0, "expected": 0} for name in operands
+                        ],
+                    }
+                ],
+            }
+        },
+    }
+    rows = run_inline_tests(load_string(json.dumps(doc)), compiler="interpreter")
+    actual = {row.variable: row.actual for row in rows}
+    for name in ("positive_first", "negative_first"):
+        value = actual[name]
+        assert value == 0.0
+        assert math.copysign(1.0, value) == zero_sign
+    for name in ("nan_first", "nan_inside"):
+        assert actual[name] is not None and math.isnan(actual[name])
+
+
 def test_a_stateless_document_answers_at_the_asserted_time():
     """An algebraic-only document is sampled AT the assertion times.
 

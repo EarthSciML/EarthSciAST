@@ -263,7 +263,9 @@ end  # if !_TWALLOC_CHILD
 #
 # A threaded call allocates nothing, exactly like a serial one, at every N.
 @testset "threaded cell axis: a threaded call allocates nothing" begin
-    if !EarthSciAST._threads_available()
+    if VERSION < v"1.12"
+        @test_skip "Threaded allocation counts require Julia 1.12 or later"
+    elseif !EarthSciAST._threads_available()
         @test !_TWALLOC_CHILD   # the child was started with two threads
         if !_TWALLOC_CHILD
             env = copy(ENV)
@@ -283,7 +285,7 @@ end  # if !_TWALLOC_CHILD
                 ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
                 built_rhs_alloc_bytes(_stencil_model(N); initial_conditions = ics)
             end
-            VERSION >= v"1.12" && @test all(==(0), bytes)
+            @test all(==(0), bytes)
 
             fbytes = map((1024, 16384)) do N
                 ics = Dict("M.u[$k]" => 0.1k for k in 1:N)
@@ -293,7 +295,7 @@ end  # if !_TWALLOC_CHILD
                     param_arrays = Dict("forcing" => collect(1.0:Float64(N)))
                 )
             end
-            VERSION >= v"1.12" && @test all(==(0), fbytes)
+            @test all(==(0), fbytes)
         end
     end
 end

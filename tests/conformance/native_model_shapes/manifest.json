@@ -685,6 +685,127 @@
    "named_exclusions": []
   },
   {
+   "id": "overlap_join_scatter_static",
+   "path": "fixtures/overlap_join_scatter_static.esm",
+   "model": "OverlapJoinScatter",
+   "golden": "golden/overlap_join_scatter_static.json",
+   "tags": [
+    "faq",
+    "join",
+    "overlap",
+    "conformance-5.5.6",
+    "equality-scatter",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "overlap_join_scatter_dynamic",
+   "path": "fixtures/overlap_join_scatter_dynamic.esm",
+   "model": "OverlapJoinScatter",
+   "golden": "golden/overlap_join_scatter_dynamic.json",
+   "tags": [
+    "faq",
+    "join",
+    "overlap",
+    "conformance-5.5.6",
+    "equality-scatter",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "setup_reads_dynamic_observed",
+   "path": "fixtures/setup_reads_dynamic_observed.esm",
+   "model": "SetupReadsDynamic",
+   "golden": "golden/setup_reads_dynamic_observed.json",
+   "tags": [
+    "faq",
+    "setup",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "setup_reads_scalar_observed",
+   "path": "fixtures/setup_reads_scalar_observed.esm",
+   "model": "SetupReadsScalar",
+   "golden": "golden/setup_reads_scalar_observed.json",
+   "tags": [
+    "faq",
+    "setup",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "setup_shapeless_param_observed",
+   "path": "fixtures/setup_shapeless_param_observed.esm",
+   "model": "M",
+   "golden": "golden/setup_shapeless_param_observed.json",
+   "tags": [
+    "faq",
+    "setup",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
    "id": "polygon_area_in_faq_static",
    "path": "fixtures/polygon_area_in_faq_static.esm",
    "model": "PolygonAreaInFaq",

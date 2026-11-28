@@ -65,6 +65,14 @@ end
             "forcing array '$(name)' index $(i) out of range [1, $(n)] on dim $(d)"
         )
     )
+    # Positional gather checks reuse this IR without making the computed
+    # expression result a const array or applying its boundary policy.
+    pol === :computed && throw(
+        TreeWalkError(
+            "E_TREEWALK_SHAPE_OP",
+            "$(name) subscript $(i) is out of range 1:$(n) on axis $(d)"
+        )
+    )
     throw(
         TreeWalkError(
             "E_TREEWALK_CONSTARRAY_OOB",

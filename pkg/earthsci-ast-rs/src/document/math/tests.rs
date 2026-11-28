@@ -309,9 +309,9 @@ fn golden_set_math() {
             let (sy, e) = component(&case["esm"]);
             let lx = math["latex"].as_str().unwrap();
             let ty = math["typst"].as_str().unwrap();
-            let pl = print_latex(&sy, &e);
+            let pl = print_latex_eqn(&sy, &e);
             if pl != lx {
-                failures.push(format!("{id}: print_latex\n  got  {pl}\n  want {lx}"));
+                failures.push(format!("{id}: print_latex_eqn\n  got  {pl}\n  want {lx}"));
             }
             if parse_latex(&sy, lx).as_ref() != Some(&e) {
                 failures.push(format!(
@@ -319,9 +319,9 @@ fn golden_set_math() {
                     parse_latex(&sy, lx).map(|j| json::render(&j))
                 ));
             }
-            let pt = print_typst(&sy, &e);
+            let pt = print_typst_eqn(&sy, &e);
             if pt != ty {
-                failures.push(format!("{id}: print_typst\n  got  {pt}\n  want {ty}"));
+                failures.push(format!("{id}: print_typst_eqn\n  got  {pt}\n  want {ty}"));
             }
             if parse_typst(&sy, ty).as_ref() != Some(&e) {
                 failures.push(format!(

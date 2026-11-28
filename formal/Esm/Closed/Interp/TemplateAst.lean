@@ -1,4 +1,5 @@
 import Esm.Closed.Interp.Template
+import Esm.Expr.ArrayConformance
 import Esm.Expr.Template
 import Esm.Lib.Interp
 
@@ -49,6 +50,8 @@ class ExprLaws (α : Type) [Scalar α] [RealNaN α] [Lits α] : Prop where
     sub (fin (m : ℝ) : α) (fin (k : ℝ)) = fin ((m - k : ℤ) : ℝ)
   toInt_int : ∀ m : ℤ, Lits.toInt? (fin (m : ℝ) : α) = some m
   isNaN_fin : ∀ r : ℝ, isNaN (fin r : α) = false
+  /-- These proof scalars have a single zero, so extrema use real order. -/
+  ltExtrema_fin : ∀ a b : ℝ, ltExtrema (fin a : α) (fin b) = decide (a < b)
 
 theorem toInt_intCast (m : ℤ) :
     (if ((⌊(m : ℝ)⌋ : ℤ) : ℝ) = (m : ℝ) then some ⌊(m : ℝ)⌋ else none) = some m := by
@@ -66,6 +69,7 @@ instance : ExprLaws Num where
     push_cast; rfl
   toInt_int m := toInt_intCast m
   isNaN_fin _ := rfl
+  ltExtrema_fin _ _ := rfl
 
 theorem rn_int {m : ℤ} (h : |m| ≤ 2 ^ 53) : Esm.F64.rn ((m : ℝ)) = m :=
   Esm.F64.rn_of_repr (Esm.F64.repr_intCast h)
@@ -82,6 +86,7 @@ instance : ExprLaws Bin64 where
     rw [← Int.cast_sub, rn_int h]
   toInt_int m := toInt_intCast m
   isNaN_fin _ := rfl
+  ltExtrema_fin _ _ := rfl
 
 /-! ## The shapes the expansions are built from -/
 
@@ -198,14 +203,14 @@ theorem truthy_ofBool (b : Bool) : truthy (ofBool b : α) = b := by
 
 theorem fmax_fin (a b : ℝ) : fmax (fin a : α) (fin b) = fin (max a b) := by
   unfold fmax
-  rw [ExprLaws.isNaN_fin, ExprLaws.isNaN_fin, lt_fin]
+  rw [ExprLaws.isNaN_fin, ExprLaws.isNaN_fin, ExprLaws.ltExtrema_fin]
   by_cases h : a < b
   · simp [h, max_eq_right h.le]
   · simp [h, max_eq_left (not_lt.mp h)]
 
 theorem fmin_fin (a b : ℝ) : fmin (fin a : α) (fin b) = fin (min a b) := by
   unfold fmin
-  rw [ExprLaws.isNaN_fin, ExprLaws.isNaN_fin, lt_fin]
+  rw [ExprLaws.isNaN_fin, ExprLaws.isNaN_fin, ExprLaws.ltExtrema_fin]
   by_cases h : b < a
   · simp [h, min_eq_right h.le]
   · simp [h, min_eq_left (not_lt.mp h)]
@@ -231,10 +236,11 @@ theorem ev_zero : eval (.num 0 0) env = .ok (.num (fin 0 : α)) := by
 variable {env}
 
 theorem ev_bin {op : String} {o : StrictOp} (hop : Op.ofString op = .strict o) {a b : Ast}
-    {u v : α} (ha : eval a env = .ok (.num u)) (hb : eval b env = .ok (.num v)) :
+    {u v : α} (ha : eval a env = .ok (.num u)) (hb : eval b env = .ok (.num v))
+    (notGather : o ≠ .index := by decide) :
     eval (.node op [a, b]) env = (applyStrict o [.num u, .num v]).map Val.num := by
-  simp only [eval, hop, evalList, ha, hb, bind, Except.bind, pure, Except.pure]
-  cases h : applyStrict o [.num u, .num v] <;> rfl
+  exact eval_strict_numbers env op [a, b] o [u, v] hop notGather
+    (by simp [evalList, ha, hb, bind, Except.bind, pure, Except.pure])
 
 theorem ev_sub {a b : Ast} {u v : α} (ha : eval a env = .ok (.num u))
     (hb : eval b env = .ok (.num v)) : eval (.node "-" [a, b]) env = .ok (.num (sub u v)) := by
@@ -282,9 +288,11 @@ theorem ev_ifelse {c p q : Ast} {b : Bool} (hc : eval c env = .ok (.num (ofBool 
 theorem ev_index1 {a i : Ast} {xs : List α} {k : ℕ} (ha : eval a env = .ok (.arr1 xs))
     (hi : eval i env = .ok (.num (fin (k : ℝ)))) (h1 : 1 ≤ k) (h2 : k ≤ xs.length) :
     eval (ixA a [i]) env = .ok (.num (Template.ix xs k)) := by
-  simp only [ixA, eval, op_index, evalList, ha, hi]
+  rw [ixA, eval_index_materialized env a [i] (literal_array_gather_barrier _ _ _ ha rfl)]
+  simp only [evalList, ha, hi]
   have hk : ((k : ℤ) - 1).toNat = k - 1 := by omega
-  simp [hasInf, applyStrict, asNum, asInt, toInt_nat, indexVal, h1, h2, Template.ix, hk, bind,
+  simp [applyWholeStrict, hasInf, applyStrict, asNum, asInt, toInt_nat, indexVal,
+    h1, h2, Template.ix, hk, bind,
     Except.bind, pure, Except.pure]
   rw [List.getElem?_eq_getElem (by omega)]; rfl
 
@@ -292,11 +300,13 @@ theorem ev_index2 {a i j : Ast} {T : List (List α)} {p q : ℕ} (ha : eval a en
     (hi : eval i env = .ok (.num (fin (p : ℝ)))) (hj : eval j env = .ok (.num (fin (q : ℝ))))
     (h1 : 1 ≤ p) (h2 : p ≤ T.length) (h3 : 1 ≤ q) (h4 : q ≤ (T.getD (p - 1) []).length) :
     eval (ixA a [i, j]) env = .ok (.num (Template.ix2 T p q)) := by
-  simp only [ixA, eval, op_index, evalList, ha, hi, hj]
+  rw [ixA, eval_index_materialized env a [i, j] (literal_array_gather_barrier _ _ _ ha rfl)]
+  simp only [evalList, ha, hi, hj]
   have hp : ((p : ℤ) - 1).toNat = p - 1 := by omega
   have hq : ((q : ℤ) - 1).toNat = q - 1 := by omega
   rw [List.getD_eq_getElem _ _ (show p - 1 < T.length by omega)] at h4
-  simp [hasInf, applyStrict, asNum, asInt, toInt_nat, indexVal, h1, h2, h3, h4, Template.ix2, entry, hp,
+  simp [applyWholeStrict, hasInf, applyStrict, asNum, asInt, toInt_nat, indexVal,
+    h1, h2, h3, h4, Template.ix2, entry, hp,
     hq, bind, Except.bind, pure, Except.pure, List.getElem?_eq_getElem (show p - 1 < T.length by omega),
     List.getElem?_eq_getElem (show q - 1 < T[p - 1].length by omega)]
 

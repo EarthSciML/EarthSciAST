@@ -1,0 +1,322 @@
+{
+ "esm": "2.4.0",
+ "metadata": {
+  "name": "static_join_self",
+  "description": "A self-join keeps explicit syms distinct from the default side order for scalar and shaped outputs. The shaped output symbol sorts after the contraction symbol, so its output position controls the default side.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ]
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": 5
+  }
+ },
+ "models": {
+  "Probe": {
+   "variables": {
+    "prior": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "id": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "payload": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "default_sum": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "explicit_sum": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "predecessor": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "successor": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "prior",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       0,
+       1,
+       2,
+       3,
+       4
+      ]
+     }
+    },
+    {
+     "lhs": "id",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1,
+       2,
+       3,
+       4,
+       5
+      ]
+     }
+    },
+    {
+     "lhs": "payload",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1,
+       10,
+       100,
+       1000,
+       10000
+      ]
+     }
+    },
+    {
+     "lhs": "default_sum",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "a": {
+        "from": "rows"
+       },
+       "b": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "b"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "prior",
+          "id"
+         ]
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "explicit_sum",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "a": {
+        "from": "rows"
+       },
+       "b": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "b"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "prior",
+          "id"
+         ]
+        ],
+        "syms": [
+         "b",
+         "a"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "predecessor",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "b"
+      ],
+      "ranges": {
+       "a": {
+        "from": "rows"
+       },
+       "b": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "a"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "prior",
+          "id"
+         ]
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "successor",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "b"
+      ],
+      "ranges": {
+       "a": {
+        "from": "rows"
+       },
+       "b": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "expr": {
+       "op": "index",
+       "args": [
+        "payload",
+        "a"
+       ]
+      },
+      "join": [
+       {
+        "on": [
+         [
+          "prior",
+          "id"
+         ]
+        ],
+        "syms": [
+         "a",
+         "b"
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "tolerance": {
+    "rel": 0,
+    "abs": 0
+   },
+   "tests": [
+    {
+     "id": "probe",
+     "time_span": {
+      "start": 0,
+      "end": 1
+     },
+     "assertions": [
+      {
+       "variable": "default_sum",
+       "time": 0,
+       "expected": 1111
+      },
+      {
+       "variable": "explicit_sum",
+       "time": 0,
+       "expected": 11110
+      },
+      {
+       "variable": "predecessor",
+       "time": 0,
+       "coords": {
+        "rows": 1
+       },
+       "expected": 0
+      },
+      {
+       "variable": "predecessor",
+       "time": 0,
+       "coords": {
+        "rows": 5
+       },
+       "expected": 1000
+      },
+      {
+       "variable": "successor",
+       "time": 0,
+       "coords": {
+        "rows": 1
+       },
+       "expected": 10
+      },
+      {
+       "variable": "successor",
+       "time": 0,
+       "coords": {
+        "rows": 4
+       },
+       "expected": 10000
+      },
+      {
+       "variable": "successor",
+       "time": 0,
+       "coords": {
+        "rows": 5
+       },
+       "expected": 0
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

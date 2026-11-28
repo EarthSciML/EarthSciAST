@@ -289,7 +289,7 @@
       "class": "semantic",
       "phase": 3,
       "area": "arrays",
-      "note": "A range over a derived index set whose producer was not materialized yields derived_index_set_unmaterialized at build, never the semiring's additive identity."
+      "note": "A range over a derived index set whose producer was not materialized yields derived_index_set_unmaterialized at build, never the semiring's additive identity. The static Lean adapter checks this for top-level producers, including ragged value-invention ranges."
     },
     {
       "id": "spec.9.6.6.unevaluable-op-checked-upfront",
@@ -436,6 +436,24 @@
       "phase": 3,
       "area": "arrays",
       "note": "A broadcast node with absent or non-scalar-operator fn, or an argument count outside that operator's arity, is rejected at load with invalid_broadcast_fn."
+    },
+    {
+      "id": "spec.9.6.6.ic-system-unbalanced-names",
+      "section": "9.6.6",
+      "quote": "MUST name the direction, the unknowns no equation determines and the equations no unknown is left for.",
+      "class": "semantic",
+      "phase": 6,
+      "area": "diagnostics",
+      "note": "ic_system_unbalanced says whether the initialization system is over- or under-determined and names the unknowns and equations left over."
+    },
+    {
+      "id": "spec.9.6.6.ic-system-unsolved-names",
+      "section": "9.6.6",
+      "quote": "MUST name the equations whose residual stayed above tolerance and the guesses the solve started from.",
+      "class": "semantic",
+      "phase": 6,
+      "area": "diagnostics",
+      "note": "ic_system_unsolved names the equations whose residual stayed above tolerance and the starting guesses."
     },
     {
       "id": "spec.9.6.7.fixture-arrhenius",
@@ -1300,6 +1318,33 @@
       "class": "out_of_scope",
       "area": "diagnostics",
       "note": "Restates spec.6.6.5.reference-free-t: the start-of-run additions do not extend to an inline-test reference."
+    },
+    {
+      "id": "spec.11.4.3.solve-triangular",
+      "section": "11.4.3",
+      "quote": "Every simulating binding MUST solve a system that is **triangular**",
+      "class": "semantic",
+      "phase": 6,
+      "area": "solver",
+      "note": "An initialization system whose equations can be ordered so each is explicit in one not-yet-determined unknown is solved by substitution in that order, by every simulating binding."
+    },
+    {
+      "id": "spec.11.4.3.implicit-refused-without-solver",
+      "section": "11.4.3",
+      "quote": "A binding that has none MUST refuse it at build with `unsupported_construct` naming the initialization system and the equations of its implicit part, and MUST NOT start the run from the guesses.",
+      "class": "semantic",
+      "phase": 6,
+      "area": "solver",
+      "note": "A binding with no nonlinear solver refuses a truly implicit initialization system at build with unsupported_construct naming its implicit equations, and never starts from the guesses."
+    },
+    {
+      "id": "spec.11.4.3.unsolved-no-guess-start",
+      "section": "11.4.3",
+      "quote": "a build MUST NOT start the run from the guesses instead",
+      "class": "semantic",
+      "phase": 6,
+      "area": "solver",
+      "note": "A solve that does not converge, or converges to a non-finite value, is refused with ic_system_unsolved; the run never starts from the guesses."
     }
   ]
 }

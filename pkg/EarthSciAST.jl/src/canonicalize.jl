@@ -695,10 +695,23 @@ function _canonical_document_numbers(value)
     return value
 end
 
+# A `faq` node without its default fields (esm-spec §4.8.2; Lean
+# `Adapter.Doc.faqDefaults`): `reduce: "+"` and `semiring: "sum_product"` are
+# dropped. A `sum_product` semiring goes only with a `reduce` that is absent or
+# `"+"`; otherwise the node is left alone.
+function _drop_faq_defaults!(out::OrderedDict{String, Any})
+    get(out, "reduce", "+") == "+" || return out
+    get(out, "semiring", "sum_product") == "sum_product" || return out
+    delete!(out, "reduce")
+    delete!(out, "semiring")
+    return out
+end
+
 # `neg` with one argument is unary `-`, `pow` with two is `^`, a `broadcast` of
 # `neg` with one argument maps `-` (Lean `Adapter.Doc.deprecatedTo`).
 function _rewrite_deprecated_document_op!(out::OrderedDict{String, Any})
     op = get(out, "op", nothing)
+    op == "faq" && return _drop_faq_defaults!(out)
     args = get(out, "args", nothing)
     (op isa AbstractString && args isa AbstractVector) || return out
     rule = get(_DEPRECATED_DOCUMENT_OPS, op, nothing)

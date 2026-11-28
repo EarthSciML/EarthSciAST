@@ -290,6 +290,30 @@ theorem good_nameToks (c : Ctx) (hc : c.sf = .typst) (s : String) :
     exact good_sepBy_names _ (by simpa using splitDots_ne s.toList)
       (fun x hx => by obtain ⟨g, -, rfl⟩ := List.mem_map.1 hx; exact good_segToks g)
 
+theorem good_setSegToks (g : List Char) :
+    Good (setSegToks .typst g) ∧ Nice (setSegToks .typst g) ∧ LastCall (setSegToks .typst g) := by
+  unfold setSegToks
+  split
+  · have hu : tokOK (.ups [(String.ofList g, "")]) := ⟨(by simp), fun p hp => by simp at hp; subst hp; left; rfl⟩
+    exact ⟨good_single hu, nice_cons _ (by simp) rfl, (by simp),
+      fun t ht => by simp at ht; subst ht; exact callEnd_ups _ hu⟩
+  · exact good_segToks g
+
+theorem good_setToks (c : Ctx) (hc : c.sf = .typst) (s : String) :
+    Good (setToks c s) ∧ Nice (setToks c s) ∧ LastCall (setToks c s) := by
+  unfold setToks
+  split
+  · refine ⟨good_single trivial, nice_cons _ (by simp) rfl, (by simp), ?_⟩
+    intro t ht; simp at ht; subst ht
+    simp only [callEnd, tokChars, Strings.quote]
+    rw [show "italic(".toList ++ ('"' :: Strings.escape true s.toList ++ ['"']) ++ [')'] =
+      ("italic(".toList ++ ('"' :: Strings.escape true s.toList ++ ['"'])) ++ [')'] by simp,
+      List.getLast?_concat]
+    rfl
+  · rw [hc]
+    exact good_sepBy_names _ (by simpa using splitDots_ne s.toList)
+      (fun x hx => by obtain ⟨g, -, rfl⟩ := List.mem_map.1 hx; exact good_setSegToks g)
+
 /-! ## Printer pieces -/
 
 theorem nice_of_head {c : Ctx} {ts : List Tok} (h : HeadOK c ts) : Nice ts ∧ ts ≠ [] := by
@@ -518,10 +542,10 @@ theorem good_faqOut (c : Ctx) (hc : c.sf = .typst) (F : FaqForm) (P : Json → O
         (nice_cons _ (by simp) rfl)) (nice_append _ hN2 hN3.1)
       exact ⟨good_append hA1 hT (nice_cons _ (by simp) rfl), nice_append _ hA2 hA3⟩
     · rename_i s _
-      obtain ⟨hS1, hS2, -⟩ := good_nameToks c hc s
+      obtain ⟨hS1, hS2, -⟩ := good_setToks c hc s
       exact ⟨good_append hN1 (good_cons rfl hS1 hS2) (nice_cons _ (by simp) rfl), nice_append _ hN2 hN3.1⟩
     · rename_i s ps _
-      obtain ⟨hS1, hS2, hS3⟩ := good_nameToks c hc s
+      obtain ⟨hS1, hS2, hS3⟩ := good_setToks c hc s
       have hL := good_sepBy .comma rfl (by simp) (ps.map fun (p : Json) => match p with
           | .str q => nameToks c q | _ => []) (fun y hy => by
         obtain ⟨p, -, rfl⟩ := List.mem_map.1 hy
@@ -536,7 +560,7 @@ theorem good_faqOut (c : Ctx) (hc : c.sf = .typst) (F : FaqForm) (P : Json → O
           | .str q => nameToks c q | _ => []) = []
         · rw [he]; exact nice_cons _ (by simp) rfl
         · exact nice_append _ hL.2 he
-      have hT : Good (nameToks c s ++ .kw .lp :: (sepBy [.kw .comma] (ps.map fun (p : Json) => match p with
+      have hT : Good (setToks c s ++ .kw .lp :: (sepBy [.kw .comma] (ps.map fun (p : Json) => match p with
           | .str q => nameToks c q | _ => []) ++ [.kw .rp])) := good_append_lp hS1 hS3 hR.1 hR.2
       simp only [List.cons_append, List.append_assoc] at hT ⊢
       refine ⟨good_append hN1 ?_ (nice_cons _ (by simp) rfl), nice_append _ hN2 hN3.1⟩
@@ -1170,21 +1194,98 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
       rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
       exact mk_ok hT hselfN.1 hselfN.2
 
+/-- A well-formed expression's tokens at any level are good, nice and not empty. -/
+theorem good_at (S : Sym) (x : Json) (hx : isE x = true) (L : Nat) :
+    Good ((pr ⟨.typst, S⟩ x).at .typst L) ∧ Nice ((pr ⟨.typst, S⟩ x).at .typst L) ∧
+      (pr ⟨.typst, S⟩ x).at .typst L ≠ [] := by
+  have h := TP_all ⟨.typst, S⟩ rfl _ x (Nat.lt_succ_self _) hx
+  have hm := M_of_isE ⟨.typst, S⟩ x hx
+  obtain ⟨hn, hne⟩ := nice_of_head (headOK_at hm L)
+  refine ⟨?_, hn, hne⟩
+  rw [at_eq]; split
+  · exact h.1
+  · exact good_grp h.1 (nice_of_head (M_head hm)).1
+
+/-- A range row's tokens are good and nice. -/
+theorem good_rowToks (c : Ctx) (hc : c.sf = .typst) (P : Json → Out) (kv : String × Json)
+    (hQ : ∀ a b, kv.2 = .arr [a, b] →
+      (Good ((P a).at .typst 4) ∧ Nice ((P a).at .typst 4) ∧ (P a).at .typst 4 ≠ []) ∧
+      (Good ((P b).at .typst 4) ∧ Nice ((P b).at .typst 4) ∧ (P b).at .typst 4 ≠ [])) :
+    Good (rowToks c P kv) ∧ Nice (rowToks c P kv) := by
+  obtain ⟨hN1, hN2, hN3⟩ := good_nameToks c hc kv.1
+  unfold rowToks
+  split
+  · rename_i a b he
+    obtain ⟨⟨hA1, hA2, hA3⟩, ⟨hB1, hB2, -⟩⟩ := hQ a b he
+    rw [hc]; simp only [List.append_assoc, List.cons_append]
+    have hT := good_cons (t := .kw .le) rfl (good_append hN1 (good_cons (t := .kw .le) rfl hB1 hB2)
+      (nice_cons _ (by simp) rfl)) (nice_append _ hN2 hN3.1)
+    exact ⟨good_append hA1 hT (nice_cons _ (by simp) rfl), nice_append _ hA2 hA3⟩
+  · rename_i s _
+    obtain ⟨hS1, hS2, -⟩ := good_setToks c hc s
+    exact ⟨good_append hN1 (good_cons rfl hS1 hS2) (nice_cons _ (by simp) rfl), nice_append _ hN2 hN3.1⟩
+  · rename_i s ps _
+    obtain ⟨hS1, hS2, hS3⟩ := good_setToks c hc s
+    have hL := good_sepBy .comma rfl (by simp) (ps.map fun (p : Json) => match p with
+        | .str q => nameToks c q | _ => []) (fun y hy => by
+      obtain ⟨p, -, rfl⟩ := List.mem_map.1 hy
+      split
+      · exact ⟨(good_nameToks c hc _).1, (good_nameToks c hc _).2.1⟩
+      · exact ⟨good_nil, fun _ h => by cases h⟩)
+    have hR : Good (sepBy [.kw .comma] (ps.map fun (p : Json) => match p with
+        | .str q => nameToks c q | _ => []) ++ [.kw .rp]) ∧ Nice (sepBy [.kw .comma] (ps.map fun (p : Json) =>
+        match p with | .str q => nameToks c q | _ => []) ++ [.kw .rp]) := by
+      refine ⟨good_append hL.1 (good_single rfl) (nice_cons _ (by simp) rfl), ?_⟩
+      by_cases he : sepBy [.kw .comma] (ps.map fun (p : Json) => match p with
+        | .str q => nameToks c q | _ => []) = []
+      · rw [he]; exact nice_cons _ (by simp) rfl
+      · exact nice_append _ hL.2 he
+    have hT : Good (setToks c s ++ .kw .lp :: (sepBy [.kw .comma] (ps.map fun (p : Json) => match p with
+        | .str q => nameToks c q | _ => []) ++ [.kw .rp])) := good_append_lp hS1 hS3 hR.1 hR.2
+    simp only [List.cons_append, List.append_assoc] at hT ⊢
+    refine ⟨good_append hN1 ?_ (nice_cons _ (by simp) rfl), nice_append _ hN2 hN3.1⟩
+    exact good_cons rfl hT (nice_append _ hS2 hS3.1)
+  · exact ⟨good_nil, fun _ h => by cases h⟩
+
+theorem print_ok_pa (S : Sym) (e : Json) (he : isE e = true) :
+    (∀ t ∈ pa ⟨.typst, S⟩ 1 e, tokOK t ∨ t = .kw .times) ∧ Adj (pa ⟨.typst, S⟩ 1 e) ∧
+      ∀ r, pa ⟨.typst, S⟩ 1 e ≠ .kw .lp :: r := by
+  obtain ⟨hg, hn, hne⟩ := good_at S e he 1
+  refine ⟨hg.1, hg.2, fun r e' => ?_⟩
+  unfold pa at e'
+  exact (hn (.kw .lp) (by simp only at e'; rw [e']; rfl)).1 rfl
+
 /-- Every token the Typst printer writes for a well-formed expression is a Typst token,
 in an order the Typst lexer reads back. -/
 theorem print_ok (S : Sym) (e : Json) (he : isE e = true) :
     (∀ t ∈ print .typst S e, tokOK t ∨ t = .kw .times) ∧ Adj (print .typst S e) ∧
       ∀ r, print .typst S e ≠ .kw .lp :: r := by
-  have h := TP_all ⟨.typst, S⟩ rfl _ e (Nat.lt_succ_self _) he
-  have hm := M_of_isE ⟨.typst, S⟩ e he
-  have hh := headOK_at hm 1
-  obtain ⟨hn, -⟩ := nice_of_head hh
-  have hg : Good ((pr ⟨.typst, S⟩ e).at .typst 1) := by
-    rw [at_eq]; split
-    · exact h.1
-    · exact good_grp h.1 (nice_of_head (M_head hm)).1
-  refine ⟨hg.1, hg.2, fun r e' => ?_⟩
-  have := hn (.kw .lp) (by unfold print pa at e'; simp only at e'; rw [e']; rfl)
-  exact this.1 rfl
+  unfold print
+  split
+  · rename_i q rows _
+    split
+    · rename_i hok
+      unfold liftOK at hok
+      simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_eq_false_iff] at hok
+      obtain ⟨⟨⟨-, hq⟩, hrows⟩, -⟩ := hok
+      obtain ⟨hg, hn, hne⟩ := good_at S q hq 1
+      have hT := good_sepBy .comma rfl (by simp) (rows.map (rowToks ⟨.typst, S⟩ (pr ⟨.typst, S⟩)))
+        (fun y hy => by
+          obtain ⟨kv, hkv, rfl⟩ := List.mem_map.1 hy
+          have hc := List.all_eq_true.1 hrows kv hkv
+          refine good_rowToks _ rfl _ kv (fun a b hab => ?_)
+          rw [hab] at hc
+          simp only [Bool.and_eq_true] at hc
+          exact ⟨good_at S a hc.2.1 4, good_at S b hc.2.2 4⟩)
+      have hG : Good (pa ⟨.typst, S⟩ 1 q ++ .kw .comma :: defRowsToks ⟨.typst, S⟩ rows) :=
+        good_append hg (good_cons rfl hT.1 hT.2) (nice_cons _ (by simp) rfl)
+      refine ⟨hG.1, hG.2, fun r e' => ?_⟩
+      obtain ⟨t, tr, ht⟩ := List.exists_cons_of_ne_nil hne
+      unfold pa at e'
+      rw [ht] at e' hn
+      simp only [List.cons_append, List.cons.injEq] at e'
+      exact (hn t (by simp)).1 e'.1
+    · exact print_ok_pa S e he
+  · exact print_ok_pa S e he
 
 end Esm.Document.Math.Typst

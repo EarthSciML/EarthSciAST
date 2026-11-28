@@ -853,6 +853,24 @@ def _observed_sample(
     return None
 
 
+def _array_observed_field(
+    file: EsmFile,
+    insp: BuildInspection,
+    sim: SimulatedStates,
+    owner: str,
+    name: str,
+    state: np.ndarray,
+    time: float,
+) -> np.ndarray | None:
+    """Read the owner's array observed from the build or at this output sample."""
+    if not _declares_observed(file, owner, name):
+        return None
+    field = _inspection_field(insp, owner, name)
+    if field is not None:
+        return field
+    return _observed_sample(sim, owner, name, state, time)
+
+
 def _sim_merged_renames(sim: Any) -> dict[str, str]:
     """The flatten-time merged-away rename map behind a simulated run, if any.
 
@@ -1490,9 +1508,22 @@ def _evaluate_assertion(
                 if scoped
                 else _scalar_slot(sim.var_map, local, owner, _sim_merged_renames(sim))
             )
-            if slot is None:
-                raise RuntimeError(f"scalar state '{a.variable}' not found")
-            actual = float(state[slot])
+            if slot is not None:
+                actual = float(state[slot])
+            else:
+                element = _CELL_NAME_RE.fullmatch(local)
+                if element is None:
+                    raise RuntimeError(f"scalar state '{a.variable}' not found")
+                name, subscripts = element.groups()
+                obs = _array_observed_field(eval_file, insp, sim, owner, name, state, times[ti])
+                if obs is None:
+                    raise RuntimeError(f"scalar state '{a.variable}' not found")
+                cell = tuple(int(subscript) - 1 for subscript in subscripts.split(","))
+                if len(cell) != obs.ndim or any(not 0 <= i < n for i, n in zip(cell, obs.shape)):
+                    raise RuntimeError(
+                        f"observed element '{a.variable}' is outside shape {obs.shape}"
+                    )
+                actual = float(obs[cell])
         else:
             # `coords` validation runs BEFORE field
             # materialization so a coords assertion on a scalar
@@ -1532,11 +1563,7 @@ def _evaluate_assertion(
                 # flattened build, so the ASSERTED component must be
                 # the one that declares the observed (§5.27.1);
                 # otherwise a sibling's field answers silently.
-                obs = None
-                if _declares_observed(eval_file, owner, local):
-                    obs = _inspection_field(insp, owner, local)
-                    if obs is None:
-                        obs = _observed_sample(sim, owner, local, state, times[ti])
+                obs = _array_observed_field(eval_file, insp, sim, owner, local, state, times[ti])
                 if obs is None:
                     raise RuntimeError(
                         f"array state '{a.variable}' has no cells "

@@ -231,17 +231,21 @@ else
             end
         end
 
-        @testset "threaded subprocess (julia -t 2)" begin
-            env = copy(ENV)
-            for k in collect(keys(env))
-                startswith(k, "ESS_") && delete!(env, k)
+        # The package runner runs this child with the concurrent build checks.
+        # A standalone run still starts its own two-thread process.
+        if Threads.nthreads() != 1 || !(@isdefined _BATCH_TWO_THREAD_TESTS)
+            @testset "threaded subprocess (julia -t 2)" begin
+                env = copy(ENV)
+                for k in collect(keys(env))
+                    startswith(k, "ESS_") && delete!(env, k)
+                end
+                env["ESS_CR_CHILD"] = "1"
+                env["ESS_THREADS_MIN_WORK"] = "8"
+                env["JULIA_PROJECT"] = Base.active_project()
+                cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 2 $(@__FILE__)`, env)
+                proc = run(pipeline(ignorestatus(cmd); stdout = stdout, stderr = stderr))
+                @test success(proc)
             end
-            env["ESS_CR_CHILD"] = "1"
-            env["ESS_THREADS_MIN_WORK"] = "8"
-            env["JULIA_PROJECT"] = Base.active_project()
-            cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 2 $(@__FILE__)`, env)
-            proc = run(pipeline(ignorestatus(cmd); stdout = stdout, stderr = stderr))
-            @test success(proc)
         end
     end
 end
