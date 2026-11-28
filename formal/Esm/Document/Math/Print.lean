@@ -1419,7 +1419,123 @@ decreasing_by
 /-- The tokens of an expression for a position needing level `L`. -/
 def pa (c : Ctx) (L : Nat) (e : Json) : List Tok := (pr c e).at c.sf L
 
-/-- The tokens of a whole expression. -/
-def print (sf : Sf) (S : Sym) (e : Json) : List Tok := pa ⟨sf, S⟩ 1 e
+/-! ## The defining form of an equation
+
+An equation whose right side is a `faq` with output indices, `x = [body]_(s ∈ S)`, prints
+with the output indices on its left side and their ranges after its right side,
+`x_s = body, s ∈ S` (decided 2026-11-27): the usual way to write a family of equations.
+The right side is the reduction over the remaining ranges (`∑_{k ∈ K} …`, a `faq` with no
+output indices), or the body alone when the `faq` reduces nothing and carries nothing
+else. The reader takes a trailing `, rows` after a whole equation back to the `faq`
+(`unlift`); the printer uses the form only when that gives back exactly the equation
+(`liftOK`), and the bracket form otherwise. -/
+
+/-- Sort bindings by key (insertion). -/
+def sortKVs : List (String × Json) → List (String × Json)
+  | [] => []
+  | kv :: r => insKV kv (sortKVs r)
+
+/-- A `faq` node with no output indices. -/
+def isRedNode : Json → Bool
+  | .obj kvs =>
+    match look "op" kvs, look "output_idx" kvs with
+    | some (.str "faq"), some (.arr []) => true
+    | _, _ => false
+  | _ => false
+
+/-- No name occurs twice. -/
+def distinctNames : List String → Bool
+  | [] => true
+  | k :: r => !r.contains k && distinctNames r
+
+/-- The left side's subscripts `os` and the ranges `rows` after the right side are those
+of a defining form: each subscript a name or `1` (`outOK`, as the bracket form's entries,
+`entryParts`), no name twice, and each row the range of one of the subscripts, at most
+once. A subscript with no row is an output index with no range, as in the bracket
+form. -/
+def defOutsOK (os : List Json) (rows : List (String × Json)) : Bool :=
+  os.all outOK && distinctNames (outNames os) &&
+    rows.all (fun kv => (outNames os).contains kv.1) && distinctNames (rows.map (·.1))
+
+/-- The equation `x_(os) = rhs` with the ranges `rows` of its output indices, as the
+equation it writes: `x = faq` with the output indices `os` and the rows' ranges, over
+`rhs` read as the reduction (a `faq` with no output indices that ranges over at least one
+index, none of them an output index) or as the body. Nothing else is a defining form: a
+reduction with no range of its own (`sum v_j`, `limits(sum) v_j`, `sum_(j > 1) v_j`)
+would read as reducing what it does not, and the printer writes the bracket form for
+it. -/
+def unlift (q : Json) (rows : List (String × Json)) : Option Json :=
+  match q with
+  | .obj [("args", .arr [.obj [("args", .arr (.str x :: os)), ("op", .str "index")], rhs]), ("op", .str "==")] =>
+    if !defOutsOK os rows then none
+    else
+    let bare : Json := .obj [("args", .arr []), ("expr", rhs), ("op", .str "faq"), ("output_idx", .arr os),
+      ("ranges", .obj (sortKVs rows))]
+    let f : Option Json :=
+      match rhs with
+      | .obj kvs =>
+        if isRedNode rhs then
+          match look "ranges" kvs with
+          | some (.obj rest) =>
+            if rest.isEmpty || rest.any (fun kv => (outNames os).contains kv.1) then none
+            else some (.obj (sortKVs (("output_idx", .arr os) :: ("ranges", .obj (sortKVs (rest ++ rows))) ::
+              kvs.filter (fun kv => kv.1 != "output_idx" && kv.1 != "ranges"))))
+          | _ => none
+        else some bare
+      | _ => some bare
+    f.map fun f => .obj [("args", .arr [.str x, f]), ("op", .str "==")]
+  | _ => none
+
+/-- The parts of the defining form of an equation `x = faq`: the equation `x_(os) = rhs`
+and the ranges of the output indices, when the left side is a name that takes a
+subscript and the `faq` has output indices. -/
+def liftParts (e : Json) : Option (Json × List (String × Json)) :=
+  match e with
+  | .obj [("args", .arr [.str x, .obj kvs]), ("op", .str "==")] =>
+    match look "op" kvs, look "output_idx" kvs, look "ranges" kvs with
+    | some (.str "faq"), some (.arr os), some (.obj rs) =>
+      if os.isEmpty || !plainLast x then none
+      else
+        let outs := os.filterMap (fun o => match o with | .str k => some k | _ => none)
+        let rows := outs.filterMap (fun k => (look k rs).map (k, ·))
+        let rest := rs.filter (fun kv => !outs.contains kv.1)
+        let bare := rest.isEmpty && kvs.all (fun kv => kv.1 == "expr" || kv.1 == "op" ||
+          kv.1 == "output_idx" || kv.1 == "ranges" ||
+          (kv.1 == "args" && match kv.2 with | .arr [] => true | _ => false))
+        let body := (look "expr" kvs).getD .null
+        let rk := sortKVs (("output_idx", .arr []) ::
+          ((if rest.isEmpty then [] else [("ranges", .obj rest)]) ++
+            kvs.filter (fun kv => kv.1 != "output_idx" && kv.1 != "ranges")))
+        -- the reduction must have its native spelling: a call-form `faq` on the right
+        -- reads no better than the bracket form
+        let native := match faqForm rk with | some F => faqOK F | none => false
+        let rhs : Option Json := if bare && !isRedNode body then some body
+          else if native then some (.obj rk) else none
+        rhs.map fun r => (.obj [("args", .arr [.obj [("args", .arr (.str x :: os)), ("op", .str "index")], r]),
+          ("op", .str "==")], rows)
+    | _, _, _ => none
+  | _ => none
+
+/-- The defining form is used: it reads back as exactly `e`. -/
+def liftOK (e q : Json) (rows : List (String × Json)) : Bool :=
+  !rows.isEmpty && isE q &&
+  rows.all (fun kv => nameOK kv.1 && rangeOK kv.2 &&
+    match kv.2 with | .arr [a, b] => isE a && isE b | _ => true) &&
+  match unlift q rows with
+  | some e' => jbeq e' e
+  | none => false
+
+/-- The range rows after a defining equation, separated by commas. -/
+def defRowsToks (c : Ctx) (rows : List (String × Json)) : List Tok :=
+  sepBy [.kw .comma] (rows.map (rowToks c (pr c)))
+
+/-- The tokens of a whole expression: an equation `x = faq` with output indices in its
+defining form when that reads back, otherwise as any expression. -/
+def print (sf : Sf) (S : Sym) (e : Json) : List Tok :=
+  match liftParts e with
+  | some (q, rows) =>
+    if liftOK e q rows then pa ⟨sf, S⟩ 1 q ++ .kw .comma :: defRowsToks ⟨sf, S⟩ rows
+    else pa ⟨sf, S⟩ 1 e
+  | none => pa ⟨sf, S⟩ 1 e
 
 end Esm.Document.Math

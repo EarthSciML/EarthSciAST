@@ -228,6 +228,9 @@ jobs:
       - name: Run Julia tests
         env:
           ESM_EARTHSCIMODELS: ${{ github.workspace }}/EarthSciModels
+          # Independent corpus builds use the interactive pool. The default
+          # pool stays single-threaded for the serial compiler checks.
+          JULIA_NUM_THREADS: '1,2'
         run: julia --project=. -e 'using Pkg; Pkg.test()'
 
       # See the restore step above for why this is main-only. `always()` so a

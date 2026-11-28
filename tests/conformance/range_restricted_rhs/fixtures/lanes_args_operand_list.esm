@@ -1,0 +1,265 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "lanes_args_operand_list",
+    "description": "A pointwise loss on a 6 x 5 x 4 grid scaled by H, an observed of t defined whole by an array faq whose args list only its operand arrays (the form the planner writes for a time-blended data field: H = (1 - w) a + w b, w = 0.5 + 0.5 sin(t)). Such an args list carries no meaning of its own (esm-spec \u00a74.3.1), so a lane program computes H per lane, and a batch whose lanes are each at their own time equals the whole-domain program at each lane's time.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-27T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 6
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 5
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "Blend": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 1.0
+        },
+        "H": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat"
+          ],
+          "description": "An observed of t defined by an array faq with an operand-list args."
+        },
+        "w": {
+          "type": "unknown",
+          "units": "1",
+          "description": "A time-interpolation weight."
+        },
+        "a": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "lon"
+          ],
+          "default": [
+            0.3,
+            0.7,
+            1.1,
+            1.3,
+            0.9,
+            0.5
+          ]
+        },
+        "b": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "lat"
+          ],
+          "default": [
+            1.9,
+            1.4,
+            0.8,
+            0.6,
+            1.2
+          ]
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": "w",
+          "rhs": {
+            "op": "+",
+            "args": [
+              0.5,
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  {
+                    "op": "sin",
+                    "args": [
+                      "t"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "H",
+          "rhs": {
+            "op": "faq",
+            "args": [
+              "a",
+              "b"
+            ],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        1.0,
+                        "w"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "a",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    "w",
+                    {
+                      "op": "index",
+                      "args": [
+                        "b",
+                        "j"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "l"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "l": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A",
+                    "i",
+                    "j",
+                    "l"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "l"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "l": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        "k",
+                        {
+                          "op": "index",
+                          "args": [
+                            "H",
+                            "i",
+                            "j"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "A",
+                    "i",
+                    "j",
+                    "l"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

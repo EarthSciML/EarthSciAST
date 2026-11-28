@@ -113,7 +113,7 @@ end
             tspan = (t.time_span.start, t.time_span.stop)
 
             prob = _ESS_IC.esm_problem(
-                fixture, tspan;
+                file, tspan;
                 providers = _loaded_providers()
             )
             r = solve(prob, Tsit5(); reltol = 1.0e-9, abstol = 1.0e-11, saveat = atimes)
@@ -125,7 +125,7 @@ end
                 key = "Chemistry." * a.variable
                 @test haskey(prob.var_map, key)
                 ti = _time_index(r.t, Float64(a.time))
-                actual = r[Symbol(key)][ti]
+                actual = r.u[ti][prob.var_map[key]]
                 rel, abs_ = _ic_bc_resolve_tol(chem.tolerance, t.tolerance, a.tolerance)
                 if rel > 0
                     @test isapprox(actual, a.expected; rtol = rel, atol = abs_)
@@ -133,6 +133,11 @@ end
                     @test isapprox(actual, a.expected; atol = abs_)
                 end
             end
+            # The solution answers by variable name too, with the same element.
+            a = first(t.assertions)
+            key = "Chemistry." * a.variable
+            ti = _time_index(r.t, Float64(a.time))
+            @test r[Symbol(key)][ti] === r.u[ti][prob.var_map[key]]
         end
     end
 end

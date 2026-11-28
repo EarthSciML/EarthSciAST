@@ -5,8 +5,10 @@ import Mathlib.Data.String.Basic
 # An equation as math
 
 An equation `lhs = rhs` is printed as the math of the expression `==(lhs, rhs)`: the
-`=` is the comparison's sign at the loosest comparison level. So the Phase 2 round trip
-(`parseLatex_printLatex`, `parseTypst_printTypst`) reads it back, and a side that is
+`=` is the comparison's sign at the loosest comparison level, and an equation `x = faq`
+with output indices is printed in its defining form `x_s = …, s ∈ S` (`Math.print`). So
+the round trip (`parseLatex_printLatexEqn`, `parseTypst_printTypstEqn`) reads it back,
+and a side that is
 itself a comparison, `and` or `or` is parenthesized by the precedence rules where
 needed: on the right always, on the left when it is an `and` or an `or` (a comparison
 on the left, `a < b = c`, reads back as the same equation because comparisons

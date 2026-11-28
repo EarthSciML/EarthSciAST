@@ -431,7 +431,7 @@ impl<'m> TapeBuilder<'m> {
         // lower keeps the dense lowering below.
         let mut scatter_decline = None;
         if !contract_names.is_empty() && filter.is_some() {
-            match self.attempt(|b| b.lower_equality_scatter(c, &lo, &shape)) {
+            match self.attempt(|b| b.lower_equality_scatter(c, &lo, &shape, &[])) {
                 Ok(Some(v)) => return Ok(v),
                 Ok(None) => {}
                 Err(e) => scatter_decline = Some(e),

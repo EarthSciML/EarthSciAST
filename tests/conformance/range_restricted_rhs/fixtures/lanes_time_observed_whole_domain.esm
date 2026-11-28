@@ -1,0 +1,293 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "lanes_time_observed_whole_domain",
+    "description": "Observeds of t on the lane set x that read other cells of x: q[i] = sum over m of s[m] / (i + m), and p, a makearray whose second region reads s one cell back (p[1] = cos(t), p[i] = s[i - 1]), with s[i] = cos(t + i). Neither has a lane form, so a lane program computes them, and the observed s they read, over the whole domain once per call, at one time: a call at one time equals the whole-domain program, and a call whose lanes are at different times is refused naming them. The state equation also reads r[i] = sin(t i), an observed of t with a lane form.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-27T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 5
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 1.0,
+          "description": "The state."
+        },
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "description": "An observed of t on x.",
+          "shape": [
+            "x"
+          ]
+        },
+        "q": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Reads s at every cell of x.",
+          "shape": [
+            "x"
+          ]
+        },
+        "p": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Reads s one cell back.",
+          "shape": [
+            "x"
+          ]
+        },
+        "r": {
+          "type": "unknown",
+          "units": "1",
+          "description": "An observed of t with a lane form.",
+          "shape": [
+            "x"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "s",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "cos",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    "t",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "q",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "m": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "s",
+                    "m"
+                  ]
+                },
+                {
+                  "op": "+",
+                  "args": [
+                    "i",
+                    "m"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "p",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ],
+              [
+                [
+                  2,
+                  5
+                ]
+              ]
+            ],
+            "values": [
+              {
+                "op": "cos",
+                "args": [
+                  "t"
+                ]
+              },
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": [
+                  "a"
+                ],
+                "ranges": {
+                  "a": [
+                    2,
+                    5
+                  ]
+                },
+                "expr": {
+                  "op": "index",
+                  "args": [
+                    "s",
+                    {
+                      "op": "-",
+                      "args": [
+                        "a",
+                        1
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "r",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "sin",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    "t",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        "i"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "p",
+                        "i"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "r",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

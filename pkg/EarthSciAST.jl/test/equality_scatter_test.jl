@@ -709,8 +709,9 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
         for f in sort(readdir(dir))
             doc = JSON3.read(read(joinpath(dir, f), String), Dict{String, Any})
             model = String(first(keys(doc["models"])))
+            file = ESX.load_document(doc; base_path = dir)
             dus = map((:native, :interpreter)) do c
-                f!, u0, p, _t, vm, rep = ESX.Internal.build(doc; compiler = c)
+                f!, u0, p, _t, vm, rep = ESX.Internal.build(file; compiler = c)
                 tally = rep.counts
                 names = sort!(collect(keys(vm)))
                 u = copy(u0)

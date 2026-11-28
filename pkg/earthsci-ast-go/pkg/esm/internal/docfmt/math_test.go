@@ -532,13 +532,13 @@ func TestGoldenSetMath(t *testing.T) {
 			id := cs["id"].(string)
 			sy, e := component(t, cs["esm"].(map[string]any))
 			lx, ty := m["latex"].(string), m["typst"].(string)
-			if pl := mathPrintLatex(sy, e); pl != lx {
+			if pl := mathPrintLatexEqn(sy, e); pl != lx {
 				t.Errorf("%s: print_latex\n  got  %s\n  want %s", id, pl, lx)
 			}
 			if got, ok := mathParseLatex(&Lim{}, sy, lx); !ok || !JsonEqual(got, e) {
 				t.Errorf("%s: parse_latex %s\n  got %s", id, lx, renderOrNil(got, ok))
 			}
-			if pt := mathPrintTypst(sy, e); pt != ty {
+			if pt := mathPrintTypstEqn(sy, e); pt != ty {
 				t.Errorf("%s: print_typst\n  got  %s\n  want %s", id, pt, ty)
 			}
 			if got, ok := mathParseTypst(&Lim{}, sy, ty); !ok || !JsonEqual(got, e) {

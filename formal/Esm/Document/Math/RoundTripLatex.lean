@@ -2,6 +2,10 @@ import Esm.Document.Math.TokLatex
 
 /-!
 # The LaTeX math round trip, at the string level
+
+Two printers, as for Typst: `printLatex` writes an expression (an `==` at its top is a
+comparison and prints as any expression does), `printLatexEqn` an equation's expression,
+in its defining form when it has one (`Math.print`).
 -/
 
 namespace Esm.Document.Math
@@ -10,6 +14,11 @@ open Esm.Document
 
 /-- The LaTeX math spelling of an expression under the symbol table `S`. -/
 def printLatex (S : Sym) (e : Json) : String :=
+  String.ofList (Latex.render (pa ⟨.latex, S⟩ 1 e))
+
+/-- The LaTeX math spelling of an equation's expression (`==(lhs, rhs)`) under the symbol
+table `S`: in its defining form when it has one. -/
+def printLatexEqn (S : Sym) (e : Json) : String :=
   String.ofList (Latex.render (print .latex S e))
 
 /-- Read LaTeX math under the symbol table `S`. -/
@@ -22,6 +31,13 @@ names involved to the explicit form). -/
 theorem parseLatex_printLatex (S : Sym) (e : Json) (he : isE e = true) :
     parseLatex S (printLatex S e) = some e := by
   unfold parseLatex printLatex
+  rw [String.toList_ofList, Latex.lex_render _ (Latex.pa_tokL S e he)]
+  exact parseToks_pa .latex S e he
+
+/-- The LaTeX round trip of an equation's expression, its defining form included. -/
+theorem parseLatex_printLatexEqn (S : Sym) (e : Json) (he : isE e = true) :
+    parseLatex S (printLatexEqn S e) = some e := by
+  unfold parseLatex printLatexEqn
   rw [String.toList_ofList, Latex.lex_render _ (Latex.print_tokL S e he)]
   exact parseToks_print .latex S e he
 
