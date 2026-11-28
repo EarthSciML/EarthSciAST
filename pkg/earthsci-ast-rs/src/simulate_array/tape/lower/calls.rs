@@ -138,13 +138,18 @@ pub(super) struct FuncTable {
     /// precision of their own runs at its caller's, so the program text
     /// alone does not tell two precisions apart.
     by_program: FxHashMap<(u128, crate::precision::Precision), (u32, FuncResult)>,
+    /// The bits of each constant payload a function holds ([`fingerprint`]).
+    payloads: PayloadHashes,
 }
 
 /// The whole text of an assembled function program: its instructions, its
 /// tables, its state variables, its parameter count, its precision and its
 /// result. Two programs with the same text compute the same function of
-/// their arguments.
-fn fingerprint(prog: &TapeProgram) -> u128 {
+/// their arguments. A constant payload enters by the hash of its bits,
+/// computed once per payload (`payloads`): a payload the build shares, such
+/// as a known array every function of a body is passed, is not read again
+/// for each function that holds it.
+fn fingerprint(prog: &TapeProgram, payloads: &mut PayloadHashes) -> u128 {
     // Hashed as it is written: the text is never held.
     struct H(
         std::collections::hash_map::DefaultHasher,
@@ -183,13 +188,11 @@ fn fingerprint(prog: &TapeProgram) -> u128 {
         t.dy_writes,
         t.calls,
     );
-    // Constant payloads by their bits (formatting them is the slow part).
     for d in &t.const_data {
         let _ = write!(h, "|{:?}:", d.shape);
-        for v in d.values.iter() {
-            h.0.write_u64(v.to_bits());
-            h.1.write_u64(v.to_bits() ^ 0x5bd1_e995);
-        }
+        let bits = payloads.of(&d.values);
+        h.0.write_u128(bits);
+        h.1.write_u128(bits.rotate_left(64));
     }
     let _ = write!(
         h,
@@ -205,6 +208,32 @@ fn fingerprint(prog: &TapeProgram) -> u128 {
         prog.n_segment
     );
     (u128::from(h.0.finish()) << 64) | u128::from(h.1.finish())
+}
+
+/// The hash of each constant payload's bits, by the payload's address (the
+/// payload is held, so the address is not reused).
+#[derive(Default)]
+pub(super) struct PayloadHashes(FxHashMap<usize, (Arc<Vec<f64>>, u128)>);
+
+impl PayloadHashes {
+    fn of(&mut self, values: &Arc<Vec<f64>>) -> u128 {
+        use std::hash::Hasher;
+        let key = Arc::as_ptr(values) as usize;
+        if let Some((_, bits)) = self.0.get(&key) {
+            return *bits;
+        }
+        let mut a = std::collections::hash_map::DefaultHasher::default();
+        let mut b = std::collections::hash_map::DefaultHasher::default();
+        a.write_usize(values.len());
+        b.write_usize(values.len());
+        for v in values.iter() {
+            a.write_u64(v.to_bits());
+            b.write_u64(v.to_bits() ^ 0x5bd1_e995);
+        }
+        let bits = (u128::from(a.finish()) << 64) | u128::from(b.finish());
+        self.0.insert(key, (Arc::clone(values), bits));
+        bits
+    }
 }
 
 pub(super) type SharedFuncs = Rc<RefCell<FuncTable>>;
@@ -637,7 +666,7 @@ impl<'m> TapeBuilder<'m> {
                 let mut t = funcs.borrow_mut();
                 match built {
                     Ok(Built::Function(prog, res)) => {
-                        let text = (fingerprint(&prog), key.precision);
+                        let text = (fingerprint(&prog, &mut t.payloads), key.precision);
                         t.held.push(Arc::clone(&inst));
                         if let Some(same) = t.by_program.get(&text).cloned() {
                             t.by_key.insert(key, Some(same.clone()));
