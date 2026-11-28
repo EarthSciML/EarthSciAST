@@ -289,7 +289,26 @@ function _rrc_lanes(c, prob)
             u = gather(LL.u, LL.n_u, cells)
             aux = gather(LL.aux, LL.n_aux, cells)
             du = fill(NaN, LL.n_u * size(cells, 2))
-            if haskey(batch, :times)
+            if haskey(batch, :expect_mixed_times)
+                # Lanes at different times, refused naming each observed,
+                # plain and pre-gathered.
+                ts = Float64[Float64(x) for x in batch.times]
+                li = RRC.lane_inputs(lp, size(cells, 2))
+                RRC.gather_lane_inputs!(li, lp, prob.p, ts[1], fs, cells, n)
+                for call in (
+                        () -> RRC.rhs!(du, lp, ws, u, aux, prob.p, ts, fs, cells, n),
+                        () -> RRC.rhs!(du, lp, ws, u, aux, prob.p, ts, li, cells, n),
+                    )
+                    err = try
+                        call()
+                        nothing
+                    catch e
+                        e
+                    end
+                    @test err isa ArgumentError &&
+                        all(x -> occursin("'$x'", err.msg), batch.expect_mixed_times)
+                end
+            elseif haskey(batch, :times)
                 # A time per lane (U19): lane `l` against the whole-domain
                 # program at `times[l]`, plain and pre-gathered.
                 ts = Float64[Float64(x) for x in batch.times]

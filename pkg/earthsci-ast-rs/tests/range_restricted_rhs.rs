@@ -1846,3 +1846,50 @@ fn an_interval_faq_observed_takes_the_set_its_body_reads() {
     assert_lanes_match_at(&prog, &lanes, &[n], &|c| times[c], true);
     assert_lanes_match(&prog, &lanes, &[n], 1.25);
 }
+
+/// Shape-less elementwise observeds align their operands by index-set name
+/// (esm-spec §4.3.4) in the whole-domain program, native and interpreter: a
+/// transposed operand, a shape-less operand over a transposed one, and a
+/// subset operand on the trailing axis (the conformance fixture
+/// `lanes_elementwise_by_name`), checked cell by cell against the formula.
+#[test]
+fn shapeless_elementwise_observeds_align_by_name_in_the_whole_domain() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/conformance/range_restricted_rhs/fixtures/lanes_elementwise_by_name.esm"
+    );
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("fixture")).expect("json");
+    let (nlon, nlat) = (4usize, 3usize);
+    let t = 0.75f64;
+    for compiler in [Compiler::Native, Compiler::Interpreter] {
+        let prog = program(&doc, compiler);
+        let n = prog.layout().u_len;
+        assert_eq!(n, nlon * nlat);
+        let u = varied(n);
+        let p = prog
+            .parameter_vector(&Default::default())
+            .expect("defaults");
+        let fs = prog.default_forcing();
+        let mut du = vec![f64::NAN; n];
+        let mut ws = prog.new_workspace();
+        prog.eval_into(&u, &[], &p, t, &fs, &mut du, &mut ws)
+            .expect("whole-domain eval");
+        let block = prog.layout().block("M.A").expect("A");
+        for i in 1..=nlon {
+            for j in 1..=nlat {
+                let s = block.slot(&[i as i64, j as i64]).expect("slot");
+                let a = u[s];
+                let b = 10.0 * j as f64 + i as f64;
+                let c = 0.5 * j as f64;
+                let e = t.cos() * a + t.cos() * b + 0.3 * a * a + c + (2.0 * b + c);
+                let want = 0.01 * e;
+                assert!(
+                    (du[s] - want).abs() <= 1e-12 * want.abs(),
+                    "{compiler:?} A[{i},{j}]: {} vs {want}",
+                    du[s]
+                );
+            }
+        }
+    }
+}

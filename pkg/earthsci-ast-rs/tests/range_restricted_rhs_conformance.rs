@@ -659,9 +659,39 @@ fn lanes_case(c: &Value) -> Result<(), String> {
         let mut du = vec![f64::NAN; lay.u_len];
         let mut ws = lanes.new_workspace();
         if let Some(times) = bt["times"].as_array() {
+            let ts: Vec<f64> = times.iter().map(|x| x.as_f64().unwrap()).collect();
+            if let Some(names) = bt["expect_mixed_times"].as_array() {
+                // Lanes at different times, refused naming each observed.
+                let refused = |r: Result<(), earthsci_ast::RhsError>, how: &str| match r {
+                    Err(e @ earthsci_ast::RhsError::MixedTimes { .. }) => {
+                        let msg = e.to_string();
+                        match names.iter().find(|x| !msg.contains(x.as_str().unwrap())) {
+                            Some(x) => Err(format!("{bid}{how}: `{msg}` does not name {x}")),
+                            None => Ok(()),
+                        }
+                    }
+                    other => Err(format!(
+                        "{bid}{how}: expected a mixed-times error, got {other:?}"
+                    )),
+                };
+                refused(
+                    lanes.eval_times_into(&u, &aux, &p, &ts, &fs, &cells, n, &mut du, &mut ws),
+                    "",
+                )?;
+                let mut inputs = lanes.lane_inputs();
+                lanes
+                    .gather_lane_inputs(&mut inputs, &p, ts[0], &fs, &cells, n)
+                    .map_err(|e| format!("{bid}: gather_lane_inputs: {e}"))?;
+                refused(
+                    lanes.eval_gathered_times_into(
+                        &u, &aux, &inputs, &p, &ts, &cells, n, &mut du, &mut ws,
+                    ),
+                    " (pre-gathered)",
+                )?;
+                continue;
+            }
             // A time per lane (U19): lane `l` against the whole-domain
             // program at `times[l]`, plain and pre-gathered.
-            let ts: Vec<f64> = times.iter().map(|x| x.as_f64().unwrap()).collect();
             let refs: Vec<Vec<f64>> = ts[..n].iter().map(|&t| reference_at(&op, t)).collect();
             let gs: Vec<&[f64]> = refs.iter().map(Vec::as_slice).collect();
             lanes

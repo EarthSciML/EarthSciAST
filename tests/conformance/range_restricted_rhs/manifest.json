@@ -6348,6 +6348,275 @@
    ]
   },
   {
+   "id": "lanes_elementwise_by_name",
+   "kind": "lanes",
+   "document": "fixtures/lanes_elementwise_by_name.esm",
+   "selection": {
+    "writes": "all",
+    "terms": "all"
+   },
+   "lane_kind": "cells",
+   "lane_sets": [
+    "lon",
+    "lat"
+   ],
+   "capacity": 8,
+   "batches": [
+    {
+     "id": "one_time",
+     "cells": [
+      [
+       4,
+       1
+      ],
+      [
+       3,
+       3
+      ],
+      [
+       2,
+       2
+      ],
+      [
+       1,
+       2
+      ],
+      [
+       4,
+       3
+      ],
+      [
+       1,
+       3
+      ],
+      [
+       1,
+       1
+      ],
+      [
+       4,
+       2
+      ]
+     ],
+     "n": 8
+    },
+    {
+     "id": "one_time_padded",
+     "cells": [
+      [
+       3,
+       2
+      ],
+      [
+       2,
+       1
+      ],
+      [
+       2,
+       3
+      ],
+      [
+       3,
+       1
+      ],
+      [
+       3,
+       2
+      ],
+      [
+       3,
+       2
+      ],
+      [
+       3,
+       2
+      ],
+      [
+       3,
+       2
+      ]
+     ],
+     "n": 4
+    },
+    {
+     "id": "mixed_times",
+     "cells": [
+      [
+       3,
+       2
+      ],
+      [
+       2,
+       1
+      ],
+      [
+       2,
+       3
+      ],
+      [
+       3,
+       1
+      ],
+      [
+       4,
+       1
+      ],
+      [
+       3,
+       3
+      ],
+      [
+       2,
+       2
+      ],
+      [
+       1,
+       2
+      ]
+     ],
+     "n": 8,
+     "times": [
+      0.0,
+      0.8,
+      0.6,
+      1.4,
+      1.2,
+      2.0,
+      1.7999999999999998,
+      2.6
+     ]
+    }
+   ],
+   "negative_control": {
+    "batch": "one_time",
+    "swap_lanes": [
+     1,
+     2
+    ]
+   },
+   "covers": [
+    "lanes",
+    "elementwise_alignment_by_name",
+    "per_lane_times"
+   ]
+  },
+  {
+   "id": "lanes_time_observed_whole_domain",
+   "kind": "lanes",
+   "document": "fixtures/lanes_time_observed_whole_domain.esm",
+   "selection": {
+    "writes": "all",
+    "terms": "all"
+   },
+   "lane_kind": "cells",
+   "lane_sets": [
+    "x"
+   ],
+   "capacity": 4,
+   "batches": [
+    {
+     "id": "one_time",
+     "cells": [
+      [
+       4
+      ],
+      [
+       1
+      ],
+      [
+       5
+      ],
+      [
+       2
+      ]
+     ],
+     "n": 4
+    },
+    {
+     "id": "one_time_padded",
+     "cells": [
+      [
+       3
+      ],
+      [
+       5
+      ],
+      [
+       3
+      ],
+      [
+       3
+      ]
+     ],
+     "n": 2
+    },
+    {
+     "id": "every_lane_at_one_time",
+     "cells": [
+      [
+       2
+      ],
+      [
+       3
+      ],
+      [
+       1
+      ],
+      [
+       4
+      ]
+     ],
+     "n": 4,
+     "times": [
+      0.75,
+      0.75,
+      0.75,
+      0.75
+     ]
+    },
+    {
+     "id": "mixed_times",
+     "cells": [
+      [
+       2
+      ],
+      [
+       3
+      ],
+      [
+       1
+      ],
+      [
+       4
+      ]
+     ],
+     "n": 4,
+     "times": [
+      0.25,
+      0.75,
+      0.75,
+      1.5
+     ],
+     "expect_mixed_times": [
+      "M.p",
+      "M.q"
+     ]
+    }
+   ],
+   "negative_control": {
+    "batch": "one_time",
+    "swap_lanes": [
+     1,
+     2
+    ]
+   },
+   "covers": [
+    "lanes",
+    "time_observed_whole_domain",
+    "mixed_times_refused"
+   ]
+  },
+  {
    "id": "lanes_refuse_stencil",
    "kind": "lanes_error",
    "document": "fixtures/stencil_1d_centered.esm",

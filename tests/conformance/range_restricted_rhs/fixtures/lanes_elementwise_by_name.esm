@@ -1,0 +1,258 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "lanes_elementwise_by_name",
+    "description": "Observeds declared with no shape, defined by bare elementwise expressions over arrays whose axes come in different orders (esm-spec \u00a74.3.4: an undeclared result spans the union of its operands' index sets and every operand aligns by index-set name). B is on [lat, lon], transposed against the state A on [lon, lat]; C on [lat] is a subset on the result's trailing axis; F = cos(t) B is shape-less over a transposed operand; H = 2 B + C is shape-less with C on its leading axis; E = cos(t) A + F + k A A + C + H reads the shape-less F and H and the state. The state equation reads E at each cell. The whole-domain program and a lane program (at one time and at a time per lane) give the same values.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-27T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 4
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat"
+          ],
+          "default": 1.0,
+          "description": "The state."
+        },
+        "B": {
+          "type": "unknown",
+          "units": "1",
+          "description": "A state-free observed on [lat, lon], transposed against A.",
+          "shape": [
+            "lat",
+            "lon"
+          ]
+        },
+        "C": {
+          "type": "unknown",
+          "units": "1",
+          "description": "A state-free observed on [lat] only.",
+          "shape": [
+            "lat"
+          ]
+        },
+        "F": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Shape-less: cos(t) B, on [lat, lon] by inference."
+        },
+        "H": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Shape-less: 2 B + C, on [lat, lon] by inference."
+        },
+        "E": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Shape-less: on [lon, lat] by inference, the union of its operands' sets in order of first appearance."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.3
+        }
+      },
+      "equations": [
+        {
+          "lhs": "B",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "j",
+              "i"
+            ],
+            "ranges": {
+              "j": {
+                "from": "lat"
+              },
+              "i": {
+                "from": "lon"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    10.0,
+                    "j"
+                  ]
+                },
+                "i"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "C",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": {
+                "from": "lat"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                0.5,
+                "j"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "F",
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "cos",
+                "args": [
+                  "t"
+                ]
+              },
+              "B"
+            ]
+          }
+        },
+        {
+          "lhs": "H",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  2.0,
+                  "B"
+                ]
+              },
+              "C"
+            ]
+          }
+        },
+        {
+          "lhs": "E",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "cos",
+                    "args": [
+                      "t"
+                    ]
+                  },
+                  "A"
+                ]
+              },
+              "F",
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A",
+                  "A"
+                ]
+              },
+              "C",
+              "H"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A",
+                    "i",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                0.01,
+                {
+                  "op": "index",
+                  "args": [
+                    "E",
+                    "i",
+                    "j"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

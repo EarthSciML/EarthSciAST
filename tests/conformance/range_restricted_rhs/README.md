@@ -157,7 +157,9 @@ sets a lane's `cells` column indexes, in order), `capacity`, `batches`,
    called with a time per lane (Rust `eval_times_into` /
    `eval_gathered_times_into`, Julia `rhs!` with `ts`), and lane `l` equals
    the whole-domain program evaluated at `times[l]`; any other batch is
-   called at `t = 0`.
+   called at `t = 0`. A batch with `expect_mixed_times` (its `times` differ)
+   is refused instead, plain and pre-gathered (Rust `RhsError::MixedTimes`,
+   Julia `ArgumentError`), with a message naming every observed listed.
 4. Negative control: in the named batch, swap the `u_L` (and `aux_L`) inputs of
    the two named lanes (1-based) without swapping their `cells`; the bitwise
    comparison MUST fail for at least one of the two lanes.
@@ -182,6 +184,8 @@ cell inside `n`.
 | `lanes_column.esm` | `lanes_column` | 4: a column operator with surface and top regions |
 | `lanes_data_and_time_observeds.esm` | `lanes_data_and_time_observeds` | 4: a whole-domain state-free observed of the data (a sum over `lon`), an array observed of `t` that reads it, and an observed of `t` declared with no shape |
 | `lanes_args_operand_list.esm` | `lanes_args_operand_list` | 4, U19: an observed of `t` defined by an array `faq` whose `args` list only its operands, in a batch at a time per lane |
+| `lanes_elementwise_by_name.esm` | `lanes_elementwise_by_name` | 4, U19: observeds declared with no shape over operands whose axes come in another order (`[lat, lon]` against `[lon, lat]`), over a shape-less observed, and with a subset operand on the trailing axis, aligned by index-set name (esm-spec §4.3.4) in the whole-domain and the lane program, at one time and at a time per lane |
+| `lanes_time_observed_whole_domain.esm` | `lanes_time_observed_whole_domain` | 4, U19: observeds of `t` that read other cells of the lane set (a contraction over it, a `makearray` region one cell back) computed over the whole domain once per call: equal to the whole-domain program at one time, refused at mixed times |
 | `global_horizontal_sum.esm` | `global_horizontal_sum_halo`, `global_horizontal_sum_restrict`, `global_horizontal_sum_uncut` | decision 8: a horizontal sum refused along the cut axis, accepted when that axis is not cut |
 | `global_scalar_state.esm` | `global_scalar_state_restrict`, `global_scalar_state_halo` | decision 8: a 0-d state write refused on a tile |
 | `esd/problems/advection_1d_ppm_periodic.esm` (N = 16) | `esd_ppm_1d_periodic` | 1, 2: 1-D PPM, periodic by explicit wrap slabs, halo (3, 2) |
