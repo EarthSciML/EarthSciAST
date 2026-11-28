@@ -1,6 +1,6 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 2.4.0**
+**EarthSciML Abstract Syntax Tree Format — Version 2.5.0**
 
 > **2.4.0: `grad`, `div` and `laplacian` are ordinary names.** The JSON form
 > does not change. The format no longer names `grad`, `div` and `laplacian` as
