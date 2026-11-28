@@ -1,0 +1,12 @@
+{
+  "esm": "2.6.0",
+  "metadata": {
+    "name": "Version_2_6_0_NewerMinor",
+    "description": "Test file with version 2.6.0 - a newer minor of the supported major 2: loaded with a warning by a 2.5.0 library",
+    "authors": [
+      "ESM Format Team"
+    ],
+    "created": "2026-11-28T00:00:00Z"
+  },
+  "models": {}
+}
