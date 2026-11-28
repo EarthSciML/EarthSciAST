@@ -551,6 +551,38 @@ function _mtk_ics_to_guesses!(system)
     return String[string(var) for (var, _) in moved]
 end
 
+# esm-spec §11.4.3 "Precedence": a `default` is never an equation of the
+# initialization system, only the starting point of its solve. ModelingToolkit
+# files a variable's default as an initial condition, which its initialization
+# holds fixed; so the default of each unknown whose starting value an
+# initialization equation that is not an explicit initial condition mentions
+# (and no explicit one sets) moves to `guesses`.
+function _mtk_init_defaults_to_guesses!(system, flat::FlattenedSystem, handles)
+    isempty(flat.initialization_equations) && return String[]
+    ics = getfield(system, :initial_conditions)
+    (ics isa AbstractDict && !isempty(ics)) || return String[]
+    explicit = Set{String}(first(p) for p in flat.field_ics)
+    names = Set{String}()
+    for eq in flat.initialization_equations, side in (eq.lhs, eq.rhs)
+        for (n, _) in EarthSciAST._ic_reads(side)
+            n in explicit || push!(names, n)
+        end
+    end
+    targets = Set{Any}(
+        Symbolics.unwrap(handles[n]) for n in names if haskey(handles, n)
+    )
+    isempty(targets) && return String[]
+    guesses = getfield(system, :guesses)
+    moved = String[]
+    for (var, val) in collect(pairs(ics))
+        Symbolics.unwrap(var) in targets || continue
+        delete!(ics, var)
+        guesses isa AbstractDict && !haskey(guesses, var) && (guesses[var] = val)
+        push!(moved, string(var))
+    end
+    return moved
+end
+
 function _mtk_eliminated(v, eliminated::Set{Any})
     v in eliminated && return true
     SymUtils.symtype(v) <: AbstractArray || return false
@@ -828,6 +860,9 @@ function _mtk_problem_impl(input, req::EarthSciAST._ProblemRequest)
     # An `ic` on a variable the compile solved away is a GUESS, not a
     # constraint (see `_mtk_ics_to_guesses!`).
     _mtk_ics_to_guesses!(system)
+    # A declared default of an unknown the initialization system determines is
+    # a starting point, never a constraint (esm-spec §11.4.3, "Precedence").
+    _mtk_init_defaults_to_guesses!(system, flat, _mtk_handles(system, rev))
 
     # The parameter overrides bind here: `op` is ModelingToolkit's merged
     # initial-value / parameter map, so a value named in `p` is what the

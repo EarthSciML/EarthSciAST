@@ -338,7 +338,9 @@ end
             ui, vi, _ = seed(m, :interpreter)
             @test [ui[vi["M.u[$i]"]] for i in 1:5] == [10.0, 20.0, zb, zb, zb]
             @test all(un[vn["M.u[$i]"]] === ui[vi["M.u[$i]"]] for i in 1:5)
-            @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["ic(M.u)"]
+            # An explicit initial condition over some of its target's cells
+            # (the filter) is seeded cell by cell over its ranges.
+            @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(M.u)"]
         end
     end
 
