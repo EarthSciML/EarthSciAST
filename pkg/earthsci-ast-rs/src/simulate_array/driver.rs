@@ -1383,15 +1383,14 @@ impl ArrayCompiled {
         (ic_vec, unset)
     }
 
-    /// Evaluate the `faq`-valued initialization equations (esm-spec §6.2:
-    /// equations that hold at t = 0) into `ic_vec`, in document order: each
-    /// assigns every cell of its ranges the value its body takes there, read
-    /// against the initial state seeded so far (defaults, field `ic`s, the
-    /// caller's overrides and the equations before it) and the parameters and
-    /// forcing fields, at t = 0. A cell in `keep` — one the caller's `u0`
-    /// names — keeps its value. Returns the slots assigned. The Julia
-    /// reference's `_seed_faq_init_u0!`, whose order and precedence this
-    /// follows.
+    /// Evaluate the triangular steps of the initialization system (esm-spec
+    /// §11.4.3) into `ic_vec`, in evaluation order: `u ~ faq(…)` assigns every
+    /// cell of its ranges the value its body takes there, and a scalar target
+    /// takes its right-hand side's value. Each reads the initial state seeded
+    /// so far (defaults, explicit initial conditions, the supplied values and
+    /// the steps before it) by state name — the step's `ic(w)` read as `w` —
+    /// with the parameters and forcing fields. A slot in `keep` keeps its
+    /// value. Returns the slots assigned.
     ///
     /// The whole `faq` is one build-time field evaluation, as a field `ic`'s
     /// coordinate expression is ([`BuildEval::of_compiler`]): the interpreter
@@ -1399,7 +1398,7 @@ impl ArrayCompiled {
     /// tape, refusing it when the tape declines (`records` then carries the
     /// refusal).
     #[cfg(feature = "solve")]
-    pub(crate) fn seed_initialization_faqs(
+    pub(crate) fn seed_initialization_equations(
         &self,
         ic_vec: &mut [f64],
         params: &HashMap<String, f64>,
@@ -1411,7 +1410,13 @@ impl ArrayCompiled {
             return Ok(assigned);
         }
         let mode = BuildEval::of_compiler(self.is_interpreter());
-        for (target, rhs) in &self.init_faqs {
+        let none: HashSet<usize> = HashSet::new();
+        let all_keep = keep;
+        for (k, (target, rhs)) in self.init_faqs.iter().enumerate() {
+            // A supplied value stands over an explicit initial condition; a
+            // triangular step's target is never supplied (the balance refuses
+            // that).
+            let keep = if k < self.n_explicit_faqs { all_keep } else { &none };
             let rule = format!("init({target})");
             let invalid = |details: String| SimulateError::InvalidFieldInitialCondition {
                 name: rule.clone(),
@@ -1419,20 +1424,92 @@ impl ArrayCompiled {
             };
             let vs = self.var_shapes.get(target).ok_or_else(|| {
                 invalid(format!(
-                    "the left-hand side `{target}` of a `faq` initialization equation is not a \
-                     state variable"
+                    "the target `{target}` of an initialization equation is not a state \
+                     variable"
                 ))
             })?;
-            // The state as seeded so far, where a state array would bind, and
-            // the forcing fields a state does not shadow.
+            // The state as seeded so far, where a state array would bind (a
+            // scalar state binds as a scalar), and the forcing fields a state
+            // does not shadow.
             let mut scope: HashMap<String, ArrayD<f64>> = HashMap::new();
+            let mut step_params: HashMap<String, f64> = params.clone();
             for (name, s) in &self.var_shapes {
                 let n = s.shape.iter().copied().product::<usize>().max(1);
                 let flat = &ic_vec[s.flat_offset..s.flat_offset + n];
-                scope.insert(name.clone(), col_major_to_arrayd(flat, &s.shape));
+                if s.shape.is_empty() {
+                    step_params.insert(name.clone(), flat[0]);
+                } else {
+                    scope.insert(name.clone(), col_major_to_arrayd(flat, &s.shape));
+                }
             }
             for (name, arr) in self.forcing.borrow().iter() {
                 scope.entry(name.clone()).or_insert_with(|| arr.clone());
+            }
+            // A state-free observed of the build-time scope (a shaped
+            // parameter's `const` data included), or a shaped parameter the
+            // forcing buffer does not hold yet, reads as a field initial
+            // condition reads it.
+            for name in super::compile::free_names(rhs) {
+                self.bind_ic_scope_name(&name, &mut scope, &mut step_params, mode, 0);
+            }
+            let params = &step_params;
+            if !super::compile::is_cell_assigning_faq(rhs) {
+                // A scalar target: one value, its right-hand side's.
+                if vs.shape.iter().product::<usize>() != 1 {
+                    return Err(invalid(format!(
+                        "the right-hand side is not elementwise over the axes of `{target}`, \
+                         so it gives no value per cell"
+                    )));
+                }
+                let slot = vs.flat_offset;
+                if keep.contains(&slot) {
+                    continue;
+                }
+                let value = eval_buildtime_field_routed(
+                    None,
+                    rhs,
+                    &self.index_sets,
+                    params,
+                    &scope,
+                    mode,
+                    &self.operators,
+                );
+                let v = match value {
+                    Ok(Routed::Refused(why)) => {
+                        return refuse_field_ic(
+                            records.as_deref_mut(),
+                            &rule,
+                            "initialization equation",
+                            why,
+                        )
+                        .map(|()| assigned);
+                    }
+                    Ok(Routed::Value(v, route)) => {
+                        if let Some(sink) = records.as_deref_mut() {
+                            sink.push(FieldIcRecord {
+                                name: rule.clone(),
+                                kind: "initialization equation",
+                                route: Ok(route),
+                            });
+                        }
+                        match v {
+                            Value::Scalar(x) => x,
+                            Value::Array(a) if a.len() == 1 => a.iter().copied().next().unwrap_or(0.0),
+                            Value::Array(_) => {
+                                return Err(invalid(format!(
+                                    "the right-hand side is an array, and `{target}` is a scalar"
+                                )));
+                            }
+                        }
+                    }
+                    Err(e) => return Err(invalid(e.to_string())),
+                };
+                if let Some(fault) = take_fault() {
+                    return Err(invalid(fault.message));
+                }
+                ic_vec[slot] = v;
+                assigned.push(slot);
+                continue;
             }
             let mut resolved = rhs.clone();
             crate::faq::resolve_expr_ranges(&mut resolved, &self.index_sets)
@@ -1611,7 +1688,7 @@ impl ArrayCompiled {
             // the caller's `u0` is not known yet, and only the route each one
             // takes is recorded here. `build_initial_state` evaluates them.
             let (mut ic_vec, _) = self.seeded_defaults(slots);
-            let _ = self.seed_initialization_faqs(
+            let _ = self.seed_initialization_equations(
                 &mut ic_vec,
                 &resolved,
                 &HashSet::new(),
@@ -1688,6 +1765,16 @@ impl ArrayCompiled {
     /// observeds (esm-spec §11.4.2, `ic_reads_state`): it has no value at the
     /// start of the run.
     pub(crate) fn refuse_ic_state_reads(&self) -> Result<(), SimulateError> {
+        // The initialization system's own (esm-spec §11.4.2): an equation that
+        // mentions `ic` and reads a trajectory value.
+        if let Some(SimulateError::IcReadsState { name, details }) =
+            self.init_system.structural_refusal()
+        {
+            return Err(SimulateError::IcReadsState {
+                name: name.clone(),
+                details: details.clone(),
+            });
+        }
         match self.ic_scope.state_reads.first() {
             Some((name, details)) => Err(SimulateError::IcReadsState {
                 name: name.clone(),
@@ -1870,12 +1957,19 @@ impl ArrayCompiled {
             }
         }
         // An initialization equation assigns its whole target, and a held
-        // state (no `D`, no definition) is not an ODE state.
+        // state (no `D`, no definition) is not an ODE state. A stripped
+        // implicit part's unknown with a guess starts from it.
+        let guessed: Vec<String> = self
+            .guess_seeded_unknowns()
+            .into_iter()
+            .filter(|w| self.init_guesses.contains_key(w))
+            .collect();
         for target in self
             .init_faqs
             .iter()
             .map(|(t, _)| t)
             .chain(&self.held_at_ic)
+            .chain(&guessed)
         {
             if let Some(vs) = self.var_shapes.get(target) {
                 let n = vs.shape.iter().copied().product::<usize>().max(1);
@@ -1994,6 +2088,9 @@ impl ArrayCompiled {
             &self.merged_renames,
         )
         .map_err(crate::simulate::ic_key_error)?;
+        // The initialization system's balance under these supplied values
+        // (esm-spec §11.4.3), before anything is evaluated.
+        self.check_initialization(&initial_conditions)?;
         // What construction resolved, when it resolved it under these
         // parameters ([`FieldIcMemo`]).
         let bits = param_bits(param_vec);
@@ -2045,11 +2142,37 @@ impl ArrayCompiled {
             }
         }
         self.round_initial_state(&mut ic_vec);
+        // The steps read `t` as the start of the run (esm-spec §11.4.2).
+        let mut step_params = resolved_params.clone();
+        step_params.insert("t".to_string(), start.t0);
         // After the overrides, so a body reading a state reads the caller's
         // value, and around them, so the caller's value stands.
         for slot in
-            self.seed_initialization_faqs(&mut ic_vec, &resolved_params, &overridden, None)?
+            self.seed_initialization_equations(&mut ic_vec, &step_params, &overridden, None)?
         {
+            if let Some(u) = unset.as_mut() {
+                u[slot] = false;
+            }
+        }
+        // A stripped algebraic unknown's warm start (`strip` class
+        // `algebraic`, API_SPEC §5.8 as PR #820 drafted it): its explicit `ic`
+        // value over a supplied one.
+        if self.alg_stripped {
+            for w in &self.held_at_ic {
+                let Some(vs) = self.var_shapes.get(w) else {
+                    continue;
+                };
+                let n = vs.shape.iter().copied().product::<usize>().max(1);
+                for slot in vs.flat_offset..vs.flat_offset + n {
+                    if let Some(&v) = field_ic_map.get(&slot) {
+                        ic_vec[slot] = v;
+                    }
+                }
+            }
+        }
+        let mut keep_guess = overridden.clone();
+        keep_guess.extend(field_ic_map.keys().copied());
+        for slot in self.seed_stripped_starting_points(&mut ic_vec, &resolved_params, &keep_guess) {
             if let Some(u) = unset.as_mut() {
                 u[slot] = false;
             }
@@ -2060,6 +2183,175 @@ impl ArrayCompiled {
         }
         self.round_initial_state(&mut ic_vec);
         Ok(ic_vec)
+    }
+
+    #[cfg(feature = "solve")]
+    /// Bind `name` into a step's build-time scope when nothing binds it yet:
+    /// a state-free observed of [`Self::ic_scope`] (its own reads first), else
+    /// a forcing slot's declared value.
+    #[cfg(feature = "solve")]
+    fn bind_ic_scope_name(
+        &self,
+        name: &str,
+        scope: &mut HashMap<String, ArrayD<f64>>,
+        params: &mut HashMap<String, f64>,
+        mode: BuildEval,
+        depth: usize,
+    ) {
+        if depth > 64 || scope.contains_key(name) || params.contains_key(name) {
+            return;
+        }
+        if let Some(def) = self.ic_scope.defs.iter().find(|d| d.name == name) {
+            for dep in &def.deps {
+                self.bind_ic_scope_name(dep, scope, params, mode, depth + 1);
+            }
+            for need in &def.needs {
+                self.bind_ic_scope_name(need, scope, params, mode, depth + 1);
+            }
+            if let Ok(Routed::Value(v, _)) = eval_buildtime_field_routed(
+                Some(&def.name),
+                &def.body,
+                &self.index_sets,
+                params,
+                scope,
+                mode,
+                &self.operators,
+            ) {
+                match v {
+                    Value::Array(a) => {
+                        scope.insert(name.to_string(), *a);
+                    }
+                    Value::Scalar(x) => {
+                        params.insert(name.to_string(), x);
+                    }
+                }
+            }
+            return;
+        }
+        if let Some(Some(v)) = self.forcing_default(name) {
+            scope.insert(name.to_string(), v);
+        }
+    }
+
+    /// The supplied values of `initial_conditions` (canonical keys), per
+    /// state, as the column-major elements they set.
+    pub(crate) fn supplied_elements(
+        &self,
+        initial_conditions: &HashMap<String, f64>,
+    ) -> HashMap<String, Vec<usize>> {
+        let mut out: HashMap<String, Vec<usize>> = HashMap::new();
+        for name in initial_conditions.keys() {
+            if let Some(vs) = self.var_shapes.get(name) {
+                // A whole-variable key sets every element.
+                let n = vs.shape.iter().copied().product::<usize>().max(1);
+                out.entry(name.clone()).or_default().extend(0..n);
+                continue;
+            }
+            let Some(slot) = super::layout::lookup_slot(&self.var_shapes, name) else {
+                continue;
+            };
+            for (var, vs) in &self.var_shapes {
+                let n = vs.shape.iter().copied().product::<usize>().max(1);
+                if (vs.flat_offset..vs.flat_offset + n).contains(&slot) {
+                    out.entry(var.clone())
+                        .or_default()
+                        .push(slot - vs.flat_offset);
+                }
+            }
+        }
+        out
+    }
+
+    #[cfg(feature = "solve")]
+    /// The checks of the initialization system that depend on the supplied
+    /// values (esm-spec §11.4.3): the balance, then the refusal of an
+    /// implicit part the caller did not take. `initial_conditions` is keyed
+    /// canonically; [`Self::check_initialization_raw`] canonicalizes first.
+    pub(crate) fn check_initialization(
+        &self,
+        initial_conditions: &HashMap<String, f64>,
+    ) -> Result<(), SimulateError> {
+        if self.init_system.equations.is_empty() && self.init_system.structural_refusal().is_none() {
+            return Ok(());
+        }
+        let supplied = self.supplied_elements(initial_conditions);
+        self.init_system.check(&supplied, self.init_stripped)
+    }
+
+    #[cfg(feature = "solve")]
+    /// [`Self::check_initialization`] for caller keys as given.
+    pub(crate) fn check_initialization_raw(
+        &self,
+        initial_conditions: &HashMap<String, f64>,
+    ) -> Result<(), SimulateError> {
+        if self.init_system.equations.is_empty() && self.init_system.structural_refusal().is_none() {
+            return Ok(());
+        }
+        let canonical = crate::simulate::canonicalize_override_keys(
+            &super::layout::SlotNames(&self.var_shapes),
+            &self.override_namespaces(),
+            initial_conditions,
+            &self.merged_renames,
+        )
+        .map_err(crate::simulate::ic_key_error)?;
+        self.check_initialization(&canonical)
+    }
+
+    #[cfg(feature = "solve")]
+    /// The starting point of every element of a stripped implicit part
+    /// (`strip` class `initialization`, API_SPEC §5.8), written into
+    /// `ic_vec`: a supplied value stands (`keep`), else the `guesses` entry,
+    /// else the declared default already seeded. Returns the slots written.
+    fn seed_stripped_starting_points(
+        &self,
+        ic_vec: &mut [f64],
+        params: &HashMap<String, f64>,
+        keep: &HashSet<usize>,
+    ) -> Vec<usize> {
+        let mut out = Vec::new();
+        for w in self.guess_seeded_unknowns() {
+            let (Some(vs), Some(guess)) = (self.var_shapes.get(&w), self.init_guesses.get(&w))
+            else {
+                continue;
+            };
+            let Ok(values) = crate::simulate_array::eval_buildtime_values(guess, &self.index_sets, params)
+            else {
+                continue;
+            };
+            let n = vs.shape.iter().copied().product::<usize>().max(1);
+            for i in 0..n {
+                let slot = vs.flat_offset + i;
+                if keep.contains(&slot) {
+                    continue;
+                }
+                let v = match values.len() {
+                    1 => values[0],
+                    m if m == n => values[i],
+                    _ => continue,
+                };
+                ic_vec[slot] = v;
+                out.push(slot);
+            }
+        }
+        out
+    }
+
+    /// The unknowns whose `guesses` entry is a starting point of this
+    /// Problem's state: the unknowns of a stripped implicit initialization
+    /// part (`strip` class `initialization`), and the stripped algebraic
+    /// unknowns (`strip` class `algebraic`, whose warm start the caller
+    /// takes), below an explicit `ic` and a supplied value.
+    fn guess_seeded_unknowns(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        if self.init_stripped {
+            out.extend(self.init_system.implicit_unknowns());
+        }
+        if self.alg_stripped {
+            let mut held: Vec<&String> = self.held_at_ic.iter().collect();
+            held.sort();
+            out.extend(held.into_iter().cloned());
+        }
+        out
     }
 
     #[cfg(feature = "solve")]
