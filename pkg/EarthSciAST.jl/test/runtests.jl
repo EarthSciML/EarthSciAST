@@ -258,6 +258,7 @@ const GROUPS = [
         "observed_materialization_test.jl",
         "gated_sibling_loaders_test.jl",
         "build_inspection_test.jl",
+        "setup_select_dynamic_test.jl",
         "observed_field_static_test.jl",
         "inline_tests_test.jl",
         "pde_inline_scalar_slot_collision_test.jl",

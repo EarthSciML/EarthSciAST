@@ -172,11 +172,14 @@ function _model_has_setup_const_reduction(
 end
 
 # The defined names that read a state or `t`, directly or through other
-# definitions: never a build-once table.
+# definitions: never a build-once table. `t` counts only as a FREE read: a
+# definition whose `faq` binds a loop index named `t` does not read time, so the
+# direct readers of `t` are found with `free_variables` (which subtracts binders)
+# and seeded themselves, rather than seeding `"t"` into the graph, whose reads
+# count bound loop symbols.
 function _dynamic_names(g::_DefGraph, state_var_names::Set{String})
-    seeds = copy(state_var_names)
-    push!(seeds, "t")
-    return _readers_of(g, seeds)
+    time_readers = Set{String}(n for (n, rhs) in g.defs if "t" in free_variables(rhs))
+    return union!(_readers_of(g, union(state_var_names, time_readers)), time_readers)
 end
 
 # Build-once ARRAY observeds to materialize at setup: the gated / nested
@@ -205,26 +208,12 @@ function _geometry_setup_vars(
     # observed (inlined into its readers below), never pulled into setup where
     # F_src is unbound.
     tainted = _readers_of(g, live_params)
+    # Whether a definition moves at run time: it reads a state or `t` through
+    # any chain of observeds. A setup var is evaluated once, so it may be none
+    # of these — a direct-reads-only test would let an observed that reads a
+    # state-dependent observed into setup, where that observed is unbound
+    # ("unbound name … in setup-time geometry").
     dynamic = _dynamic_names(g, state_var_names)
-    # Whether a name moves at run time: a state, or a definition that reads
-    # one (or `t`) through any chain of observed. A setup var is evaluated
-    # once, so it may read neither — a direct-reads-only test would let an
-    # observed that reads a state-dependent observed into setup, where that
-    # observed is unbound ("unbound name … in setup-time geometry").
-    moves(f) = f in state_var_names || f in dynamic
-    setup = Set{String}()
-    for (n, _) in defs
-        (is_arr_obs(n) && !(n in tainted) && haskey(defs, n)) || continue
-        # A recurrence (esm-spec §4.3.1.1) reads its own earlier cells, so it is
-        # materialized by its ordered sweep, never by a setup-time evaluation.
-        n in refs_of(n) && continue
-        # The pure-AST overlap area, or a rank table, over inputs that read no state.
-        _is_setup_join_reduction(defs[n]) &&
-            !_anyof(moves, refs_of(n)) &&
-            push!(setup, n)
-        _is_setup_const_reduction(defs[n], index_sets, scalar_params) && !(n in dynamic) &&
-            push!(setup, n)
-    end
     mvars = Set{String}(keys(model.variables))
     # An array observed is build-once-SETUP-materializable only if it does NOT read a
     # COMPUTED SCALAR OBSERVED — a scalar-shaped observed carrying a defining equation
@@ -253,6 +242,8 @@ function _geometry_setup_vars(
     # (IR, R0, R, …) stays together in the ODE-RHS array-inline path — never a split.
     # A no-op (byte-identical) for a pure-geometry regrid: nothing there reads a
     # computed scalar observed, so the block set is empty and setup is unchanged.
+    # Computed before the seeds, which it also screens: a seed reading a blocked
+    # observed would be evaluated with that observed unbound.
     blocked = Set{String}()
     _saturate!() do   # SCALAR-OBSERVED BLOCK pass: transitive setup-ineligibility
         changed = false
@@ -265,16 +256,28 @@ function _geometry_setup_vars(
         end
         changed
     end
+    setup = Set{String}()
+    for (n, _) in defs
+        (
+            is_arr_obs(n) && !(n in tainted) && !(n in dynamic) && !(n in blocked)
+        ) || continue
+        # A recurrence (esm-spec §4.3.1.1) reads its own earlier cells, so it is
+        # materialized by its ordered sweep, never by a setup-time evaluation.
+        n in refs_of(n) && continue
+        # The pure-AST overlap area, or a rank table, over inputs that read no state.
+        (
+            _is_setup_join_reduction(defs[n]) ||
+                _is_setup_const_reduction(defs[n], index_sets, scalar_params)
+        ) && push!(setup, n)
+    end
     _saturate!() do   # SETUP-FORWARD pass: state-free dependents of setup vars
         changed = false
         for (n, rhs) in defs
             (
-                is_arr_obs(n) && !(n in setup) &&
-                    !(n in tainted) && !(n in blocked) && !(n in refs_of(n))
+                is_arr_obs(n) && !(n in setup) && !(n in tainted) &&
+                    !(n in dynamic) && !(n in blocked) && !(n in refs_of(n))
             ) || continue
-            refs = intersect(refs_of(n), mvars)
-            if any(f -> f in setup, refs) &&
-                    !any(moves, refs)
+            if _anyof(f -> f in setup, intersect(refs_of(n), mvars))
                 push!(setup, n); changed = true
             end
         end
@@ -300,12 +303,10 @@ function _geometry_setup_vars(
             for r in intersect(refs_of(n), mvars)
                 (
                     is_arr_obs(r) && !(r in setup) &&
-                        !(r in tainted) && !(r in blocked) && haskey(defs, r) &&
+                        !(r in tainted) && !(r in dynamic) && !(r in blocked) && haskey(defs, r) &&
                         !(r in refs_of(r)) &&
                         !_is_const_op(defs[r]) && !(defs[r] isa VarExpr)
                 ) || continue
-                rrefs = intersect(refs_of(r), mvars)
-                any(moves, rrefs) && continue
                 push!(setup, r); changed = true
             end
         end

@@ -38,6 +38,18 @@
       "assertion_idx": 6,
       "variable": "s",
       "actual": 0.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "T",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "T",
+      "actual": 4.0
     }
   ]
 }

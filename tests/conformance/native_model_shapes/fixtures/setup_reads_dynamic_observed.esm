@@ -2,7 +2,7 @@
  "esm": "1.2.0",
  "metadata": {
   "name": "setup_reads_dynamic_observed",
-  "description": "An array observed A reads a build-once table C (a nested parameter reduction the native build materializes at setup) and an observed W that reads the state s. None of A's own reads is a state, but W moves with s, so A must stay a run-time observed: built at setup, W would be unbound there ('unbound name W in setup-time geometry'). The state is held fixed (D(s) = 8s - A, with A = 8s), so every value is exact.",
+  "description": "An array observed A reads a build-once table C (a nested parameter reduction the native build materializes at setup) and an observed W that reads the state s. None of A's own reads is a state, but W moves with s, so A must stay a run-time observed: built at setup, W would be unbound there ('unbound name W in setup-time geometry'). The state is held fixed (D(s) = 8s - A, with A = 8s), so every value is exact. T = C*t reads the same table and `t` directly: it must stay a run-time observed too, since built once it would hold its setup-time value.",
   "authors": [
    "EarthSciML Authors and Contributors"
   ],
@@ -60,6 +60,13 @@
      ]
     },
     "A": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "x"
+     ]
+    },
+    "T": {
      "type": "unknown",
      "units": "1",
      "shape": [
@@ -166,6 +173,34 @@
           "i"
          ]
         }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "T",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "C",
+          "i"
+         ]
+        },
+        "t"
        ]
       }
      }
@@ -287,6 +322,22 @@
        "variable": "s",
        "time": 1.0,
        "expected": 0.5,
+       "coords": {
+        "x": 2
+       }
+      },
+      {
+       "variable": "T",
+       "time": 0.5,
+       "expected": 2.0,
+       "coords": {
+        "x": 1
+       }
+      },
+      {
+       "variable": "T",
+       "time": 1.0,
+       "expected": 4.0,
        "coords": {
         "x": 2
        }
