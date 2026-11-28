@@ -5,6 +5,7 @@
  */
 
 import { isExprNode, forEachChild } from '../expression.js'
+import { isInitializationEquation } from '../initialization.js'
 import { isFloatLit, numericValue } from '../numeric-literal.js'
 import { ERROR_CODES } from '../errors.js'
 import { parseUnit, tryParseUnit, dimsEqual, type ParsedUnit } from '../units.js'
@@ -51,8 +52,8 @@ import { CadenceSeeder, CadenceCycleError } from '../cadence.js'
  * algebraic equations and is BALANCED, and reporting "1 ODE equation, 2
  * unknowns" there is a miscount, not a defect found.
  *
- * `initialization_equations` (§6.2) are a SEPARATE block with a separate
- * balance and are not counted here.
+ * Initialization equations (§11.4, an equation that mentions `ic` anywhere)
+ * have the separate balance of §11.4.3 and are not counted here.
  *
  * `missing_equations_for` names the unknowns nothing DEFINES — the residue that
  * preserves the discriminating power of the retired `missing_observed_expr`
@@ -66,13 +67,12 @@ export function validateEquationBalance(model: Model, modelPath: string): Struct
     .filter(([, variable]) => variable.type === 'unknown')
     .map(([name]) => name)
 
-  // INITIAL-CONDITION equations do not constrain the dynamics and are not
-  // counted. An `ic(v)` LHS states v's value at t=0 — the inline spelling of
-  // what `initialization_equations` (§6.2) carries as a separate block, which
-  // §4.9.4 likewise excludes. Counting them made every fixture that seeds its
-  // states inline (model_only.esm, the geometry and initial_conditions
-  // fixtures) look like it had twice the equations it has.
-  const equations = (model.equations || []).filter((equation) => !isInitialCondition(equation.lhs))
+  // INITIALIZATION equations (esm-spec §11.4: every equation that mentions
+  // `ic`, on either side) hold at the start of the run only; they have their
+  // own balance (§11.4.3) and are not counted here (§11.4.4 "Balance").
+  const equations = (model.equations || []).filter(
+    (equation) => !isInitializationEquation(equation),
+  )
 
   if (unknownNames.length === equations.length) return errors
 
@@ -104,11 +104,6 @@ export function validateEquationBalance(model: Model, modelPath: string): Struct
   })
 
   return errors
-}
-
-/** Is this equation LHS an `ic(...)` initial-condition form? */
-function isInitialCondition(lhs: Expression): boolean {
-  return isExprNode(lhs) && lhs.op === 'ic'
 }
 
 /**

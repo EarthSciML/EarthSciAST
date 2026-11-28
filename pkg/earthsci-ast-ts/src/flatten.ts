@@ -29,8 +29,9 @@
  *    is the SOLVED-FOR VECTOR (an implementation axis), not §6.3.1's
  *    classification of the unknowns; a DAE solves for its algebraic unknowns, so
  *    they ride in the vector.
- *  - **`fieldIcs` entries are REMOVED from `equations`.** An initial condition is
- *    a datum, not an equation of motion.
+ *  - **`fieldIcs` and `initializationEquations` entries are REMOVED from
+ *    `equations`.** An initial condition is a datum, not an equation of motion,
+ *    and the other initialization equations hold at the start of the run only.
  *
  * ## Ordering is observable
  *
@@ -67,6 +68,7 @@ import type { Distribution, ParameterUpdateSpec } from './types.js'
 import { numericValue } from './numeric-literal.js'
 import { expandCouplingImports, type CouplingImportOptions } from './coupling-imports.js'
 import { mapChildren } from './expression.js'
+import { explicitInitialCondition, isInitializationEquation } from './initialization.js'
 import {
   forEachParameterUpdate,
   hasUnmountedRefs,
@@ -483,7 +485,8 @@ export interface FlattenedSystem {
   discreteParameters: FlattenedVariableMap
   /**
    * The governing equations — dynamics and constraints — coupling applied,
-   * dot-namespaced. Entries classified out into {@link fieldIcs} are REMOVED.
+   * dot-namespaced. Entries classified out into {@link fieldIcs} or
+   * {@link initializationEquations} are REMOVED.
    */
   equations: FlattenedEquation[]
   /** Continuous events, dot-namespaced. */
@@ -506,8 +509,18 @@ export interface FlattenedSystem {
    * non-deep-equal collisions renamed along the reference DAG.
    */
   templateRegistry: Record<string, unknown>
-  /** Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1). */
+  /**
+   * The explicit initial conditions (esm-spec §11.4.1, §11.4.3): `ic(u) ~ e` or
+   * `e ~ ic(u)`, `e` mentioning no `ic`, as `(state, e)`; at most one per state.
+   */
   fieldIcs: FieldInitialCondition[]
+  /**
+   * Every other initialization equation (esm 2.5.0, esm-spec §11.4.3: one that
+   * mentions `ic`), in document order, namespaced and rewritten as `equations`
+   * are (esm-libraries-spec §4.7.5 step 4). The equations of the initialization
+   * system.
+   */
+  initializationEquations: FlattenedEquation[]
   /** Provider-served loaded fields the system consumes. */
   loaderFields: LoaderField[]
   /**
@@ -2580,6 +2593,7 @@ function assembleSystem(
     indexSets: { ...((file.index_sets ?? {}) as Record<string, unknown>) },
     templateRegistry: {},
     fieldIcs: [],
+    initializationEquations: [],
     loaderFields: [...combined.loaderFields],
     liftedShapes: {},
     systemKind: 'ode',
@@ -2826,13 +2840,16 @@ function classifyFlattened(flat: FlattenedSystem): void {
 }
 
 /**
- * Record the deferred `ic` equations (esm-spec §11.4.1) as ordered
- * `(state, expr)` pairs and REMOVE them from `equations`.
+ * Classify the initialization equations (esm-spec §11.4.3: every equation that
+ * mentions `ic`) out of `equations`: each explicit initial condition into
+ * `fieldIcs` as an ordered `(state, expr)` pair, every other one into
+ * `initializationEquations`.
  *
- * An `ic` equation pins a state's value at t=0 rather than defining its dynamics,
- * so a consumer folds it into `u0` instead of the RHS. Leaving it in `equations`
- * would make that list unusable for building a right-hand side without filtering,
- * and equation counts incomparable across bindings.
+ * An explicit initial condition pins a state's value at t=0 rather than
+ * defining its dynamics, so a consumer folds it into `u0` instead of the RHS;
+ * the others are the equations of the initialization system. Leaving either in
+ * `equations` would make that list unusable for building a right-hand side
+ * without filtering, and equation counts incomparable across bindings.
  *
  * Runs LAST — after the pointwise lift and the independent-variable derivation —
  * so every intermediate pass still sees the equation list it always did and only
@@ -2840,15 +2857,16 @@ function classifyFlattened(flat: FlattenedSystem): void {
  */
 function collectFieldIcs(flat: FlattenedSystem): void {
   const ics: FieldInitialCondition[] = []
+  const system: FlattenedEquation[] = []
   const remaining: FlattenedEquation[] = []
   for (const eq of flat.equations) {
-    const lhs = eq.lhs
-    const target =
-      isNode(lhs) && lhs.op === 'ic' && lhs.args !== undefined && lhs.args.length === 1
-        ? lhs.args[0]
-        : undefined
-    if (typeof target === 'string') ics.push({ state: target, expr: eq.rhs })
-    else remaining.push(eq)
+    if (!isInitializationEquation(eq)) {
+      remaining.push(eq)
+      continue
+    }
+    const explicit = explicitInitialCondition(eq.lhs, eq.rhs)
+    if (explicit !== null) ics.push({ state: explicit.target, expr: explicit.value })
+    else system.push(eq)
   }
   // One initial condition per state (esm-libraries-spec §4.7.5 step 4
   // `field_ics`). Two -- an authored `ic(x)` and an operator's `ic(_var)`
@@ -2868,6 +2886,7 @@ function collectFieldIcs(flat: FlattenedSystem): void {
     )
   }
   flat.fieldIcs = ics
+  flat.initializationEquations = system
   flat.equations = remaining
 }
 
@@ -3807,6 +3826,10 @@ function normalizeFlattenedAngleArguments(flat: FlattenedSystem): void {
 
   flat.equations = flat.equations.map((eq) => mapContributions(eq, rewrite))
   for (const ic of flat.fieldIcs) ic.expr = rewrite(ic.expr)
+  // An initialization equation may read an angle on either side.
+  flat.initializationEquations = flat.initializationEquations.map((eq) =>
+    mapContributions(eq, rewrite, rewrite(eq.lhs)),
+  )
   // Events are rewritten too, although this binding runs no evaluator: the
   // Julia binding exports the flattened form to ModelingToolkit, which does run
   // events, so leaving a `sin(theta [deg])` in an event condition unconverted
