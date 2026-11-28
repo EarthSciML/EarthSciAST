@@ -1166,6 +1166,12 @@ func prepareDocumentOps(jsonStr string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// esm 2.5.0: the deprecated `initialization_equations` block, read as `ic`
+	// equations or `guesses` (esm-spec §11.4.4), and every `ic` argument checked.
+	jsonStr, err = readInitializationEquations(jsonStr)
+	if err != nil {
+		return "", err
+	}
 	rewritten, sites := rewriteDeprecatedOps(jsonStr)
 	warnDeprecatedOps(sites)
 	return rewritten, nil

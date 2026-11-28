@@ -1,6 +1,7 @@
 package esm
 
-// Round-trip coverage for Model-level initialization_equations, guesses,
+// Round-trip coverage for Model-level guesses (and the migrated
+// initialization_equations),
 // and system_kind (gt-ebuq). Exercises ISORROPIA-shape nonlinear equilibrium
 // and Mogi-shape algebraic surface-deformation fixtures.
 
@@ -33,7 +34,10 @@ func TestNonlinearIsorropiaShapeRoundTrip(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, model.SystemKind)
 	assert.Equal(t, "nonlinear", *model.SystemKind)
-	assert.Len(t, model.InitializationEquations, 2)
+	// esm 2.5.0 (esm-spec §11.4.4): a model with no time derivative reads its
+	// deprecated initialization equations as `guesses`; both unknowns already
+	// have one, which is kept.
+	assert.Empty(t, model.InitializationEquations)
 	assert.Len(t, model.Guesses, 2)
 
 	data, err := json.Marshal(parsed)
