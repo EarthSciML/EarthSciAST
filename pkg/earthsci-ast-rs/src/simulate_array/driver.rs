@@ -1416,7 +1416,11 @@ impl ArrayCompiled {
             // A supplied value stands over an explicit initial condition; a
             // triangular step's target is never supplied (the balance refuses
             // that).
-            let keep = if k < self.n_explicit_faqs { all_keep } else { &none };
+            let keep = if k < self.n_explicit_faqs {
+                all_keep
+            } else {
+                &none
+            };
             let rule = format!("init({target})");
             let invalid = |details: String| SimulateError::InvalidFieldInitialCondition {
                 name: rule.clone(),
@@ -1494,7 +1498,9 @@ impl ArrayCompiled {
                         }
                         match v {
                             Value::Scalar(x) => x,
-                            Value::Array(a) if a.len() == 1 => a.iter().copied().next().unwrap_or(0.0),
+                            Value::Array(a) if a.len() == 1 => {
+                                a.iter().copied().next().unwrap_or(0.0)
+                            }
                             Value::Array(_) => {
                                 return Err(invalid(format!(
                                     "the right-hand side is an array, and `{target}` is a scalar"
@@ -2271,7 +2277,8 @@ impl ArrayCompiled {
         &self,
         initial_conditions: &HashMap<String, f64>,
     ) -> Result<(), SimulateError> {
-        if self.init_system.equations.is_empty() && self.init_system.structural_refusal().is_none() {
+        if self.init_system.equations.is_empty() && self.init_system.structural_refusal().is_none()
+        {
             return Ok(());
         }
         let supplied = self.supplied_elements(initial_conditions);
@@ -2284,7 +2291,8 @@ impl ArrayCompiled {
         &self,
         initial_conditions: &HashMap<String, f64>,
     ) -> Result<(), SimulateError> {
-        if self.init_system.equations.is_empty() && self.init_system.structural_refusal().is_none() {
+        if self.init_system.equations.is_empty() && self.init_system.structural_refusal().is_none()
+        {
             return Ok(());
         }
         let canonical = crate::simulate::canonicalize_override_keys(
@@ -2314,7 +2322,8 @@ impl ArrayCompiled {
             else {
                 continue;
             };
-            let Ok(values) = crate::simulate_array::eval_buildtime_values(guess, &self.index_sets, params)
+            let Ok(values) =
+                crate::simulate_array::eval_buildtime_values(guess, &self.index_sets, params)
             else {
                 continue;
             };

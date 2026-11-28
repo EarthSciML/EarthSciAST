@@ -1036,8 +1036,9 @@ impl ArrayCompiled {
         // `faq` over bounded ranges, or under a filter) assigns exactly those
         // cells, as the initialization-equation seed does; the field-`ic` path
         // fills a whole field.
-        let (mut init_faqs, field_ics): (Vec<_>, Vec<_>) =
-            field_ics.into_iter().partition(|(_, rhs)| assigns_some_cells(rhs));
+        let (mut init_faqs, field_ics): (Vec<_>, Vec<_>) = field_ics
+            .into_iter()
+            .partition(|(t, rhs)| assigns_some_cells(rhs, slots.var_shapes.get(t)));
         let n_explicit_faqs = init_faqs.len();
         init_faqs.extend(classify_initialization_equations(model, &array_axes, &ops)?);
 
@@ -3427,17 +3428,26 @@ fn classify_initialization_equations(
     Ok(out)
 }
 
-/// Whether `rhs` is a `faq` with output indices over bounded ranges or under
-/// a filter: one that assigns some cells of its target, not a whole field.
-fn assigns_some_cells(rhs: &Expr) -> bool {
+/// Whether `rhs` is a `faq` with an output index over a range other than the
+/// target's whole extent: one that assigns some cells of its target, not a
+/// whole field.
+fn assigns_some_cells(rhs: &Expr, target: Option<&VarShape>) -> bool {
     let Expr::Operator(node) = rhs else {
         return false;
     };
-    is_cell_assigning_faq(rhs)
-        && (node.filter.is_some()
-            || node.ranges.iter().flatten().any(|(_, r)| {
-                !matches!(r, crate::types::RangeSpec::IndexSetRef { of: None, .. })
-            }))
+    let (Some(vs), true) = (target, is_cell_assigning_faq(rhs)) else {
+        return false;
+    };
+    let out: Vec<&String> = node.output_idx.iter().flatten().collect();
+    if out.len() != vs.shape.len() {
+        return false;
+    }
+    out.iter().enumerate().any(|(d, i)| {
+        match node.ranges.as_ref().and_then(|r| r.get(*i)).and_then(|r| r.bounds()) {
+            Some([lo, hi]) => lo != vs.origin[d] || hi != vs.origin[d] + vs.shape[d] as i64 - 1,
+            None => false,
+        }
+    })
 }
 
 /// Whether `rhs` is a `faq` with output indices: one that assigns the cells
@@ -3483,10 +3493,14 @@ fn align_field_ics(
                             leaves.push(a);
                         }
                     }
-                    Expr::Operator(n) if n.op == "faq" || n.op == "index" || n.op == "makearray" => {
+                    Expr::Operator(n)
+                        if n.op == "faq" || n.op == "index" || n.op == "makearray" =>
+                    {
                         *unknown = true;
                     }
-                    Expr::Operator(n) => n.for_each_child(&mut |c| walk(c, array_axes, leaves, unknown)),
+                    Expr::Operator(n) => {
+                        n.for_each_child(&mut |c| walk(c, array_axes, leaves, unknown))
+                    }
                     _ => {}
                 }
             }

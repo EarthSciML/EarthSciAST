@@ -46,11 +46,22 @@ pub(crate) fn is_initialization_equation(eq: &Equation) -> bool {
     mentions_ic(&eq.lhs) || mentions_ic(&eq.rhs)
 }
 
-/// The target of an explicit initial condition `ic(u) ~ e`, `e` mentioning no
-/// `ic` (esm-spec §11.4.3).
+/// The target of an explicit initial condition `ic(u) ~ e` (or `e ~ ic(u)`),
+/// `e` mentioning no `ic` (esm-spec §11.4.3).
 pub(crate) fn explicit_target(eq: &Equation) -> Option<String> {
-    let t = crate::flatten::extract_ic_target(&eq.lhs)?;
-    (!mentions_ic(&eq.rhs)).then_some(t)
+    explicit_ic(eq).map(|(t, _)| t)
+}
+
+/// An explicit initial condition as `(u, e)`: `ic(u) ~ e`, or the same
+/// written the other way round, `e ~ ic(u)`, `e` mentioning no `ic`.
+pub(crate) fn explicit_ic(eq: &Equation) -> Option<(String, Expr)> {
+    if let Some(t) = crate::flatten::extract_ic_target(&eq.lhs)
+        && !mentions_ic(&eq.rhs)
+    {
+        return Some((t, eq.rhs.clone()));
+    }
+    let t = crate::flatten::extract_ic_target(&eq.rhs)?;
+    (!mentions_ic(&eq.lhs)).then(|| (t, eq.lhs.clone()))
 }
 
 fn ic_node(arg: Expr) -> Expr {
@@ -83,9 +94,7 @@ fn outside_ic(e: &Expr) -> Expr {
 
 fn holds_time_derivative(e: &Expr) -> Option<String> {
     match e {
-        Expr::Operator(n)
-            if n.op == "D" && n.wrt.as_deref().is_none_or(|w| w == "t") =>
-        {
+        Expr::Operator(n) if n.op == "D" && n.wrt.as_deref().is_none_or(|w| w == "t") => {
             Some(match n.args.first() {
                 Some(Expr::Variable(v)) => v.clone(),
                 _ => String::new(),
@@ -166,9 +175,7 @@ impl InitSystem {
                 Expr::Variable(n) if is_observed(n) => {
                     observed_defs.entry(n.clone()).or_insert(eq.rhs.clone());
                 }
-                Expr::Operator(n)
-                    if n.op == "D" && n.wrt.as_deref().is_none_or(|w| w == "t") =>
-                {
+                Expr::Operator(n) if n.op == "D" && n.wrt.as_deref().is_none_or(|w| w == "t") => {
                     if let Some(Expr::Variable(x)) = n.args.first() {
                         tendencies.entry(x.clone()).or_insert(eq.rhs.clone());
                     }
@@ -183,9 +190,7 @@ impl InitSystem {
             match e {
                 Expr::Variable(n) if is_unknown(n) => ic_node(e.clone()),
                 Expr::Operator(n) if n.op == "ic" => e.clone(),
-                Expr::Operator(n)
-                    if n.op == "D" && n.wrt.as_deref().is_none_or(|w| w == "t") =>
-                {
+                Expr::Operator(n) if n.op == "D" && n.wrt.as_deref().is_none_or(|w| w == "t") => {
                     ic_node(e.clone())
                 }
                 Expr::Operator(n) => Expr::operator(n.map_children(&mut |c| wrap(c, is_unknown))),
@@ -208,7 +213,15 @@ impl InitSystem {
             };
             if n.op != "ic" {
                 return Expr::operator(n.map_children(&mut |c| {
-                    expand(c, depth, is_state, is_unknown, observed, tendencies, unsupported)
+                    expand(
+                        c,
+                        depth,
+                        is_state,
+                        is_unknown,
+                        observed,
+                        tendencies,
+                        unsupported,
+                    )
                 }));
             }
             if depth > 64 {
@@ -310,13 +323,23 @@ impl InitSystem {
             let mut mentions = BTreeSet::new();
             ic_states(&lhs, &is_state, &mut mentions);
             ic_states(&rhs, &is_state, &mut mentions);
-            let solved = crate::flatten::extract_ic_target(&eq.lhs)
-                .filter(|u| is_state(u) && !is_observed(u))
-                .filter(|u| {
-                    let mut r = BTreeSet::new();
-                    ic_states(&rhs, &is_state, &mut r);
-                    !r.contains(u)
-                });
+            // `ic(u) ~ e`, or `e ~ ic(u)`, with `e` not reading `ic(u)`.
+            let solved_side = |target_side: &Expr, other: &Expr| {
+                crate::flatten::extract_ic_target(target_side)
+                    .filter(|u| is_state(u) && !is_observed(u))
+                    .filter(|u| {
+                        let mut r = BTreeSet::new();
+                        ic_states(other, &is_state, &mut r);
+                        !r.contains(u)
+                    })
+            };
+            let (solved, value, raw_value) = match solved_side(&eq.lhs, &rhs) {
+                Some(u) => (Some(u), rhs.clone(), &eq.rhs),
+                None => match solved_side(&eq.rhs, &lhs) {
+                    Some(u) => (Some(u), lhs.clone(), &eq.lhs),
+                    None => (None, rhs.clone(), &eq.rhs),
+                },
+            };
             for m in &mentions {
                 if !sys.extents.contains_key(m)
                     && let Some(ext) = state_extents(flat, m)
@@ -325,7 +348,7 @@ impl InitSystem {
                 }
             }
             let n_scalar = match &solved {
-                Some(u) => faq_box(&eq.rhs).unwrap_or_else(|| {
+                Some(u) => faq_box(raw_value).unwrap_or_else(|| {
                     sys.extents
                         .get(u)
                         .map_or(1, |e| e.iter().product::<usize>().max(1))
@@ -337,7 +360,7 @@ impl InitSystem {
             sys.equations.push(SystemEquation {
                 equation: eq.clone(),
                 origin: origin_of(k),
-                eval_rhs: solved.as_ref().map(|_| strip_ic(&rhs)),
+                eval_rhs: solved.as_ref().map(|_| strip_ic(&value)),
                 target: solved,
                 mentions,
                 n_scalar,
@@ -361,11 +384,7 @@ impl InitSystem {
     /// Order the solved equations by dependency; everything else is the
     /// implicit part.
     fn order_equations(&mut self) {
-        let explicit_full = |w: &str| {
-            self.explicit
-                .get(w)
-                .is_some_and(|m| m.iter().all(|&b| b))
-        };
+        let explicit_full = |w: &str| self.explicit.get(w).is_some_and(|m| m.iter().all(|&b| b));
         let solved: Vec<usize> = (0..self.equations.len())
             .filter(|&k| self.equations[k].target.is_some())
             .collect();
@@ -377,12 +396,7 @@ impl InitSystem {
         let mut implicit_vars: HashSet<String> = HashSet::new();
         for e in &self.equations {
             if e.target.is_none() {
-                implicit_vars.extend(
-                    e.mentions
-                        .iter()
-                        .filter(|w| !explicit_full(w))
-                        .cloned(),
-                );
+                implicit_vars.extend(e.mentions.iter().filter(|w| !explicit_full(w)).cloned());
             }
         }
         let mut done_targets: HashSet<String> = HashSet::new();
@@ -494,7 +508,10 @@ impl InitSystem {
 
     /// The balance of §11.4.3: as many scalar equations as scalar unknowns,
     /// and an assignment of a distinct equation to every unknown.
-    pub(crate) fn balance(&self, supplied: &HashMap<String, Vec<usize>>) -> Result<(), SimulateError> {
+    pub(crate) fn balance(
+        &self,
+        supplied: &HashMap<String, Vec<usize>>,
+    ) -> Result<(), SimulateError> {
         if self.equations.is_empty() {
             return Ok(());
         }
@@ -542,8 +559,11 @@ impl InitSystem {
         let (src, sink) = (0usize, 1 + ne + nv);
         let n_nodes = sink + 1;
         let mut cap = vec![vec![0usize; n_nodes]; n_nodes];
-        let var_ix: HashMap<&str, usize> =
-            vars.iter().enumerate().map(|(i, w)| (w.as_str(), 1 + ne + i)).collect();
+        let var_ix: HashMap<&str, usize> = vars
+            .iter()
+            .enumerate()
+            .map(|(i, w)| (w.as_str(), 1 + ne + i))
+            .collect();
         for (k, e) in self.equations.iter().enumerate() {
             cap[src][1 + k] = e.n_scalar;
             for w in &e.mentions {
@@ -652,11 +672,13 @@ impl SimulateError {
                 construct,
                 evaluator,
                 detail,
-            }) => SimulateError::Compile(crate::compile_error::CompileError::UnsupportedConstruct {
-                construct,
-                evaluator,
-                detail: detail.clone(),
-            }),
+            }) => {
+                SimulateError::Compile(crate::compile_error::CompileError::UnsupportedConstruct {
+                    construct,
+                    evaluator,
+                    detail: detail.clone(),
+                })
+            }
             other => SimulateError::IcSystemUnbalanced {
                 details: other.to_string(),
             },
@@ -671,9 +693,8 @@ fn trajectory_read(
     is_state: &dyn Fn(&str) -> bool,
     observed_defs: &HashMap<String, Expr>,
 ) -> Option<SimulateError> {
-    let name = crate::flatten::extract_ic_target(&eq.lhs).unwrap_or_else(|| {
-        format!("{} ~ {}", eq.lhs, eq.rhs)
-    });
+    let name = crate::flatten::extract_ic_target(&eq.lhs)
+        .unwrap_or_else(|| format!("{} ~ {}", eq.lhs, eq.rhs));
     let shown = format!("`{} ~ {}`", eq.lhs, eq.rhs);
     for side in [&eq.lhs, &eq.rhs] {
         let out = outside_ic(side);

@@ -325,8 +325,7 @@ pub(crate) fn has_old_spellings(doc: &Value) -> bool {
                 k == "expression_templates"
                     || k == "expression_template_imports"
                     || k == "initialization_equations"
-            })
-            {
+            }) {
                 return true;
             }
             if let Some(op) = map.get("op").and_then(Value::as_str) {

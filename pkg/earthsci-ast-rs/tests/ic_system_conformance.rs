@@ -14,8 +14,8 @@
 use std::collections::HashMap;
 
 use earthsci_ast::{
-    Compiler, ProblemOptions, SolveOptions, StripSet, esm_problem, initial_state, load_path,
-    solve, stripped, to_json, validate,
+    Compiler, ProblemOptions, SolveOptions, StripSet, esm_problem, initial_state, load_path, solve,
+    stripped, to_json, validate,
 };
 use serde_json::Value;
 
@@ -229,9 +229,7 @@ fn ic_system_loads() {
                 failures.push(format!("{id}: {} equations", eqs.len()));
             } else {
                 for (got, want) in eqs[eqs.len() - tail.len()..].iter().zip(tail) {
-                    let pick = |v: &Value| {
-                        serde_json::json!({"lhs": v["lhs"].clone(), "rhs": v["rhs"].clone()})
-                    };
+                    let pick = |v: &Value| serde_json::json!({"lhs": v["lhs"].clone(), "rhs": v["rhs"].clone()});
                     if !same(&pick(got), &pick(want)) {
                         failures.push(format!("{id}: equation {got}, expected {want}"));
                     }

@@ -493,7 +493,9 @@ pub fn migrate_initialization_equations(doc: &mut Value) {
                 for (k, v) in m {
                     let nv = match k.as_str() {
                         "args" | "expr" | "filter" | "values" => match v {
-                            Value::Array(a) => Value::Array(a.iter().map(|x| wrap(x, unknown)).collect()),
+                            Value::Array(a) => {
+                                Value::Array(a.iter().map(|x| wrap(x, unknown)).collect())
+                            }
                             other => wrap(other, unknown),
                         },
                         _ => v.clone(),
@@ -520,7 +522,10 @@ pub fn migrate_initialization_equations(doc: &mut Value) {
         }
         let vars = o.get("variables").cloned().unwrap_or(Value::Null);
         let unknown = |n: &str| {
-            vars.get(n).and_then(|v| v.get("type")).and_then(Value::as_str) == Some("unknown")
+            vars.get(n)
+                .and_then(|v| v.get("type"))
+                .and_then(Value::as_str)
+                == Some("unknown")
         };
         let time = o
             .get("equations")
