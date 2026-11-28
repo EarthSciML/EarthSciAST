@@ -1657,6 +1657,49 @@ end
     end
 end
 
+# An observed of `t` declared with no shape and defined whole by an array `faq`
+# over an interval (the planner's derivative observeds, `_dt_x = faq{…}` over
+# `[1, n]`), where another index set has the same extent: its axis is the set
+# the body reads the output index along, so the lane program computes it per
+# lane, and lanes at their own times equal the whole-domain program bit for
+# bit (the Rust test `an_interval_faq_observed_takes_the_set_its_body_reads`).
+@testset "an interval faq observed of t takes the set its body reads" begin
+    ix(v, i...) = Dict("op" => "index", "args" => Any[v, i...])
+    op(o, a...) = Dict("op" => o, "args" => Any[a...])
+    faq(outs, ranges, e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any[outs...], "ranges" => ranges, "expr" => e
+    )
+    n = 5
+    xr = Dict("i" => Dict("from" => "x"))
+    sets = Dict("x" => n, "w" => n)
+    vars = Dict(
+        "u" => Dict("type" => "unknown", "units" => "1", "shape" => ["x"], "default" => 1.0),
+        "s" => Dict("type" => "unknown", "units" => "1", "shape" => ["x"]),
+        "g" => Dict("type" => "unknown", "units" => "1")
+    )
+    prob = _rrt_doc_of(
+        "lanedt", sets, vars, Any[
+            Dict("lhs" => "s", "rhs" => faq(["i"], xr, op("cos", op("+", "t", "i")))),
+            Dict("lhs" => "g", "rhs" => faq(["r"], Dict("r" => Any[1, n]), op("*", 2.0, ix("s", "r")))),
+            Dict(
+                "lhs" => Dict(
+                    "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => xr,
+                    "expr" => Dict("op" => "D", "args" => Any[ix("u", "i")], "wrt" => "t")
+                ),
+                "rhs" => faq(["i"], xr, op("*", ix("g", "i"), ix("u", "i")))
+            ),
+        ]
+    )
+    @test isempty(lanes(rhs_program(prob), :cells, ["x"]; chunk = 4).tshared)
+    tsf(l) = (0.25, 3.0, 0.75)[l]
+    for f in (nothing, tsf), gth in (false, true)
+        compared, differ = _rrt_lanes_vs_whole(
+            prob, :cells, ["x"], Dict("M.u" => ["x"]), sets; tsf = f, gathered = gth
+        )
+        @test compared == n && differ == 0
+    end
+end
+
 _rrt_lane_allocated(du, lp, ws, u, aux, p, t, x, cells, n) =
     @allocated rhs!(du, lp, ws, u, aux, p, t, x, cells, n)
 _rrt_gather_allocated(li, lp, p, fs, cells, n) =

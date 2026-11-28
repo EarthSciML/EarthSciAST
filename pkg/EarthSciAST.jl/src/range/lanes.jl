@@ -1476,10 +1476,136 @@ end
 # ---------------------------------------------------------------------------
 # A time per lane (U19): 0-d observeds of `t` computed per lane.
 
-_range_promote_model(spec, model) = model
+_range_promote_model(spec, model, index_sets = nothing) = model
 
 """
-    _range_promote_model(spec::_LaneSpec, model) -> model
+    _range_name_faq_axes(spec::_LaneSpec, model, index_sets) -> model
+
+An observed declared with no shape whose definition is an array `faq` over
+intervals `[1, n]` (the planner's derivative observeds, `_dt_x`) takes, at
+shape promotion, an anonymous interval index set per axis (`x__r`), which no
+lane set is. In a lane build each such axis takes instead the index set the
+`faq` body reads its output index along (as a subscript of a variable whose
+axes are known), of the same extent, else the one program index set of that
+extent; when every axis has one, they become the observed's shape and its
+`faq`'s ranges, so one along a lane set is computed per lane (and, when it
+depends on `t`, at each lane's own time) like a declared array observed. The
+extents are unchanged, so the values are: a lane equals the whole-domain
+program at its cell bit for bit.
+"""
+function _range_name_faq_axes(spec::_LaneSpec, model, index_sets)
+    named(s) = haskey(spec.ext, s)
+    function extent(s)
+        named(s) && return spec.ext[s]
+        is = get(index_sets, s, nothing)
+        return is isa IndexSet && is.size !== nothing ? Int(is.size) : nothing
+    end
+    axes = Dict{String, Vector{String}}()
+    for (n, v) in model.variables
+        _is_array_shape(v.shape) && all(named, v.shape) && (axes[n] = String[v.shape...])
+    end
+    found = Dict{String, Tuple{Vector{String}, OpExpr}}()
+    grew = true
+    while grew
+        grew = false
+        for eq in model.equations
+            eq.lhs isa VarExpr || continue
+            n = (eq.lhs::VarExpr).name
+            (haskey(axes, n) || !haskey(model.variables, n)) && continue
+            r = _range_faq_output_sets(spec, eq.rhs, axes, extent)
+            r === nothing && continue
+            axes[n] = r[1]
+            found[n] = r
+            grew = true
+        end
+    end
+    isempty(found) && return model
+    vars = copy(model.variables)
+    for (n, (sh, _)) in found
+        vars[n] = reconstruct(model.variables[n]; shape = sh)
+    end
+    eqs = Equation[
+        (eq.lhs isa VarExpr && haskey(found, (eq.lhs::VarExpr).name)) ?
+            Equation(eq.lhs, found[(eq.lhs::VarExpr).name][2]; _comment = eq._comment) : eq
+            for eq in model.equations
+    ]
+    return reconstruct(model; variables = vars, equations = eqs)
+end
+
+# The index set of each output axis of the array `faq` `body` and the `faq`
+# ranging over them, or `nothing` when `body` is no array `faq` or an axis
+# has no such set (`_range_name_faq_axes`).
+function _range_faq_output_sets(spec::_LaneSpec, body, axes, extent)
+    (body isa OpExpr && _is_faq_op((body::OpExpr).op)) || return nothing
+    F = body::OpExpr
+    outs = _output_idx_strings(F)
+    (isempty(outs) || length(outs) != length(F.output_idx)) && return nothing
+    rd = _ranges_dict(F)
+    sets = String[]
+    newr = Dict{String, Any}(rd)
+    for o in outs
+        r = get(rd, o, nothing)
+        r === nothing && return nothing
+        set = _lane_range_set(r)
+        set !== nothing && haskey(spec.ext, set) && (push!(sets, set); continue)
+        hi = if set !== nothing
+            extent(set)
+        elseif r isa AbstractVector && length(r) == 2 && _lane_int(r[1]) == 1
+            _lane_int(r[2])
+        else
+            nothing
+        end
+        hi === nothing && return nothing
+        read = Set{String}()
+        F.expr_body === nothing || _range_subscript_sets!(read, F.expr_body, o, axes)
+        cand = sort!([s for s in read if get(spec.ext, s, -1) == hi])
+        isempty(cand) && (cand = sort!([s for (s, m) in spec.ext if m == hi]))
+        length(cand) == 1 || return nothing
+        push!(sets, cand[1])
+        newr[o] = IndexSetRef(cand[1])
+    end
+    return sets, reconstruct(F; ranges = newr)
+end
+
+# The index sets `e` reads the loop symbol `o` along: the axis of each
+# `index(v, …)` subscript that is `o` itself, `v` a variable with known axes.
+# A nested binder of `o` hides it.
+function _range_subscript_sets!(out::Set{String}, e, o::String, axes)
+    e isa OpExpr || return out
+    E = e::OpExpr
+    E.ranges !== nothing && haskey(E.ranges, o) && return out
+    if E.op == "index" && !isempty(E.args) && E.args[1] isa VarExpr
+        a = get(axes, (E.args[1]::VarExpr).name, nothing)
+        if a !== nothing
+            for (d, x) in enumerate(E.args[2:end])
+                (x isa VarExpr && (x::VarExpr).name == o && d <= length(a)) && push!(out, a[d])
+            end
+        end
+    elseif E.op == "index" && !isempty(E.args) && E.args[1] isa OpExpr &&
+            _is_faq_op((E.args[1]::OpExpr).op)
+        # An array `faq` read at `o` (the lifted form `index(faq{r…}, o…)`):
+        # `o` runs along what the `faq` body reads its output index along.
+        G = E.args[1]::OpExpr
+        gouts = _output_idx_strings(G)
+        for (d, x) in enumerate(E.args[2:end])
+            (x isa VarExpr && (x::VarExpr).name == o && d <= length(gouts)) || continue
+            set = _lane_range_set(get(_ranges_dict(G), gouts[d], nothing))
+            set === nothing || push!(out, set)
+            G.expr_body === nothing || _range_subscript_sets!(out, G.expr_body, gouts[d], axes)
+        end
+    end
+    for c in E.args
+        _range_subscript_sets!(out, c, o, axes)
+    end
+    for c in (E.lower, E.upper, E.expr_body, E.filter)
+        c === nothing || _range_subscript_sets!(out, c, o, axes)
+    end
+    E.values === nothing || foreach(c -> _range_subscript_sets!(out, c, o, axes), E.values)
+    return out
+end
+
+"""
+    _range_promote_model(spec::_LaneSpec, model, index_sets) -> model
 
 Before a lane build classifies its variables: every 0-d observed that depends
 on `t` (through any observeds) becomes one value per lane, an array observed
@@ -1495,7 +1621,8 @@ It, and every array observed with no lane set that depends on `t`, is
 evaluated once per call at one time; they are recorded in `spec.tshared`
 (those the state equations read), and a call at mixed times refuses them.
 """
-function _range_promote_model(spec::_LaneSpec, model)
+function _range_promote_model(spec::_LaneSpec, model, index_sets = Dict{String, IndexSet}())
+    model = _range_name_faq_axes(spec, model, index_sets)
     spec.tbuf === nothing && return model
     defs = Dict{String, ASTExpr}()
     for eq in model.equations
