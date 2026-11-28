@@ -595,6 +595,39 @@
    "note": "a full u0 is not refused for naming the algebraic y; it is y's warm start"
   },
   {
+   "id": "algebraic_ic_faq_and_broadcast",
+   "fixture": "fixtures/algebraic_ic.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [
+    "algebraic"
+   ],
+   "expected": {
+    "A.x": 1.0
+   },
+   "stripped": {
+    "algebraic_z0": [
+     0.9,
+     0.8,
+     0.9,
+     0.8,
+     0.9,
+     0.8,
+     0.9,
+     0.8,
+     0.9,
+     0.8,
+     0.9,
+     0.8
+    ]
+   },
+   "note": "z = [aw, bw] (arrays by sorted name, each column-major over [lev, bin]); aw from ic(aw) ~ faq(aw0[k]), bw from the bare ic(bw) ~ aw0 repeated along bin; both evaluated under compiler native (Julia: no interpreter fallback)"
+  },
+  {
    "id": "dae_guess",
    "fixture": "fixtures/dae_u0.esm",
    "tspan": [

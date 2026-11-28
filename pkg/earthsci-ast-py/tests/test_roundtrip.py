@@ -473,7 +473,10 @@ def test_roundtrip_typed_test_assertion():
 
 
 def test_roundtrip_nonlinear_isorropia_shape():
-    """Round-trip fixture for Model.initialization_equations + guesses + system_kind (gt-ebuq)."""
+    """Round-trip fixture for guesses + system_kind (gt-ebuq). The model has no
+    time derivative, so the loader reads its deprecated
+    ``initialization_equations`` as ``guesses`` entries; both already have one,
+    which is kept (esm-spec §11.4.4)."""
     fixture = VALID_DIR / "nonlinear_isorropia_shape.esm"
     original_text = fixture.read_text()
     first = load_string(original_text)
@@ -482,7 +485,7 @@ def test_roundtrip_nonlinear_isorropia_shape():
 
     model = first.models["IsorropiaEq"]
     assert model.system_kind == "nonlinear"
-    assert len(model.initialization_equations) == 2
+    assert model.initialization_equations == []
     assert set(model.guesses.keys()) == {"H", "SO4"}
 
 

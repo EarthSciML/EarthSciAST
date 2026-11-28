@@ -313,10 +313,22 @@ def _build_scalar_rhs(
                 kind="state",
             )
         )
+    y0 = np.array(y0_list, dtype=float)
+    if flat.initialization_equations:
+        _apply_scalar_initialization_system(
+            flat,
+            y0,
+            state_names,
+            eq_ics,
+            initial_conditions,
+            ode,
+            dict(zip(compiled.parameter_names, param_values)),
+            float(t0),
+            unset,
+        )
     if unset:
         # esm-spec §11.4: an unknown with no starting value.
         raise MissingInitialValueError(unset)
-    y0 = np.array(y0_list)
 
     # Override y0 for algebraic states so the t=0 sample is consistent.
     algebraic_vector_func = compiled.algebraic_vector_func
@@ -511,3 +523,65 @@ def _simulate_scalar(
         raise
     except Exception as e:
         return _failure_result(f"Simulation failed: {e}", retcode=_retcode_for_error(e))
+
+
+def _apply_scalar_initialization_system(
+    flat: FlattenedSystem,
+    y0: np.ndarray,
+    state_names: list[str],
+    eq_ics: dict[str, float],
+    initial_conditions: dict[str, Any],
+    ode: set[str],
+    params: dict[str, float],
+    t0: float,
+    unset: list[str],
+) -> None:
+    """The initialization system (esm-spec §11.4.3) on the scalar pathway:
+    its triangular part evaluated in dependency order over ``y0``, which holds
+    the defaults, the explicit initial conditions and the supplied values; a
+    truly implicit part is refused (this pathway takes no ``strip``)."""
+    from .init_system import plan_initialization, starting_values_as_states
+    from .simulation_array import _eval_buildtime_field, _ic_observed_definitions
+
+    layout = {n: slice(i, i + 1) for i, n in enumerate(state_names)}
+    known = {layout[n].start for n in eq_ics if n in layout}
+    supplied: dict[str, list[int]] = {}
+    for name in state_names:
+        raw = resolve_override_raw(
+            name,
+            initial_conditions,
+            None,
+            known=set(flat.state_variables),
+            namespaces=flat_namespace_scope(flat),
+            surface="initial_conditions",
+            kind="state",
+        )
+        if raw is not None and name in ode:
+            supplied[name] = [layout[name].start]
+            known.add(layout[name].start)
+    definitions, _ = _ic_observed_definitions(flat)
+    plan = plan_initialization(
+        flat,
+        shapes={},
+        state_layout=layout,
+        known=known,
+        supplied=supplied,
+        observed_defs={n: r[0] for n, r in definitions.items() if len(r) == 1},
+        var_axes={},
+        strip=False,
+    )
+    for target, rhs, _cells in plan.steps:
+        scope = dict(params)
+        scope.update({n: float(y0[i]) for i, n in enumerate(state_names)})
+        value = np.asarray(
+            _eval_buildtime_field(
+                starting_values_as_states(rhs),
+                index_sets=flat.index_sets,
+                param_values=scope,
+                t=t0,
+            ),
+            dtype=float,
+        )
+        y0[layout[target].start] = float(value.reshape(-1)[0])
+        if target in unset:
+            unset.remove(target)

@@ -190,8 +190,14 @@ def _variables(model: Any) -> dict[str, Any]:
 
 
 def _equations(model: Any) -> list:
+    """The model's equations that are not initialization equations: an
+    equation that mentions ``ic`` anywhere holds at ``t0`` only (esm-spec
+    §11.4.3) and takes no part in classification (§6.3.1) or the main balance
+    (§4.9.4)."""
     equations = _field(model, "equations", []) or []
-    return list(equations) if isinstance(equations, (list, tuple)) else []
+    if not isinstance(equations, (list, tuple)):
+        return []
+    return [eq for eq in equations if not is_initial_condition(eq)]
 
 
 def _var_type(var: Any) -> str | None:
@@ -305,10 +311,18 @@ def _rhs(equation: Any) -> Any:
     return _field(equation, "rhs")
 
 
+def mentions_ic(expr: Any) -> bool:
+    """Whether ``expr`` (dict or :class:`ExprNode` spelling) has an ``ic`` node
+    anywhere."""
+    return any(_op(node) == "ic" for node in walk(expr))
+
+
 def is_initial_condition(equation: Any) -> bool:
-    """True for an ``ic(x) ~ v`` equation. An initial condition pins a value at
-    t=0; it neither defines an unknown nor participates in the §4.9.4 balance."""
-    return _op(_lhs(equation)) == "ic"
+    """True for an INITIALIZATION equation: one that mentions ``ic`` anywhere in
+    either side (esm 2.5.0, esm-spec §11.4.3) — ``ic(x) ~ v``, and also
+    ``ic(x) + ic(y) ~ total``. It holds at ``t0`` only; it neither defines an
+    unknown nor participates in the §4.9.4 balance."""
+    return mentions_ic(_lhs(equation)) or mentions_ic(_rhs(equation))
 
 
 def ode_states(model: Any) -> list[str]:

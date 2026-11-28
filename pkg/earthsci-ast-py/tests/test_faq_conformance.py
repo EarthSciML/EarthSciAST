@@ -345,7 +345,7 @@ def _template_from_param_variants() -> dict[str, tuple[dict, str]]:
 
     return {
         "wrapper": (wrapper, "/models/M/equations/0/rhs"),
-        "initialization_equation": (init, "/models/M/initialization_equations/0/rhs"),
+        "initialization_equation": (init, "/models/M/equations/1/rhs"),
         "subsystem": (sub, "/models/M/subsystems/Sub/equations/0/rhs"),
     }
 

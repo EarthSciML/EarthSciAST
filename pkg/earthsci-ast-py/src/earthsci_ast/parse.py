@@ -111,6 +111,7 @@ from .esm_types import (
     VariableMapCoupling,
     _sum_entries,
 )
+from .ic_migration import check_ic_arguments, migrate_initialization_equations
 from .json_walk import ExpressionTemplateError, decode_document, expand_ref_env, read_ref_text
 from .precision import _omitted_precision
 
@@ -4173,14 +4174,31 @@ def rewrite_old_spellings(data: object) -> tuple[list[str], list[str]]:
     return fsites, osites
 
 
-def _warn_old_spellings(fsites: list[str], osites: list[str]) -> None:
+def _warn_old_spellings(
+    fsites: list[str], osites: list[str], isites: list[str] | tuple[str, ...] = ()
+) -> None:
     """One ``deprecated_field`` and one ``deprecated_op`` warning per document,
-    each naming every site it read."""
-    if fsites:
+    each naming every site it read. ``isites`` are the models whose deprecated
+    ``initialization_equations`` block was rewritten (esm-spec §11.4.4)."""
+    if fsites or isites:
+        parts = []
+        if fsites:
+            parts.append(
+                "the fields `expression_templates` and `expression_template_imports` are "
+                "read as `operators` and `operator_imports` (esm 2.4.0, esm-spec §9.6.12)"
+            )
+        if isites:
+            parts.append(
+                "`initialization_equations` is rewritten into `ic` equations in `equations` "
+                "(every unknown w read as ic(w), every D(w) as ic(D(w))), or into `guesses` "
+                "for a model with no time derivative (esm 2.5.0, esm-spec §11.4.4)"
+            )
         warnings.warn(
-            f"{DEPRECATED_FIELD}: the fields `expression_templates` and "
-            "`expression_template_imports` are read as `operators` and "
-            "`operator_imports` (esm 2.4.0, esm-spec §9.6.12). Read at: " + ", ".join(fsites) + ".",
+            f"{DEPRECATED_FIELD}: "
+            + "; ".join(parts)
+            + ". Read at: "
+            + ", ".join([*fsites, *isites])
+            + ".",
             EsmDeprecationWarning,
             stacklevel=4,
         )
@@ -4196,7 +4214,11 @@ def _warn_old_spellings(fsites: list[str], osites: list[str]) -> None:
 
 def _has_old_spellings(x: object) -> bool:
     if isinstance(x, dict):
-        if "expression_templates" in x or "expression_template_imports" in x:
+        if (
+            "expression_templates" in x
+            or "expression_template_imports" in x
+            or "initialization_equations" in x
+        ):
             return True
         op = x.get("op")
         if isinstance(op, str):
@@ -4221,7 +4243,8 @@ def wire_old_spellings(raw: Any) -> Any:
     if not isinstance(raw, dict) or not _has_old_spellings(raw):
         return raw
     doc = copy.deepcopy(raw)
-    _warn_old_spellings(*rewrite_old_spellings(doc))
+    fsites, osites = rewrite_old_spellings(doc)
+    _warn_old_spellings(fsites, osites, migrate_initialization_equations(doc))
     return doc
 
 
@@ -4352,7 +4375,13 @@ def prepare_document_ops(data: object) -> None:
     See ``docs/content/rfcs/faq-node-rename.md``.
     """
     reject_removed_constructs(data)
-    _warn_old_spellings(*rewrite_old_spellings(data))
+    fsites, osites = rewrite_old_spellings(data)
+    # esm 2.5.0 (esm-spec §11.4.4): a deprecated `initialization_equations`
+    # block is rewritten into `ic` equations (or `guesses`), after the op
+    # spellings so a spatial `D` is already `partial`.
+    isites = migrate_initialization_equations(data)
+    _warn_old_spellings(fsites, osites, isites)
+    check_ic_arguments(data)
     _warn_deprecated_ops(rewrite_deprecated_ops(data))
     _warn_deprecated_system_kind(deprecated_system_kind_sites(data))
     faq_at = _find_op(data, "faq")
