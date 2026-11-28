@@ -1386,8 +1386,7 @@ fn strip_and_build(
             }
         }
         params.insert("t".to_string(), tspan.0);
-        constructs.z0 =
-            crate::strip::z_starting_values(&flat, &constructs.z_layout, &params, &u0);
+        constructs.z0 = crate::strip::z_starting_values(&flat, &constructs.z_layout, &params, &u0);
         // The Problem holds each `z` unknown at its warm start (explicit `ic`,
         // then the caller's `u0`, then `guesses`, then the default), built by
         // the same evaluator as every initial condition; read it there.
@@ -2779,6 +2778,12 @@ fn refuse_reference_integrity_errors(file: &EsmFile) -> Result<(), SimulateError
         // (esm-spec §6.6); the build does not evaluate them.
         BUILD_REFUSED_VALIDATION_CODES.contains(&e.code.to_string().as_str())
             && !e.path.contains("/tests/")
+            // A free name in an explicit initial condition's right-hand side
+            // may be a provider-served field (esm-spec §11.4, "externally
+            // supplied field"), which the field-`ic` resolution refuses by
+            // name when no provider serves it. `validate` still reports it.
+            && !(e.code.to_string() == "undefined_variable"
+                && explicit_ic_rhs_at(file, &e.path))
     }) {
         let named = declared_name_at(&e.path)
             .map(|n| format!(" (variable '{n}')"))
@@ -2791,6 +2796,36 @@ fn refuse_reference_integrity_errors(file: &EsmFile) -> Result<(), SimulateError
         ));
     }
     Ok(())
+}
+
+/// Whether `pointer` sits in the right-hand side of an explicit initial
+/// condition `ic(u) ~ e` of a model (or subsystem) of `file`.
+fn explicit_ic_rhs_at(file: &EsmFile, pointer: &str) -> bool {
+    let segs: Vec<&str> = pointer.trim_start_matches('/').split('/').collect();
+    if segs.first() != Some(&"models") || segs.len() < 5 {
+        return false;
+    }
+    let Some(mut model) = file.models.as_ref().and_then(|m| m.get(segs[1])) else {
+        return false;
+    };
+    let mut i = 2;
+    while segs.get(i) == Some(&"subsystems") {
+        let Some(sub) = segs
+            .get(i + 1)
+            .and_then(|k| model.inline_subsystems().find(|(n, _)| n.as_str() == *k))
+        else {
+            return false;
+        };
+        model = sub.1;
+        i += 2;
+    }
+    if segs.get(i) != Some(&"equations") || segs.get(i + 2) != Some(&"rhs") {
+        return false;
+    }
+    segs.get(i + 1)
+        .and_then(|k| k.parse::<usize>().ok())
+        .and_then(|k| model.equations.get(k))
+        .is_some_and(|eq| crate::initialization::explicit_target(eq).is_some())
 }
 
 /// The full name of the variable a validator pointer sits under —

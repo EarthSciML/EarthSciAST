@@ -102,9 +102,9 @@ pub(crate) mod edit;
 pub(crate) mod elementwise_lift;
 pub(crate) mod error;
 pub(crate) mod faq;
-pub(crate) mod old_spellings;
 pub(crate) mod ic_migration;
 pub(crate) mod initialization;
+pub(crate) mod old_spellings;
 // The tier-2 EXTENSION SEAM (API_SPEC.md §3): the one deliberately-named place
 // where a Rust-only internal is handed to a caller. Everything reachable from
 // outside this crate is either a root `pub use` above/below (the stable tier,
@@ -430,8 +430,8 @@ pub use simulate_array::range::{
     Kernel, KernelBlock, KernelOutput, KernelSet, KernelSpec, KernelWorkspace, compile_kernels,
 };
 pub use strip::{
-    EventKind, StripSet, StrippedConstructs, StrippedEvent, StrippedInitialization, StrippedResidual, StrippedUpdate,
-    ZBlock,
+    EventKind, StripSet, StrippedConstructs, StrippedEvent, StrippedInitialization,
+    StrippedResidual, StrippedUpdate, ZBlock,
 };
 pub use units::{
     Dimension, EquationDimensionVerdict, ExactScale, Rational, ScaleFactor, UNIT_FINDING_ANALYSIS,
@@ -451,7 +451,7 @@ pub const LIBRARY_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// version in `esm-schema.json`'s `$id` / esm-spec.md; the
 /// `schema_version_matches_bundled_schema` test enforces it, and
 /// `parse::library_version()` (major-compat gating) derives from it.
-pub const SCHEMA_VERSION: &str = "2.4.0";
+pub const SCHEMA_VERSION: &str = "2.5.0";
 
 #[cfg(test)]
 mod version_tests {

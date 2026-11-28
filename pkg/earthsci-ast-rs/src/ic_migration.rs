@@ -87,7 +87,9 @@ fn migrate_model(
         other => {
             return Err(err(
                 codes::DEPRECATED_FIELD,
-                format!("{ptr}/initialization_equations: expected a list of equations, got {other}"),
+                format!(
+                    "{ptr}/initialization_equations: expected a list of equations, got {other}"
+                ),
             ));
         }
     };
@@ -271,7 +273,11 @@ fn names_unknown(name: &str, model: &Value, root: &Value) -> bool {
 /// code, which no loader read) in the form the loader gives them: `ic`
 /// equations, for a model with a time derivative. Empty otherwise.
 pub(crate) fn typed_initialization_equations(model: &crate::Model) -> Vec<crate::Equation> {
-    let Some(eqs) = model.initialization_equations.as_ref().filter(|e| !e.is_empty()) else {
+    let Some(eqs) = model
+        .initialization_equations
+        .as_ref()
+        .filter(|e| !e.is_empty())
+    else {
         return Vec::new();
     };
     let has_d = model.equations.iter().any(|e| {
@@ -321,9 +327,9 @@ pub(crate) fn check_ic_node(map: &Map<String, Value>, at: &str) -> Result<(), Di
         return Ok(());
     }
     Err(err(
-        codes::UNSUPPORTED_CONSTRUCT,
+        codes::IC_INVALID_ARGUMENT,
         format!(
-            "unsupported_construct: {at}: malformed `ic`: its one argument must be a variable reference or `D` of one \
+            "ic_invalid_argument: {at}: malformed `ic`: its one argument must be a variable reference or `D` of one \
              (esm-spec §4.2); an element's starting value is written `index(ic(u), i)`, not \
              `ic(index(u, i))`"
         ),
@@ -338,13 +344,13 @@ mod tests {
     #[test]
     fn unknowns_are_wrapped_and_parameters_kept() {
         let mut doc = json!({"models": {"M": {
-            "variables": {"x": {"type": "unknown"}, "v": {"type": "unknown", "shape": ["n"]},
-                          "k": {"type": "parameter"}},
-            "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "k"}],
-            "initialization_equations": [
-                {"lhs": "x", "rhs": {"op": "index", "args": ["v", "i"]}},
-                {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": 0}
-            ]}}});
+        "variables": {"x": {"type": "unknown"}, "v": {"type": "unknown", "shape": ["n"]},
+                      "k": {"type": "parameter"}},
+        "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "k"}],
+        "initialization_equations": [
+            {"lhs": "x", "rhs": {"op": "index", "args": ["v", "i"]}},
+            {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": 0}
+        ]}}});
         let sites = migrate_initialization_equations(&mut doc).unwrap();
         assert_eq!(
             sites,
@@ -373,8 +379,12 @@ mod tests {
     fn ic_argument_shapes() {
         let ok = |v: Value| check_ic_node(v.as_object().unwrap(), "/").is_ok();
         assert!(ok(json!({"op": "ic", "args": ["u"]})));
-        assert!(ok(json!({"op": "ic", "args": [{"op": "D", "args": ["u"], "wrt": "t"}]})));
-        assert!(!ok(json!({"op": "ic", "args": [{"op": "index", "args": ["u", 1]}]})));
+        assert!(ok(
+            json!({"op": "ic", "args": [{"op": "D", "args": ["u"], "wrt": "t"}]})
+        ));
+        assert!(!ok(
+            json!({"op": "ic", "args": [{"op": "index", "args": ["u", 1]}]})
+        ));
         assert!(!ok(json!({"op": "ic", "args": ["u", "v"]})));
     }
 }

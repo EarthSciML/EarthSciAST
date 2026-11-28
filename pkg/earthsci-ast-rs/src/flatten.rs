@@ -2652,8 +2652,8 @@ fn extract_field_ics(parts: &mut AssembledParts) -> Result<(), FlattenError> {
     for fe in std::mem::take(&mut parts.equations) {
         if !crate::initialization::is_initialization_equation(&fe.eq) {
             kept.push(fe);
-        } else if let Some(target) = crate::initialization::explicit_target(&fe.eq) {
-            parts.field_ics.push((target, fe.eq.rhs));
+        } else if let Some(explicit) = crate::initialization::explicit_ic(&fe.eq) {
+            parts.field_ics.push(explicit);
         } else {
             let origin = fe
                 .contributions

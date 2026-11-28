@@ -184,6 +184,10 @@ diagnostic_code_registry! {
     /// system did not converge or converged to a non-finite value. This
     /// binding has no nonlinear solver and never raises it.
     IC_SYSTEM_UNSOLVED = "ic_system_unsolved";
+    /// esm 2.5.0 (esm-spec §4.2, `ic`): an `ic` whose argument is neither a
+    /// variable reference nor `D` of one (`ic(index(u, i))`, `ic(a + b)`).
+    /// Raised at load; an element's starting value is `index(ic(u), i)`.
+    IC_INVALID_ARGUMENT = "ic_invalid_argument";
     /// A rewrite-target op (§4.2) reached evaluation or compilation without
     /// being lowered (esm-spec §9.6.6); refused through `OpError::Unlowered`.
     UNLOWERED_OPERATOR = "unlowered_operator";
@@ -900,6 +904,9 @@ mod error_code_tests {
             "faq_bare_array_operand",
             "faq_version_too_old",
             "ic_in_reaction_system",
+            "ic_invalid_argument",
+            "ic_system_unbalanced",
+            "ic_system_unsolved",
             "indexed_definition_unsupported_form",
             "invalid_broadcast_fn",
             "invalid_enums_block",
