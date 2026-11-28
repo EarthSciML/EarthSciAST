@@ -252,6 +252,13 @@ impl ForcingSet {
         &self.bufs
     }
 
+    /// Alive while some clone of this set is: a set's buffers list is its
+    /// own (a new set, even from [`Self::replace`], makes a new one), so
+    /// once this is dead the set's epoch can never be passed again.
+    pub(super) fn liveness(&self) -> std::sync::Weak<[Arc<[f64]>]> {
+        Arc::downgrade(&self.bufs)
+    }
+
     /// Whether this set was made for `slots` (the same list, or an equal one).
     pub(super) fn fits(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.slots, &other.slots)
