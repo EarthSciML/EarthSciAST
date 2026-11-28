@@ -7792,6 +7792,14 @@
       }
     },
     {
+      "name": "stripped_initialization",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "StrippedInitialization"
+      }
+    },
+    {
       "name": "stripped_residual",
       "kind": "type",
       "tier": "extension",

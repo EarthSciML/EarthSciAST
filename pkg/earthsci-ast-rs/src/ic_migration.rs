@@ -16,7 +16,9 @@
 //!
 //! Each non-empty block is one site of the document's `deprecated_field`
 //! warning. Idempotent: a second pass finds nothing. Mirrors the Julia and
-//! Python loaders.
+//! Python loaders. This is the one copy of the migration: the loader, the
+//! printers (through the canonical form) and `flatten` of a document built
+//! in code ([`migrate_typed`]) all run it.
 
 use serde_json::{Map, Value};
 
@@ -29,18 +31,106 @@ pub(crate) fn migrate_initialization_equations(
     doc: &mut Value,
 ) -> Result<Vec<String>, DiagnosticError> {
     let mut sites = Vec::new();
-    if !has_initialization_equations(doc) {
+    if !needs_migration(doc) {
         return Ok(sites);
     }
+    let legacy = declares_before_2_5_0(doc);
     let root = doc.clone();
     let Some(models) = doc.get_mut("models").and_then(Value::as_object_mut) else {
         return Ok(sites);
     };
     for (name, model) in models.iter_mut() {
         let ptr = format!("/models/{}", token(name));
-        migrate_model(model, &ptr, &root, &mut sites)?;
+        migrate_model(model, &ptr, &root, legacy, &mut sites)?;
     }
     Ok(sites)
+}
+
+/// Whether [`migrate_initialization_equations`] may have anything to do on
+/// `doc`: a model carries the old block, or a document below esm 2.5.0 holds
+/// an `ic` (perhaps of a parameter).
+pub(crate) fn needs_migration(doc: &Value) -> bool {
+    has_initialization_equations(doc) || (declares_before_2_5_0(doc) && contains_ic(doc))
+}
+
+/// Whether `doc` declares an `esm` version below 2.5.0, where `ic(k) ~ v` of
+/// a parameter `k` was how a document set a parameter's starting value.
+fn declares_before_2_5_0(doc: &Value) -> bool {
+    let Some(v) = doc.get("esm").and_then(Value::as_str) else {
+        return false;
+    };
+    let parts: Vec<u64> = v.split('.').map_while(|p| p.parse().ok()).collect();
+    matches!(parts.as_slice(), [major, minor, ..] if (*major, *minor) < (2, 5))
+}
+
+/// Whether `v` holds an `ic` node anywhere.
+fn contains_ic(v: &Value) -> bool {
+    match v {
+        Value::Object(m) => {
+            m.get("op").and_then(Value::as_str) == Some("ic") || m.values().any(contains_ic)
+        }
+        Value::Array(items) => items.iter().any(contains_ic),
+        _ => false,
+    }
+}
+
+/// esm-spec §11.4.4 "An initial condition of a parameter": each equation of
+/// `eqs` whose left-hand side names a declared parameter `k` of the model
+/// (`ic(k)`, or bare `k` when `bare` is set) becomes `k`'s `default` and is
+/// removed; its right-hand side must be a number (`ic_invalid_argument`
+/// otherwise). Returns whether any was moved.
+fn move_parameter_initial_conditions(
+    obj: &mut Map<String, Value>,
+    eqs: &mut Vec<Value>,
+    bare: bool,
+    at: &str,
+) -> Result<bool, DiagnosticError> {
+    let is_parameter = |obj: &Map<String, Value>, k: &str| {
+        obj.get("variables")
+            .and_then(|vs| vs.get(k))
+            .and_then(|d| d.get("type"))
+            .and_then(Value::as_str)
+            == Some("parameter")
+    };
+    let mut moved = false;
+    let mut kept = Vec::with_capacity(eqs.len());
+    for (i, eq) in std::mem::take(eqs).into_iter().enumerate() {
+        let lhs = eq.get("lhs");
+        let target = match lhs {
+            Some(Value::String(k)) if bare => Some(k.clone()),
+            Some(Value::Object(m)) if m.get("op").and_then(Value::as_str) == Some("ic") => {
+                match m.get("args").and_then(Value::as_array).map(Vec::as_slice) {
+                    Some([Value::String(k)]) => Some(k.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let Some(k) = target.filter(|k| is_parameter(obj, k)) else {
+            kept.push(eq);
+            continue;
+        };
+        let Some(value) = eq.get("rhs").filter(|v| v.is_number()).cloned() else {
+            return Err(err(
+                codes::IC_INVALID_ARGUMENT,
+                format!(
+                    "ic_invalid_argument: {at}/{i}: an initial condition of '{k}', a declared \
+                     parameter, migrates into its `default`, so its right-hand side must be a \
+                     number (esm-spec §11.4.4)"
+                ),
+            ));
+        };
+        if let Some(decl) = obj
+            .get_mut("variables")
+            .and_then(|vs| vs.get_mut(&k))
+            .and_then(Value::as_object_mut)
+        {
+            decl.insert("default".to_string(), value);
+        }
+        moved = true;
+    }
+    *eqs = kept;
+    Ok(moved)
 }
 
 /// Whether any model of `doc` (at any depth) carries the old block.
@@ -67,6 +157,7 @@ fn migrate_model(
     model: &mut Value,
     ptr: &str,
     root: &Value,
+    legacy: bool,
     sites: &mut Vec<String>,
 ) -> Result<(), DiagnosticError> {
     let Some(obj) = model.as_object_mut() else {
@@ -75,13 +166,23 @@ fn migrate_model(
     if let Some(subs) = obj.get_mut("subsystems").and_then(Value::as_object_mut) {
         for (name, sub) in subs.iter_mut() {
             let sub_ptr = format!("{ptr}/subsystems/{}", token(name));
-            migrate_model(sub, &sub_ptr, root, sites)?;
+            migrate_model(sub, &sub_ptr, root, legacy, sites)?;
+        }
+    }
+    // Below esm 2.5.0, `ic(k) ~ v` of a parameter in `equations` set its
+    // starting value: it becomes `k`'s default.
+    if legacy && let Some(Value::Array(mut list)) = obj.remove("equations") {
+        let at = format!("{ptr}/equations");
+        let moved = move_parameter_initial_conditions(obj, &mut list, false, &at);
+        obj.insert("equations".to_string(), Value::Array(list));
+        if moved? {
+            sites.push(format!("{at} (ic of a parameter)"));
         }
     }
     let Some(block) = obj.remove("initialization_equations") else {
         return Ok(());
     };
-    let eqs: Vec<Value> = match block {
+    let mut eqs: Vec<Value> = match block {
         Value::Array(v) => v,
         Value::Null => Vec::new(),
         other => {
@@ -99,6 +200,17 @@ fn migrate_model(
     sites.push(format!(
         "{ptr}/initialization_equations (initialization_equations)"
     ));
+    // An initial condition of a parameter, in any version, becomes its
+    // default before the rest is rewritten.
+    move_parameter_initial_conditions(
+        obj,
+        &mut eqs,
+        true,
+        &format!("{ptr}/initialization_equations"),
+    )?;
+    if eqs.is_empty() {
+        return Ok(());
+    }
     let snapshot = Value::Object(obj.clone());
     let is_unknown = |name: &str| names_unknown(name, &snapshot, root);
     let has_time_derivative = obj
@@ -204,8 +316,17 @@ fn wrap_unknowns(e: &Value, is_unknown: &dyn Fn(&str) -> bool) -> Value {
             }
             let mut out = Map::new();
             for (k, v) in m {
-                let nv = match k.as_str() {
-                    "args" | "expr" | "filter" | "values" => wrap_in(v, is_unknown),
+                let nv = match (k.as_str(), v) {
+                    ("args" | "expr" | "filter" | "values" | "lower" | "upper" | "key", _) => {
+                        wrap_in(v, is_unknown)
+                    }
+                    // An operator call's arguments (esm-spec §9.6.12): a map
+                    // from a param name to the expression it binds.
+                    ("bindings", Value::Object(b)) => Value::Object(
+                        b.iter()
+                            .map(|(p, e)| (p.clone(), wrap_unknowns(e, is_unknown)))
+                            .collect(),
+                    ),
                     _ => v.clone(),
                 };
                 out.insert(k.clone(), nv);
@@ -223,88 +344,140 @@ fn wrap_in(v: &Value, is_unknown: &dyn Fn(&str) -> bool) -> Value {
     }
 }
 
-/// Whether `name` names an unknown seen from `model`: a local variable of type
-/// `unknown`, or a scoped reference resolving, relative to the model's
-/// subsystems first and then from the document root, to a variable of type
-/// `unknown` or to a reaction-system species.
+/// Whether `name` names an unknown seen from `model` (a variable of type
+/// `unknown`, or a reaction-system species).
 fn names_unknown(name: &str, model: &Value, root: &Value) -> bool {
-    let is_unknown_var = |m: &Value, v: &str| {
-        m.get("variables")
-            .and_then(|vs| vs.get(v))
-            .and_then(|d| d.get("type"))
-            .and_then(Value::as_str)
-            == Some("unknown")
+    matches!(var_type(name, model, root), Some("unknown" | "species"))
+}
+
+/// The type of the variable `name` names seen from `model`: a local
+/// variable's `type`, or — for a scoped reference, resolved relative to the
+/// model's subsystems first and then from the document root — that
+/// variable's `type`, or `"species"` for a reaction-system species.
+fn var_type<'a>(name: &str, model: &'a Value, root: &'a Value) -> Option<&'a str> {
+    let type_in = |m: &'a Value, v: &str| -> Option<&'a str> {
+        m.get("variables")?.get(v)?.get("type")?.as_str()
     };
     let Some((scope, leaf)) = name.rsplit_once('.') else {
-        return is_unknown_var(model, name);
+        return type_in(model, name);
     };
     let path: Vec<&str> = scope.split('.').collect();
-    let descend = |mut m: &Value, segs: &[&str]| -> Option<Value> {
+    let descend = |mut m: &'a Value, segs: &[&str]| -> Option<&'a Value> {
         for s in segs {
             m = m.get("subsystems")?.get(*s)?;
         }
-        Some(m.clone())
+        Some(m)
     };
-    if let Some(m) = descend(model, &path)
-        && is_unknown_var(&m, leaf)
+    if let Some(t) = descend(model, &path).and_then(|m| type_in(m, leaf)) {
+        return Some(t);
+    }
+    if let Some(t) = root
+        .get("models")
+        .and_then(|ms| ms.get(path[0]))
+        .and_then(|top| descend(top, &path[1..]))
+        .and_then(|m| type_in(m, leaf))
     {
-        return true;
+        return Some(t);
     }
-    if let Some(top) = root.get("models").and_then(|ms| ms.get(path[0]))
-        && let Some(m) = descend(top, &path[1..])
-        && is_unknown_var(&m, leaf)
-    {
-        return true;
+    let rs = descend(root.get("reaction_systems")?.get(path[0])?, &path[1..])?;
+    if rs.get("species").and_then(|sp| sp.get(leaf)).is_some() {
+        return Some("species");
     }
-    if let Some(rs) = root.get("reaction_systems").and_then(|r| r.get(path[0])) {
-        let mut cur = rs.clone();
-        for s in &path[1..] {
-            match cur.get("subsystems").and_then(|x| x.get(*s)) {
-                Some(n) => cur = n.clone(),
-                None => return false,
-            }
-        }
-        return cur.get("species").and_then(|sp| sp.get(leaf)).is_some();
-    }
-    false
+    rs.get("parameters")
+        .and_then(|ps| ps.get(leaf))
+        .map(|_| "parameter")
 }
 
-/// A typed model's `initialization_equations` (a [`crate::Model`] built in
-/// code, which no loader read) in the form the loader gives them: `ic`
-/// equations, for a model with a time derivative. Empty otherwise.
-pub(crate) fn typed_initialization_equations(model: &crate::Model) -> Vec<crate::Equation> {
-    let Some(eqs) = model
-        .initialization_equations
-        .as_ref()
-        .filter(|e| !e.is_empty())
-    else {
-        return Vec::new();
-    };
-    let has_d = model.equations.iter().any(|e| {
-        serde_json::to_value(&e.lhs)
-            .map(|v| contains_d(&v))
-            .unwrap_or(false)
-    });
-    if !has_d {
-        return Vec::new();
+/// esm-spec §4.2 (`ic`): an `ic` whose argument names a declared parameter,
+/// bare or scoped (`ic(k)`, `ic(D(k))`), is malformed — a parameter has no
+/// starting value of its own — and refused with `ic_invalid_argument` naming
+/// the node's JSON pointer. Checked over every model's equations (at any
+/// `subsystems` depth) of a loaded document, after the migration.
+pub(crate) fn check_ic_parameter_arguments(doc: &Value) -> Result<(), DiagnosticError> {
+    fn walk(e: &Value, at: &str, model: &Value, root: &Value) -> Result<(), DiagnosticError> {
+        match e {
+            Value::Object(m) => {
+                if m.get("op").and_then(Value::as_str) == Some("ic") {
+                    let name = match m.get("args").and_then(|a| a.get(0)) {
+                        Some(Value::String(v)) => Some(v.as_str()),
+                        Some(Value::Object(d)) => {
+                            d.get("args").and_then(|a| a.get(0)).and_then(Value::as_str)
+                        }
+                        _ => None,
+                    };
+                    if let Some(n) = name
+                        && var_type(n, model, root) == Some("parameter")
+                    {
+                        return Err(err(
+                            codes::IC_INVALID_ARGUMENT,
+                            format!(
+                                "ic_invalid_argument: {at}: `ic` of '{n}', a declared \
+                                 parameter: a parameter has no starting value of its own; \
+                                 read its value as `{n}` (esm-spec §4.2)"
+                            ),
+                        ));
+                    }
+                    return Ok(());
+                }
+                for (k, v) in m {
+                    walk(v, &format!("{at}/{}", token(k)), model, root)?;
+                }
+                Ok(())
+            }
+            Value::Array(items) => {
+                for (i, v) in items.iter().enumerate() {
+                    walk(v, &format!("{at}/{i}"), model, root)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
-    let is_unknown = |n: &str| {
-        model
-            .variables
-            .get(n)
-            .is_some_and(|v| v.var_type == crate::types::VariableType::Unknown)
+    fn model_walk(model: &Value, ptr: &str, root: &Value) -> Result<(), DiagnosticError> {
+        if let Some(eqs) = model.get("equations") {
+            walk(eqs, &format!("{ptr}/equations"), model, root)?;
+        }
+        if let Some(subs) = model.get("subsystems").and_then(Value::as_object) {
+            for (name, sub) in subs {
+                model_walk(sub, &format!("{ptr}/subsystems/{}", token(name)), root)?;
+            }
+        }
+        Ok(())
+    }
+    for (name, model) in doc
+        .get("models")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        model_walk(model, &format!("/models/{}", token(name)), doc)?;
+    }
+    Ok(())
+}
+
+/// A document built in code (no loader read it) that still carries the
+/// deprecated `initialization_equations`, migrated exactly as the loader
+/// migrates it ([`migrate_initialization_equations`]); `None` when no model
+/// carries the field.
+pub(crate) fn migrate_typed(
+    file: &crate::EsmFile,
+) -> Result<Option<crate::EsmFile>, DiagnosticError> {
+    use crate::types::HasSubsystems;
+    fn carries(m: &crate::Model) -> bool {
+        m.initialization_equations.is_some() || m.inline_subsystems().any(|(_, s)| carries(s))
+    }
+    if !file.models.iter().flatten().any(|(_, m)| carries(m)) {
+        return Ok(None);
+    }
+    let bad = |e: serde_json::Error| {
+        err(
+            codes::DEPRECATED_FIELD,
+            format!("initialization_equations: the document does not round-trip: {e}"),
+        )
     };
-    eqs.iter()
-        .filter_map(|eq| {
-            let lhs = wrap_unknowns(&serde_json::to_value(&eq.lhs).ok()?, &is_unknown);
-            let rhs = wrap_unknowns(&serde_json::to_value(&eq.rhs).ok()?, &is_unknown);
-            Some(crate::Equation {
-                lhs: serde_json::from_value(lhs).ok()?,
-                rhs: serde_json::from_value(rhs).ok()?,
-                comment: eq.comment.clone(),
-            })
-        })
-        .collect()
+    let mut doc = serde_json::to_value(file).map_err(bad)?;
+    migrate_initialization_equations(&mut doc)?;
+    serde_json::from_value(doc).map(Some).map_err(bad)
 }
 
 /// The load-time shape check of an `ic` node (esm-spec §4.2, `ic`): its one
@@ -373,6 +546,56 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn operator_call_bindings_are_rewritten() {
+        let mut doc = json!({"models": {"M": {
+        "variables": {"x": {"type": "unknown"}, "k": {"type": "parameter"}},
+        "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "k"}],
+        "initialization_equations": [{"lhs": "x", "rhs": {"op": "apply_operator",
+            "args": [], "name": "f", "bindings": {"a": "x", "b": "k"}}}]}}});
+        migrate_initialization_equations(&mut doc).unwrap();
+        let rhs = &doc["models"]["M"]["equations"][1]["rhs"];
+        assert_eq!(rhs["bindings"]["a"], json!({"op": "ic", "args": ["x"]}));
+        assert_eq!(rhs["bindings"]["b"], json!("k"));
+    }
+
+    #[test]
+    fn an_old_initial_condition_of_a_parameter_becomes_its_default() {
+        let model = json!({
+            "variables": {"u": {"type": "unknown"},
+                          "p": {"type": "parameter", "default": 1.0},
+                          "q": {"type": "parameter", "default": 3.0}},
+            "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": 0},
+                          {"lhs": {"op": "ic", "args": ["q"]}, "rhs": 2.0}],
+            "initialization_equations": [{"lhs": "p", "rhs": 5.0}]});
+        let mut old = json!({"esm": "2.4.0", "models": {"M": model.clone()}});
+        let sites = migrate_initialization_equations(&mut old).unwrap();
+        assert_eq!(sites.len(), 2);
+        let m = &old["models"]["M"];
+        assert_eq!(m["variables"]["p"]["default"], json!(5.0));
+        assert_eq!(m["variables"]["q"]["default"], json!(2.0));
+        assert_eq!(m["equations"].as_array().unwrap().len(), 1);
+        check_ic_parameter_arguments(&old).unwrap();
+
+        // At esm 2.5.0, `ic(q)` of a parameter is refused, with its location.
+        let mut new = json!({"esm": "2.5.0", "models": {"M": model}});
+        migrate_initialization_equations(&mut new).unwrap();
+        let e = check_ic_parameter_arguments(&new).unwrap_err();
+        assert_eq!(e.code, codes::IC_INVALID_ARGUMENT);
+        assert!(
+            e.message.contains("/models/M/equations/1/lhs"),
+            "{}",
+            e.message
+        );
+
+        // A right-hand side that is not a number has no reading as a default.
+        let mut bad = json!({"esm": "2.4.0", "models": {"M": {
+            "variables": {"p": {"type": "parameter"}},
+            "equations": [{"lhs": {"op": "ic", "args": ["p"]}, "rhs": "p0"}]}}});
+        let e = migrate_initialization_equations(&mut bad).unwrap_err();
+        assert_eq!(e.code, codes::IC_INVALID_ARGUMENT);
     }
 
     #[test]

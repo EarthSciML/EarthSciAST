@@ -455,117 +455,41 @@ pub fn read_old_spellings(doc: &mut Value) {
         }
     }
     walk(doc, false, None);
-    migrate_initialization_equations(doc);
 }
 
-/// esm 2.5.0 (esm-spec §11.4.4), as a load reads it: each model's
-/// `initialization_equations` move into `equations` with every local unknown
-/// `w` written `ic(w)` and every `D(w)` written `ic(D(w))`, or — for a model
-/// with no time derivative — into `guesses` (an existing entry kept). Local
-/// names only; for comparing a document as written with what a load writes.
+/// `expected`, a document as written, with each model (at any `subsystems`
+/// depth) that carries the deprecated `initialization_equations` brought to
+/// what `loaded` (the same document after a load) holds there: the field
+/// removed and the model's `equations`, `guesses` and `variables` taken from
+/// `loaded`. The rewrite itself (esm-spec §11.4.4) is the loader's, pinned
+/// by the `ic_system` conformance manifest's loads; a round trip compares
+/// everything else.
 #[allow(dead_code)]
-pub fn migrate_initialization_equations(doc: &mut Value) {
-    fn has_d(e: &Value) -> bool {
-        match e {
-            Value::Object(m) => {
-                m.get("op").and_then(Value::as_str) == Some("D") || m.values().any(has_d)
-            }
-            Value::Array(a) => a.iter().any(has_d),
-            _ => false,
-        }
-    }
-    fn ic(arg: Value) -> Value {
-        serde_json::json!({"op": "ic", "args": [arg]})
-    }
-    fn wrap(e: &Value, unknown: &dyn Fn(&str) -> bool) -> Value {
-        match e {
-            Value::String(s) if unknown(s) => ic(e.clone()),
-            Value::Object(m) => {
-                if m.get("op").and_then(Value::as_str) == Some("D")
-                    && m.get("args")
-                        .and_then(|a| a.get(0))
-                        .and_then(Value::as_str)
-                        .is_some_and(unknown)
-                {
-                    return ic(e.clone());
-                }
-                let mut out = serde_json::Map::new();
-                for (k, v) in m {
-                    let nv = match k.as_str() {
-                        "args" | "expr" | "filter" | "values" => match v {
-                            Value::Array(a) => {
-                                Value::Array(a.iter().map(|x| wrap(x, unknown)).collect())
-                            }
-                            other => wrap(other, unknown),
-                        },
-                        _ => v.clone(),
-                    };
-                    out.insert(k.clone(), nv);
-                }
-                Value::Object(out)
-            }
-            other => other.clone(),
-        }
-    }
-    fn model(m: &mut Value) {
-        let Some(o) = m.as_object_mut() else { return };
+pub fn adopt_migrated_models(expected: &mut Value, loaded: &Value) {
+    fn model(e: &mut Value, l: &Value) {
+        let Some(o) = e.as_object_mut() else { return };
         if let Some(Value::Object(subs)) = o.get_mut("subsystems") {
-            for sub in subs.values_mut() {
-                model(sub);
+            for (k, sub) in subs.iter_mut() {
+                model(sub, &l["subsystems"][k.as_str()]);
             }
         }
-        let Some(Value::Array(eqs)) = o.remove("initialization_equations") else {
-            return;
-        };
-        if eqs.is_empty() {
+        if o.remove("initialization_equations").is_none() {
             return;
         }
-        let vars = o.get("variables").cloned().unwrap_or(Value::Null);
-        let unknown = |n: &str| {
-            vars.get(n)
-                .and_then(|v| v.get("type"))
-                .and_then(Value::as_str)
-                == Some("unknown")
-        };
-        let time = o
-            .get("equations")
-            .and_then(Value::as_array)
-            .is_some_and(|es| es.iter().any(|e| e.get("lhs").is_some_and(has_d)));
-        if time {
-            let moved: Vec<Value> = eqs
-                .iter()
-                .map(|eq| {
-                    let mut eq = eq.clone();
-                    for side in ["lhs", "rhs"] {
-                        if let Some(v) = eq.get(side).cloned() {
-                            eq[side] = wrap(&v, &unknown);
-                        }
-                    }
-                    eq
-                })
-                .collect();
-            if let Value::Array(list) = o.entry("equations").or_insert(Value::Array(Vec::new())) {
-                list.extend(moved);
-            }
-        } else {
-            let mut guesses = o
-                .get("guesses")
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-            for eq in &eqs {
-                if let Some(v) = eq.get("lhs").and_then(Value::as_str)
-                    && !guesses.contains_key(v)
-                {
-                    guesses.insert(v.to_string(), eq.get("rhs").cloned().unwrap_or(Value::Null));
+        for field in ["equations", "guesses", "variables"] {
+            match l.get(field) {
+                Some(v) => {
+                    o.insert(field.to_string(), v.clone());
+                }
+                None => {
+                    o.remove(field);
                 }
             }
-            o.insert("guesses".to_string(), Value::Object(guesses));
         }
     }
-    if let Some(Value::Object(models)) = doc.get_mut("models") {
-        for m in models.values_mut() {
-            model(m);
+    if let Some(Value::Object(models)) = expected.get_mut("models") {
+        for (k, m) in models.iter_mut() {
+            model(m, &loaded["models"][k.as_str()]);
         }
     }
 }

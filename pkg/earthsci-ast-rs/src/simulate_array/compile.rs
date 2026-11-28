@@ -174,6 +174,15 @@ pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
 /// whole-document build (`crate::prepare`), so a document of several models
 /// is one namespaced system on both routes.
 pub(crate) fn model_from_flattened(flat: &FlattenedSystem) -> Model {
+    model_from_flattened_with(flat, &crate::initialization::InitSystem::of(flat))
+}
+
+/// [`model_from_flattened`], with the system's initialization system
+/// already analysed.
+pub(crate) fn model_from_flattened_with(
+    flat: &FlattenedSystem,
+    init: &crate::initialization::InitSystem,
+) -> Model {
     let mut variables: IndexMap<String, ModelVariable> = IndexMap::new();
     for (name, var) in flat
         .state_variables
@@ -183,11 +192,13 @@ pub(crate) fn model_from_flattened(flat: &FlattenedSystem) -> Model {
     {
         variables.insert(name.clone(), var.clone());
     }
-    // The triangular steps of the initialization system (esm-spec §11.4.3),
-    // each `u ~ e` with `ic(w)` read as `w`, in evaluation order, go back into
-    // the model's own block, so every later stage resolves their ranges and
-    // joins as it does an authored model's.
-    let steps = crate::initialization::InitSystem::of(flat).step_equations();
+    // The solved-form equations of the initialization system (esm-spec
+    // §11.4.3), each `u ~ e` with `ic(w)` read as `w`, in equation order, go
+    // back into the model's own block, so every later stage resolves their
+    // ranges and joins as it does an authored model's. Which of them a build
+    // evaluates, and in what order, depends on the supplied values
+    // ([`crate::initialization::InitSystem::plan`]).
+    let steps = init.step_equations();
     let initialization_equations = (!steps.is_empty()).then_some(steps);
     Model {
         variables,
@@ -849,7 +860,19 @@ impl ArrayCompiled {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let normalized = normalize(BuildInput::Flattened { flat, inherited }, index_sets)?;
+        // The initialization system (esm-spec §11.4.3), analysed once: its
+        // solved-form equations are the model's initialization equations,
+        // and the checks that depend on supplied values run where they are
+        // known.
+        let init = crate::initialization::InitSystem::of(flat);
+        let normalized = normalize(
+            BuildInput::Flattened {
+                flat,
+                inherited,
+                init: Some(&init),
+            },
+            index_sets,
+        )?;
         let mut compiled = Self::compile_normalized(
             normalized,
             &flat.field_ics,
@@ -865,10 +888,7 @@ impl ArrayCompiled {
             flat.field_ics.iter().map(|(_, rhs)| rhs),
             &compiled.operators,
         )?;
-        // The initialization system (esm-spec §11.4.3), analysed once; its
-        // triangular steps are the model's initialization equations, and the
-        // checks that depend on supplied values run where they are known.
-        compiled.init_system = std::rc::Rc::new(crate::initialization::InitSystem::of(flat));
+        compiled.init_system = std::rc::Rc::new(init);
         compiled.init_guesses = flat.guesses.clone();
         // …and the merge's rename map, so an override key naming a state an
         // `operator_compose` renaming match DELETED resolves to the survivor
@@ -1643,8 +1663,10 @@ pub(crate) fn check_free_variables(
         // And array-valued leaves (potential bare forcing FIELDS) — see the
         // doc note on `collect_dims_and_index_heads`.
         let mut binders = NameSet::default();
-        if is_ic_lhs(&eq.lhs) {
-            crate::binders::collect_symbols(&eq.rhs, &mut bound);
+        if crate::initialization::is_initialization_equation(eq) {
+            if let Some((_, rhs)) = crate::initialization::explicit_form(eq) {
+                crate::binders::collect_symbols(rhs, &mut bound);
+            }
             collect_dims_and_index_heads(&eq.lhs, &mut bound);
             collect_dims_and_index_heads(&eq.rhs, &mut bound);
         } else {
@@ -1678,7 +1700,7 @@ pub(crate) fn check_free_variables(
     };
     let mut binders: NameSet = NameSet::default();
     for (eq, mut eq_binders) in model.equations.iter().zip(eq_binders) {
-        if is_ic_lhs(&eq.lhs) {
+        if crate::initialization::is_initialization_equation(eq) {
             continue;
         }
         with_binders(&mut bound, &mut eq_binders, |scope| {
@@ -1743,11 +1765,6 @@ fn with_binders<T>(
         bound.remove(name);
     }
     out
-}
-
-/// Is this LHS an initial-condition marker (`{"op": "ic", …}`)?
-fn is_ic_lhs(lhs: &Expr) -> bool {
-    matches!(lhs, Expr::Operator(op) if op.op == "ic")
 }
 
 /// Insert every name `node` binds as one of `kinds` into `out`.
@@ -2033,11 +2050,8 @@ fn capture_ic_scope(
     let ics: Vec<(String, HashSet<String>)> = model
         .equations
         .iter()
-        .filter(|eq| is_ic_lhs(&eq.lhs))
-        .map(|eq| {
-            let target = crate::flatten::extract_ic_target(&eq.lhs).unwrap_or_default();
-            (target, free_names(&eq.rhs))
-        })
+        .filter_map(crate::initialization::explicit_form)
+        .map(|(target, rhs)| (target.to_string(), free_names(rhs)))
         .chain(flat_ics.iter().map(|(t, rhs)| (t.clone(), free_names(rhs))))
         .collect();
     let mut ic_reads: HashSet<String> = ics.iter().flat_map(|(_, r)| r.iter().cloned()).collect();
@@ -3387,13 +3401,12 @@ fn lower_algebraic_body(
 /// coupled path does. The RHS collected here has already been range-resolved
 /// against the document registry by [`ArrayCompiled::from_model_with_arrays`].
 fn classify_field_ics(model: &Model) -> Vec<(String, Expr)> {
-    let mut field_ics: Vec<(String, Expr)> = Vec::new();
-    for eq in &model.equations {
-        if let Some(target) = crate::flatten::extract_ic_target(&eq.lhs) {
-            field_ics.push((target, eq.rhs.clone()));
-        }
-    }
-    field_ics
+    model
+        .equations
+        .iter()
+        .filter_map(crate::initialization::explicit_form)
+        .map(|(target, rhs)| (target.to_string(), rhs.clone()))
+        .collect()
 }
 
 /// The triangular steps of the initialization system (esm-spec §11.4.3) the
@@ -3443,7 +3456,12 @@ fn assigns_some_cells(rhs: &Expr, target: Option<&VarShape>) -> bool {
         return false;
     }
     out.iter().enumerate().any(|(d, i)| {
-        match node.ranges.as_ref().and_then(|r| r.get(*i)).and_then(|r| r.bounds()) {
+        match node
+            .ranges
+            .as_ref()
+            .and_then(|r| r.get(*i))
+            .and_then(|r| r.bounds())
+        {
             Some([lo, hi]) => lo != vs.origin[d] || hi != vs.origin[d] + vs.shape[d] as i64 - 1,
             None => false,
         }

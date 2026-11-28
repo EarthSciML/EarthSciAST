@@ -1403,6 +1403,7 @@ impl ArrayCompiled {
         ic_vec: &mut [f64],
         params: &HashMap<String, f64>,
         keep: &HashSet<usize>,
+        plan: Option<&crate::initialization::InitPlan>,
         mut records: Option<&mut Vec<FieldIcRecord>>,
     ) -> Result<Vec<usize>, SimulateError> {
         let mut assigned = Vec::new();
@@ -1412,10 +1413,11 @@ impl ArrayCompiled {
         let mode = BuildEval::of_compiler(self.is_interpreter());
         let none: HashSet<usize> = HashSet::new();
         let all_keep = keep;
-        for (k, (target, rhs)) in self.init_faqs.iter().enumerate() {
+        for k in self.init_seed_order(plan) {
+            let (target, rhs) = &self.init_faqs[k];
             // A supplied value stands over an explicit initial condition; a
-            // triangular step's target is never supplied (the balance refuses
-            // that).
+            // step's target is never supplied (a supplied target makes the
+            // equation one of the implicit part, or a surplus one).
             let keep = if k < self.n_explicit_faqs {
                 all_keep
             } else {
@@ -1698,6 +1700,7 @@ impl ArrayCompiled {
                 &mut ic_vec,
                 &resolved,
                 &HashSet::new(),
+                None,
                 Some(&mut records),
             );
         }
@@ -1773,13 +1776,8 @@ impl ArrayCompiled {
     pub(crate) fn refuse_ic_state_reads(&self) -> Result<(), SimulateError> {
         // The initialization system's own (esm-spec §11.4.2): an equation that
         // mentions `ic` and reads a trajectory value.
-        if let Some(SimulateError::IcReadsState { name, details }) =
-            self.init_system.structural_refusal()
-        {
-            return Err(SimulateError::IcReadsState {
-                name: name.clone(),
-                details: details.clone(),
-            });
+        if let Some(e) = self.init_system.reads_state() {
+            return Err(e);
         }
         match self.ic_scope.state_reads.first() {
             Some((name, details)) => Err(SimulateError::IcReadsState {
@@ -1965,10 +1963,13 @@ impl ArrayCompiled {
         // An initialization equation assigns its whole target, and a held
         // state (no `D`, no definition) is not an ODE state. A stripped
         // implicit part's unknown with a guess starts from it.
+        let plan = self
+            .check_initialization(&initial_conditions)
+            .unwrap_or_default();
         let guessed: Vec<String> = self
-            .guess_seeded_unknowns()
+            .guess_seeded_unknowns(&plan)
             .into_iter()
-            .filter(|w| self.init_guesses.contains_key(w))
+            .map(|(w, _)| w)
             .collect();
         for target in self
             .init_faqs
@@ -2094,9 +2095,10 @@ impl ArrayCompiled {
             &self.merged_renames,
         )
         .map_err(crate::simulate::ic_key_error)?;
-        // The initialization system's balance under these supplied values
-        // (esm-spec §11.4.3), before anything is evaluated.
-        self.check_initialization(&initial_conditions)?;
+        // The initialization system under these supplied values (esm-spec
+        // §11.4.3): its balance, checked before anything is evaluated, and
+        // the order of its steps.
+        let plan = self.check_initialization(&initial_conditions)?;
         // What construction resolved, when it resolved it under these
         // parameters ([`FieldIcMemo`]).
         let bits = param_bits(param_vec);
@@ -2153,9 +2155,13 @@ impl ArrayCompiled {
         step_params.insert("t".to_string(), start.t0);
         // After the overrides, so a body reading a state reads the caller's
         // value, and around them, so the caller's value stands.
-        for slot in
-            self.seed_initialization_equations(&mut ic_vec, &step_params, &overridden, None)?
-        {
+        for slot in self.seed_initialization_equations(
+            &mut ic_vec,
+            &step_params,
+            &overridden,
+            Some(&plan),
+            None,
+        )? {
             if let Some(u) = unset.as_mut() {
                 u[slot] = false;
             }
@@ -2178,7 +2184,9 @@ impl ArrayCompiled {
         }
         let mut keep_guess = overridden.clone();
         keep_guess.extend(field_ic_map.keys().copied());
-        for slot in self.seed_stripped_starting_points(&mut ic_vec, &resolved_params, &keep_guess) {
+        for slot in
+            self.seed_stripped_starting_points(&mut ic_vec, &resolved_params, &keep_guess, &plan)
+        {
             if let Some(u) = unset.as_mut() {
                 u[slot] = false;
             }
@@ -2191,7 +2199,6 @@ impl ArrayCompiled {
         Ok(ic_vec)
     }
 
-    #[cfg(feature = "solve")]
     /// Bind `name` into a step's build-time scope when nothing binds it yet:
     /// a state-free observed of [`Self::ic_scope`] (its own reads first), else
     /// a forcing slot's declared value.
@@ -2241,7 +2248,7 @@ impl ArrayCompiled {
 
     /// The supplied values of `initial_conditions` (canonical keys), per
     /// state, as the column-major elements they set.
-    pub(crate) fn supplied_elements(
+    fn supplied_elements(
         &self,
         initial_conditions: &HashMap<String, f64>,
     ) -> HashMap<String, Vec<usize>> {
@@ -2268,32 +2275,17 @@ impl ArrayCompiled {
         out
     }
 
-    #[cfg(feature = "solve")]
-    /// The checks of the initialization system that depend on the supplied
-    /// values (esm-spec §11.4.3): the balance, then the refusal of an
-    /// implicit part the caller did not take. `initial_conditions` is keyed
-    /// canonically; [`Self::check_initialization_raw`] canonicalizes first.
+    /// The initialization system under the supplied values
+    /// `initial_conditions` (caller keys, as given or canonical), with every
+    /// check of esm-spec §11.4.3 that depends on them: the structural
+    /// refusals, the balance, then the refusal of an implicit part the
+    /// caller did not take (`strip` class `initialization`).
     pub(crate) fn check_initialization(
         &self,
         initial_conditions: &HashMap<String, f64>,
-    ) -> Result<(), SimulateError> {
-        if self.init_system.equations.is_empty() && self.init_system.structural_refusal().is_none()
-        {
-            return Ok(());
-        }
-        let supplied = self.supplied_elements(initial_conditions);
-        self.init_system.check(&supplied, self.init_stripped)
-    }
-
-    #[cfg(feature = "solve")]
-    /// [`Self::check_initialization`] for caller keys as given.
-    pub(crate) fn check_initialization_raw(
-        &self,
-        initial_conditions: &HashMap<String, f64>,
-    ) -> Result<(), SimulateError> {
-        if self.init_system.equations.is_empty() && self.init_system.structural_refusal().is_none()
-        {
-            return Ok(());
+    ) -> Result<crate::initialization::InitPlan, SimulateError> {
+        if self.init_system.is_empty() {
+            return Ok(Default::default());
         }
         let canonical = crate::simulate::canonicalize_override_keys(
             &super::layout::SlotNames(&self.var_shapes),
@@ -2302,43 +2294,67 @@ impl ArrayCompiled {
             &self.merged_renames,
         )
         .map_err(crate::simulate::ic_key_error)?;
-        self.check_initialization(&canonical)
+        let supplied = self.supplied_elements(&canonical);
+        self.init_system
+            .check(&supplied, self.alg_stripped, self.init_stripped)
     }
 
+    /// The positions in [`Self::init_faqs`] a build evaluates, in order: the
+    /// explicit initial conditions over some cells, then the steps `plan`
+    /// orders (every step, in equation order, without one: construction
+    /// records the routes before the supplied values are known).
     #[cfg(feature = "solve")]
-    /// The starting point of every element of a stripped implicit part
-    /// (`strip` class `initialization`, API_SPEC §5.8), written into
-    /// `ic_vec`: a supplied value stands (`keep`), else the `guesses` entry,
-    /// else the declared default already seeded. Returns the slots written.
+    fn init_seed_order(&self, plan: Option<&crate::initialization::InitPlan>) -> Vec<usize> {
+        let explicit = 0..self.n_explicit_faqs;
+        let Some(plan) = plan else {
+            return (0..self.init_faqs.len()).collect();
+        };
+        let step_of: HashMap<usize, usize> = self
+            .init_system
+            .solved_equations()
+            .into_iter()
+            .enumerate()
+            .map(|(j, k)| (k, self.n_explicit_faqs + j))
+            .collect();
+        explicit
+            .chain(plan.order.iter().filter_map(|k| step_of.get(k).copied()))
+            .filter(|&p| p < self.init_faqs.len())
+            .collect()
+    }
+
+    /// The starting point of every cell of a stripped implicit part (`strip`
+    /// class `initialization`, API_SPEC §5.8) and of every stripped algebraic
+    /// unknown (`strip` class `algebraic`), written into `ic_vec`: a supplied
+    /// value stands (`keep`), else the `guesses` entry, else the declared
+    /// default already seeded (else the `0` the state starts from). Returns
+    /// the slots it starts.
+    #[cfg(feature = "solve")]
     fn seed_stripped_starting_points(
         &self,
         ic_vec: &mut [f64],
         params: &HashMap<String, f64>,
         keep: &HashSet<usize>,
+        plan: &crate::initialization::InitPlan,
     ) -> Vec<usize> {
         let mut out = Vec::new();
-        for w in self.guess_seeded_unknowns() {
-            let (Some(vs), Some(guess)) = (self.var_shapes.get(&w), self.init_guesses.get(&w))
-            else {
-                continue;
-            };
-            let Ok(values) =
-                crate::simulate_array::eval_buildtime_values(guess, &self.index_sets, params)
-            else {
+        for (w, cells) in self.guess_seeded_unknowns(plan) {
+            let Some(vs) = self.var_shapes.get(&w) else {
                 continue;
             };
             let n = vs.shape.iter().copied().product::<usize>().max(1);
-            for i in 0..n {
+            let guess = self.init_guesses.get(&w).and_then(|g| {
+                crate::simulate_array::eval_buildtime_values(g, &self.index_sets, params).ok()
+            });
+            for i in cells.unwrap_or_else(|| (0..n).collect()) {
                 let slot = vs.flat_offset + i;
                 if keep.contains(&slot) {
                     continue;
                 }
-                let v = match values.len() {
-                    1 => values[0],
-                    m if m == n => values[i],
-                    _ => continue,
-                };
-                ic_vec[slot] = v;
+                match guess.as_deref() {
+                    Some([v]) => ic_vec[slot] = *v,
+                    Some(values) if values.len() == n => ic_vec[slot] = values[i],
+                    _ => {}
+                }
                 out.push(slot);
             }
         }
@@ -2346,21 +2362,54 @@ impl ArrayCompiled {
     }
 
     /// The unknowns whose `guesses` entry is a starting point of this
-    /// Problem's state: the unknowns of a stripped implicit initialization
-    /// part (`strip` class `initialization`), and the stripped algebraic
-    /// unknowns (`strip` class `algebraic`, whose warm start the caller
-    /// takes), below an explicit `ic` and a supplied value.
-    fn guess_seeded_unknowns(&self) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
+    /// Problem's state, each with its cells (`None`: all of them): the cells
+    /// of the implicit part of the initialization system `plan` leaves (when
+    /// the caller took it, `strip` class `initialization`), and the stripped
+    /// algebraic unknowns (`strip` class `algebraic`, whose warm start the
+    /// caller takes), below an explicit `ic` and a supplied value.
+    fn guess_seeded_unknowns(
+        &self,
+        plan: &crate::initialization::InitPlan,
+    ) -> Vec<(String, Option<Vec<usize>>)> {
+        let mut out: Vec<(String, Option<Vec<usize>>)> = Vec::new();
         if self.init_stripped {
-            out.extend(self.init_system.implicit_unknowns());
+            out.extend(
+                plan.unknowns
+                    .iter()
+                    .map(|(w, cells)| (w.clone(), Some(cells.clone()))),
+            );
         }
         if self.alg_stripped {
             let mut held: Vec<&String> = self.held_at_ic.iter().collect();
             held.sort();
-            out.extend(held.into_iter().cloned());
+            out.extend(held.into_iter().map(|w| (w.clone(), None)));
         }
         out
+    }
+
+    /// The flat state slots of the unknowns of `plan`'s implicit part, in the
+    /// order the stripped object lists them (API_SPEC §5.8): the scalar
+    /// unknowns by sorted name, then the arrays by sorted name, each in
+    /// layout order.
+    pub(crate) fn initialization_unknown_slots(
+        &self,
+        plan: &crate::initialization::InitPlan,
+    ) -> Vec<usize> {
+        let mut vars: Vec<(bool, &String, &Vec<usize>)> = plan
+            .unknowns
+            .iter()
+            .filter_map(|(w, cells)| {
+                let vs = self.var_shapes.get(w)?;
+                Some((!vs.shape.is_empty(), w, cells))
+            })
+            .collect();
+        vars.sort();
+        vars.into_iter()
+            .flat_map(|(_, w, cells)| {
+                let off = self.var_shapes[w].flat_offset;
+                cells.iter().map(move |i| off + i)
+            })
+            .collect()
     }
 
     #[cfg(feature = "solve")]

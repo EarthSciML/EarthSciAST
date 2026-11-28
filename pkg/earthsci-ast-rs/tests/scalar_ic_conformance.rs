@@ -117,13 +117,12 @@ fn scalar_ic_seeding_precedence() {
 
 /// esm 2.5.0 (esm-spec §11.4.3, §11.4.4): the old sequential reading of
 /// `faq`-valued initialization equations is gone. Migrated, `u ~ A*i + v` reads
-/// `ic(v)` and `v ~ 3*u` (cells 2..3) reads `ic(u)`: the two determine each
-/// other, v's cells 1 and 4 are determined by nothing (a `default` is not an
-/// equation of the system), so both compilers refuse the system — as
-/// unbalanced, or, with a `u0` that balances it, as an implicit (cyclic)
-/// system — rather than seed it in document order.
+/// `ic(v)` and `v ~ 3*u` (cells 2..3) reads `ic(u)`: both are in solved form,
+/// so neither default is a known, and the two equations' 6 cells cannot
+/// determine `u` and `v`'s 8, so both compilers refuse the system as
+/// unbalanced rather than seed it in document order.
 #[test]
-fn faq_initialization_equations_seed_in_order_on_both_compilers() {
+fn faq_initialization_equations_reading_each_other_are_unbalanced_on_both_compilers() {
     use earthsci_ast::{Compiler, ProblemOptions, Rhs, esm_problem};
     let faq = |ranges: serde_json::Value, expr: serde_json::Value| {
         serde_json::json!({"op": "faq", "args": [], "output_idx": ["i"],
@@ -171,12 +170,15 @@ fn faq_initialization_equations_seed_in_order_on_both_compilers() {
             )
             .err()
             .unwrap_or_else(|| panic!("{compiler:?} {u0:?}: the system is refused"));
-            // Unbalanced without a `u0`; with one, balanced but cyclic, so a
-            // truly implicit system this binding cannot solve.
-            let e = err.to_string();
-            assert!(
-                e.contains("ic_system_unbalanced") || e.contains("unsupported_construct"),
-                "{compiler:?} {u0:?}: {e}"
+            // Without a `u0`, both equations are in solved form, so `u`'s
+            // and `v`'s defaults yield: 6 scalar equations, 8 unknown cells.
+            // With one, each target has a supplied cell, so neither is in
+            // solved form and both defaults are knowns: 6 equations, no
+            // unknown (esm-spec §11.4.3).
+            assert_eq!(
+                err.code(),
+                Some("ic_system_unbalanced"),
+                "{compiler:?} {u0:?}: {err}"
             );
         }
     }

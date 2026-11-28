@@ -199,6 +199,44 @@ fn document_format_limits() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// esm 2.5.0 (esm-spec §9.6.6 `deprecated_field`, §11.4.4): the printers
+/// apply the `initialization_equations` migration the loader applies, so a
+/// printed document never carries the old block or its container; the parser
+/// still reads the container of an old document, as written.
+#[test]
+fn printers_migrate_initialization_equations() {
+    let doc = serde_json::json!({
+        "esm": "2.5.0",
+        "metadata": {"name": "printed"},
+        "models": {"M": {
+            "variables": {
+                "x": {"type": "unknown", "units": "1"},
+                "x0": {"type": "parameter", "units": "1", "default": 2.0}
+            },
+            "equations": [
+                {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": {"op": "-", "args": ["x"]}}
+            ],
+            "initialization_equations": [{"lhs": "x", "rhs": "x0"}]
+        }}
+    });
+    let canon = canonicalize_document(&doc);
+    let m = &canon["models"]["M"];
+    assert!(m.get("initialization_equations").is_none(), "{canon}");
+    assert_eq!(
+        m["equations"][1],
+        serde_json::json!({"lhs": {"op": "ic", "args": ["x"]}, "rhs": "x0"})
+    );
+    for (format, container) in [
+        (DocumentFormat::Markdown, ":::initialization"),
+        (DocumentFormat::Typst, "#initialization["),
+    ] {
+        let printed = print_document(object(&doc), format);
+        assert!(!printed.contains(container), "{format:?}:\n{printed}");
+        let read = parse_document(&printed, format).expect("the printed document reads");
+        assert_eq!(read, canon, "{format:?}:\n{printed}");
+    }
+}
+
 #[test]
 fn print_math_reproduces_the_display() {
     let dir = repo_tests_dir().join("conformance/document_format");
