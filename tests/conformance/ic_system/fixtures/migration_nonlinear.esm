@@ -1,0 +1,86 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "ic_migration_nonlinear",
+    "description": "esm-spec 11.4.4 'A model with no time derivative': its initialization equations were starting points for its solve, so the loader moves v ~ e into guesses[v] = e. H already has a guesses entry, which is kept, and H's equation is dropped.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "N": {
+      "variables": {
+        "T_SO4": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "total sulfate"
+        },
+        "Ksp": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1e-06,
+          "description": "solubility product"
+        },
+        "H": {
+          "type": "unknown",
+          "units": "1",
+          "description": "hydrogen ion"
+        },
+        "SO4": {
+          "type": "unknown",
+          "units": "1",
+          "description": "sulfate"
+        }
+      },
+      "system_kind": "nonlinear",
+      "guesses": {
+        "H": 0.002
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "*",
+            "args": [
+              "H",
+              "H",
+              "SO4"
+            ]
+          },
+          "rhs": "Ksp"
+        },
+        {
+          "lhs": {
+            "op": "+",
+            "args": [
+              "H",
+              "SO4"
+            ]
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              "T_SO4",
+              0.001
+            ]
+          }
+        }
+      ],
+      "initialization_equations": [
+        {
+          "lhs": "SO4",
+          "rhs": "T_SO4"
+        },
+        {
+          "lhs": "H",
+          "rhs": 0.001
+        }
+      ]
+    }
+  }
+}

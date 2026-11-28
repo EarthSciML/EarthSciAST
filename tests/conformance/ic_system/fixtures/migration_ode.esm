@@ -1,0 +1,298 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "ic_migration_ode",
+    "description": "esm-spec 11.4.4: a deprecated initialization_equations block. The loader replaces every unknown w with ic(w) (index(v, i) becomes index(ic(v), i)), appends the equations to `equations` in order, drops the field and warns deprecated_field. x ~ x0 is issue #817's reproduction (x has no default); aw ~ aw0 is MOSAIC Kelvin's lower-rank form; u ~ faq(A*i + index(v, i)) reads another unknown and so becomes a triangular equation.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "index_sets": {
+    "n": {
+      "kind": "interval",
+      "size": 3
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 2
+    },
+    "bin": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "x0": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "x's starting value"
+        },
+        "A": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "slope of u's initialization equation"
+        },
+        "aw0": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "default": [
+            0.9,
+            0.8
+          ],
+          "description": "per-level starting value"
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "description": "no default; set by x ~ x0"
+        },
+        "v": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "n"
+          ],
+          "default": 100.0,
+          "description": "set by v ~ faq(i)"
+        },
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "n"
+          ],
+          "default": 100.0,
+          "description": "set by u ~ faq(A*i + index(v, i))"
+        },
+        "aw": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev",
+            "bin"
+          ],
+          "default": 100.0,
+          "description": "set by aw ~ aw0, repeated along bin"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "v",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "output_idx": [
+              "i"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": 0.0,
+            "output_idx": [
+              "i"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "output_idx": [
+              "i"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": 0.0,
+            "output_idx": [
+              "i"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "bin"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "aw",
+                    "i",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "output_idx": [
+              "i",
+              "j"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "bin"
+              }
+            },
+            "expr": 0.0,
+            "output_idx": [
+              "i",
+              "j"
+            ]
+          }
+        }
+      ],
+      "initialization_equations": [
+        {
+          "lhs": "x",
+          "rhs": "x0"
+        },
+        {
+          "lhs": "v",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": "i",
+            "output_idx": [
+              "i"
+            ]
+          }
+        },
+        {
+          "lhs": "u",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    "A",
+                    "i"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "v",
+                    "i"
+                  ]
+                }
+              ]
+            },
+            "output_idx": [
+              "i"
+            ]
+          }
+        },
+        {
+          "lhs": "aw",
+          "rhs": "aw0"
+        }
+      ]
+    }
+  }
+}

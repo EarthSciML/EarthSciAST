@@ -1,0 +1,423 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_triangular",
+    "description": "esm-spec 11.4.3: explicit initial conditions and a triangular initialization system, solved by substitution in dependency order. `ic(c) ~ 2*ic(z)` is written before the equation that determines `z`, so a binding that evaluates in document order reads a value that is not there yet. Every state's default is 100, so a dropped equation shows. Every state has a zero tendency except x, so the start is the starting value.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "index_sets": {
+    "n": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5,
+          "description": "decay rate of x"
+        },
+        "total": {
+          "type": "parameter",
+          "units": "1",
+          "default": 10.0,
+          "description": "b = total - a"
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0,
+          "description": "explicit: ic(x) ~ 2"
+        },
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0,
+          "description": "triangular: ic(z) ~ ic(x) + 1"
+        },
+        "c": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0,
+          "description": "triangular, written first: ic(c) ~ 2*ic(z)"
+        },
+        "a": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0,
+          "description": "explicit: ic(a) ~ 3"
+        },
+        "b": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0,
+          "description": "triangular: ic(b) ~ total - ic(a)"
+        },
+        "p": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "n"
+          ],
+          "default": 100.0,
+          "description": "explicit field: p[i] = i + 0.5"
+        },
+        "q": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "n"
+          ],
+          "default": 100.0,
+          "description": "triangular field: q[i] = ic(p)[i] * ic(x)"
+        },
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 100.0,
+          "description": "triangular scalar over a field: s = sum_i ic(q)[i]"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "x"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "z"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "a"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "b"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "p",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "output_idx": [
+              "i"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": 0.0,
+            "output_idx": [
+              "i"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "q",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "output_idx": [
+              "i"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": 0.0,
+            "output_idx": [
+              "i"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "c"
+            ]
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              2.0,
+              {
+                "op": "ic",
+                "args": [
+                  "z"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 2.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "z"
+            ]
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "ic",
+                "args": [
+                  "x"
+                ]
+              },
+              1.0
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "a"
+            ]
+          },
+          "rhs": 3.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "b"
+            ]
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "total",
+              {
+                "op": "ic",
+                "args": [
+                  "a"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "p"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                "i",
+                0.5
+              ]
+            },
+            "output_idx": [
+              "i"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "q"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    {
+                      "op": "ic",
+                      "args": [
+                        "p"
+                      ]
+                    },
+                    "i"
+                  ]
+                },
+                {
+                  "op": "ic",
+                  "args": [
+                    "x"
+                  ]
+                }
+              ]
+            },
+            "output_idx": [
+              "i"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "s"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "n"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "ic",
+                  "args": [
+                    "q"
+                  ]
+                },
+                "i"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

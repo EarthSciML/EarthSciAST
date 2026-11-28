@@ -1,0 +1,81 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_under_determined",
+    "description": "esm-spec 11.4.3 'Balance': one equation, two unknowns (ic(x), ic(y)). A default is not an equation of the system, so the build refuses it with ic_system_unbalanced. validate reports nothing: the document alone does not over-determine anything.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "total": {
+          "type": "parameter",
+          "units": "1",
+          "default": 10.0,
+          "description": "x + y at the start"
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "unknown of the system"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 2.0,
+          "description": "unknown of the system"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "ic",
+                "args": [
+                  "x"
+                ]
+              },
+              {
+                "op": "ic",
+                "args": [
+                  "y"
+                ]
+              }
+            ]
+          },
+          "rhs": "total"
+        }
+      ]
+    }
+  }
+}

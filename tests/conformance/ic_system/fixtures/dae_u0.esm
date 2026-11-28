@@ -1,0 +1,62 @@
+{
+  "esm": "2.5.0",
+  "metadata": {
+    "name": "ic_dae_u0",
+    "description": "esm-spec 11.4.3 'Precedence': a supplied value of an algebraic unknown is a starting guess, never a constraint, so a full u0 for a DAE is never refused for naming its algebraic unknown. x is an ODE state; y is algebraic (x + y ~ 3). Built with strip `algebraic`, z0 is y's warm start: u0's entry, else guesses (1.25).",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "W": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "ODE state, decays at rate 1"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "algebraic: x + y ~ 3"
+        }
+      },
+      "guesses": {
+        "y": 1.25
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "+",
+            "args": [
+              "x",
+              "y"
+            ]
+          },
+          "rhs": 3.0
+        }
+      ]
+    }
+  }
+}

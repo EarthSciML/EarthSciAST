@@ -1,0 +1,792 @@
+{
+ "category": "ic_system",
+ "version": "1.0",
+ "description": "Generalized `ic` equations and the initialization system (esm 2.5.0; esm-spec 11.4.2-11.4.4, API_SPEC 5.8; issue #817). `ic(v)` is v's value at t0 anywhere in an equation; an explicit initial condition `ic(u) ~ e` (e mentions no ic) is evaluated directly; every other initialization equation is an equation of one system. Every simulating binding solves a triangular system by substitution in dependency order, refuses a truly implicit one with unsupported_construct, or hands it to the caller under strip class `initialization`. A supplied value (u0, run-time override) of an ODE state is a known of the system; one of an algebraic unknown is a starting guess. The loader rewrites a deprecated `initialization_equations` block into ic equations (or into guesses for a model with no time derivative) and warns deprecated_field. Expected values are the documents' own formulas in binary64.",
+ "spec": [
+  "esm-spec.md 11.4.2 (item 8: starting values in the start-of-run scope)",
+  "esm-spec.md 11.4.3 (the initialization system, balance, precedence, triangular systems)",
+  "esm-spec.md 11.4.4 (migration from initialization_equations)",
+  "API_SPEC.md 5.8 (initial_state; strip class `initialization`)"
+ ],
+ "bindings_required": [
+  "julia",
+  "python",
+  "rust"
+ ],
+ "compilers": {
+  "julia": [
+   "native",
+   "interpreter"
+  ],
+  "rust": [
+   "native"
+  ],
+  "python": [
+   "default"
+  ]
+ },
+ "scope_excluded": {
+  "typescript": "No simulator (API_SPEC 3); loads are checked by its own loader tests.",
+  "go": "No simulator (API_SPEC 3); loads are checked by its own loader tests."
+ },
+ "checks": {
+  "expected": "the Problem built from the case's tspan, p, u0 and strip starts from `expected`, every state element by flattened name, and the map covers the whole state",
+  "error_code": "building the Problem raises an error whose text carries `error_code`",
+  "stripped": "with `strip`, the members named here of the stripped object (canonical JSON, parsed) equal the ones given; numbers compare by value",
+  "solved": "a binding with a nonlinear initialization solve (Julia compiler = mtk) starts from these values instead of refusing",
+  "not_solvable": "solve on the stripped Problem raises stripped_problem_not_solvable"
+ },
+ "tolerances": {
+  "rtol": 1e-14,
+  "atol": 1e-14
+ },
+ "cases": [
+  {
+   "id": "triangular_defaults",
+   "fixture": "fixtures/triangular.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "expected": {
+    "M.x": 2.0,
+    "M.z": 3.0,
+    "M.c": 6.0,
+    "M.a": 3.0,
+    "M.b": 7.0,
+    "M.s": 15.0,
+    "M.p[1]": 1.5,
+    "M.p[2]": 2.5,
+    "M.p[3]": 3.5,
+    "M.q[1]": 3.0,
+    "M.q[2]": 5.0,
+    "M.q[3]": 7.0
+   },
+   "note": "x = 2, z = x + 1, c = 2z (written before z's equation), a = 3, b = total - a, p[i] = i + 0.5, q[i] = p[i]*x, s = sum q"
+  },
+  {
+   "id": "triangular_parameter",
+   "fixture": "fixtures/triangular.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {
+    "M.total": 20.0
+   },
+   "u0": {},
+   "strip": [],
+   "expected": {
+    "M.x": 2.0,
+    "M.z": 3.0,
+    "M.c": 6.0,
+    "M.a": 3.0,
+    "M.b": 17.0,
+    "M.s": 15.0,
+    "M.p[1]": 1.5,
+    "M.p[2]": 2.5,
+    "M.p[3]": 3.5,
+    "M.q[1]": 3.0,
+    "M.q[2]": 5.0,
+    "M.q[3]": 7.0
+   },
+   "note": "the Problem's p reaches a triangular equation: b = 20 - 3"
+  },
+  {
+   "id": "triangular_u0_of_an_explicit_state",
+   "fixture": "fixtures/triangular.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {
+    "M.x": 10.0
+   },
+   "strip": [],
+   "expected": {
+    "M.x": 10.0,
+    "M.z": 11.0,
+    "M.c": 22.0,
+    "M.a": 3.0,
+    "M.b": 7.0,
+    "M.s": 75.0,
+    "M.p[1]": 1.5,
+    "M.p[2]": 2.5,
+    "M.p[3]": 3.5,
+    "M.q[1]": 15.0,
+    "M.q[2]": 25.0,
+    "M.q[3]": 35.0
+   },
+   "note": "u0 of an ODE state beats its explicit ic and is a known of the system: the equations that read ic(x) read 10"
+  },
+  {
+   "id": "triangular_u0_of_an_explicit_element",
+   "fixture": "fixtures/triangular.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {
+    "M.p[2]": 4.0
+   },
+   "strip": [],
+   "expected": {
+    "M.x": 2.0,
+    "M.z": 3.0,
+    "M.c": 6.0,
+    "M.a": 3.0,
+    "M.b": 7.0,
+    "M.s": 18.0,
+    "M.p[1]": 1.5,
+    "M.p[2]": 4.0,
+    "M.p[3]": 3.5,
+    "M.q[1]": 3.0,
+    "M.q[2]": 8.0,
+    "M.q[3]": 7.0
+   },
+   "note": "u0 of one element of an explicitly initialized field: that element only, and q and s read it"
+  },
+  {
+   "id": "triangular_u0_over_determines",
+   "fixture": "fixtures/triangular.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {
+    "M.z": 5.0
+   },
+   "strip": [],
+   "error_code": "ic_system_unbalanced",
+   "note": "z is determined by ic(z) ~ ic(x) + 1; a supplied value of the ODE state z is a known, so that equation has no unknown left: over-determined, naming the supplied value"
+  },
+  {
+   "id": "triangular_u0_of_an_element_over_determines",
+   "fixture": "fixtures/triangular.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {
+    "M.q[1]": 1.0
+   },
+   "strip": [],
+   "error_code": "ic_system_unbalanced",
+   "note": "one supplied element of the triangular field q over-determines q's equation"
+  },
+  {
+   "id": "observed_and_tendency_defaults",
+   "fixture": "fixtures/observed_and_tendency.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "expected": {
+    "M.x": 4.0,
+    "M.y": 10.0,
+    "M.w": -2.0
+   },
+   "note": "ic(o) = ic(x) + 1 = 5, y = 2*5; ic(D(x)) = -k*ic(x) = -2"
+  },
+  {
+   "id": "observed_and_tendency_u0",
+   "fixture": "fixtures/observed_and_tendency.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {
+    "M.k": 0.25
+   },
+   "u0": {
+    "M.x": 2.0
+   },
+   "strip": [],
+   "expected": {
+    "M.x": 2.0,
+    "M.y": 6.0,
+    "M.w": -0.5
+   },
+   "note": "the supplied x and the Problem's k reach both expansions"
+  },
+  {
+   "id": "broadcast_by_index_set_name",
+   "fixture": "fixtures/broadcast.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "expected": {
+    "K.aw[1,1]": 0.9,
+    "K.aw[1,2]": 0.9,
+    "K.aw[1,3]": 0.9,
+    "K.aw[2,1]": 0.8,
+    "K.aw[2,2]": 0.8,
+    "K.aw[2,3]": 0.8,
+    "K.cw[1,1]": 1.0,
+    "K.cw[1,2]": 2.0,
+    "K.cw[1,3]": 3.0,
+    "K.cw[2,1]": 1.0,
+    "K.cw[2,2]": 2.0,
+    "K.cw[2,3]": 3.0,
+    "K.bw[1,1]": 0.9,
+    "K.bw[1,2]": 1.8,
+    "K.bw[1,3]": 2.7,
+    "K.bw[2,1]": 0.8,
+    "K.bw[2,2]": 1.6,
+    "K.bw[2,3]": 2.4000000000000004
+   },
+   "note": "aw[k,b] = aw0[k]; cw[k,b] = fac[b]; bw[k,b] = aw[k,b]*fac[b]"
+  },
+  {
+   "id": "implicit_refused",
+   "fixture": "fixtures/implicit.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "error_code": "unsupported_construct",
+   "solved": {
+    "M.x": 6.0,
+    "M.y": 4.0,
+    "M.w": 7.0
+   },
+   "note": "ic(x) + ic(y) ~ total and ic(x) - ic(y) ~ diff must be solved simultaneously"
+  },
+  {
+   "id": "implicit_stripped",
+   "fixture": "fixtures/implicit.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [
+    "initialization"
+   ],
+   "expected": {
+    "M.x": 1.5,
+    "M.y": 0.25,
+    "M.w": 7.0
+   },
+   "stripped": {
+    "initialization": {
+     "residuals": [
+      {
+       "id": "M.initialization[1]",
+       "origin": {
+        "component": "M"
+       },
+       "shape": [],
+       "expr": {
+        "op": "-",
+        "args": [
+         {
+          "op": "+",
+          "args": [
+           {
+            "op": "ic",
+            "args": [
+             "M.x"
+            ]
+           },
+           {
+            "op": "ic",
+            "args": [
+             "M.y"
+            ]
+           }
+          ]
+         },
+         "M.total"
+        ]
+       }
+      },
+      {
+       "id": "M.initialization[2]",
+       "origin": {
+        "component": "M"
+       },
+       "shape": [],
+       "expr": {
+        "op": "-",
+        "args": [
+         {
+          "op": "-",
+          "args": [
+           {
+            "op": "ic",
+            "args": [
+             "M.x"
+            ]
+           },
+           {
+            "op": "ic",
+            "args": [
+             "M.y"
+            ]
+           }
+          ]
+         },
+         "M.diff"
+        ]
+       }
+      }
+     ],
+     "unknowns": [
+      "M.x",
+      "M.y"
+     ],
+     "x0": [
+      1.5,
+      0.25
+     ]
+    },
+    "strip": [
+     "initialization"
+    ]
+   },
+   "not_solvable": true,
+   "note": "the implicit part is handed to the caller; its unknowns start from guesses (x) else the default (y); the explicit ic(w) is still evaluated"
+  },
+  {
+   "id": "implicit_u0_over_determines",
+   "fixture": "fixtures/implicit.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {
+    "M.x": 3.0
+   },
+   "strip": [
+    "initialization"
+   ],
+   "error_code": "ic_system_unbalanced",
+   "note": "a supplied ODE state is a known: two equations, one unknown"
+  },
+  {
+   "id": "under_determined",
+   "fixture": "fixtures/under_determined.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "error_code": "ic_system_unbalanced",
+   "note": "one equation, two unknowns; defaults are not equations"
+  },
+  {
+   "id": "under_determined_stripped",
+   "fixture": "fixtures/under_determined.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [
+    "initialization"
+   ],
+   "error_code": "ic_system_unbalanced",
+   "note": "the balance is checked before anything is stripped"
+  },
+  {
+   "id": "over_determined",
+   "fixture": "fixtures/over_determined.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "error_code": "ic_system_unbalanced",
+   "note": "2*ic(x) ~ total has no unknown: ic(x) is explicit"
+  },
+  {
+   "id": "mixed_trajectory",
+   "fixture": "fixtures/mixed_trajectory.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "error_code": "ic_reads_state",
+   "note": "D(x) ~ -(x - ic(x))/tau mixes ic with trajectory values"
+  },
+  {
+   "id": "migration_ode",
+   "fixture": "fixtures/migration_ode.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "expected": {
+    "M.x": 2.0,
+    "M.v[1]": 1.0,
+    "M.v[2]": 2.0,
+    "M.v[3]": 3.0,
+    "M.u[1]": 1.5,
+    "M.u[2]": 3.0,
+    "M.u[3]": 4.5,
+    "M.aw[1,1]": 0.9,
+    "M.aw[1,2]": 0.9,
+    "M.aw[1,3]": 0.9,
+    "M.aw[2,1]": 0.8,
+    "M.aw[2,2]": 0.8,
+    "M.aw[2,3]": 0.8
+   },
+   "note": "the migrated block: x = x0 (issue #817), v[i] = i, u[i] = A*i + v[i] (triangular after migration), aw repeated along bin"
+  },
+  {
+   "id": "migration_ode_u0",
+   "fixture": "fixtures/migration_ode.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {
+    "M.v[3]": 10.0
+   },
+   "strip": [],
+   "expected": {
+    "M.x": 2.0,
+    "M.v[1]": 1.0,
+    "M.v[2]": 2.0,
+    "M.v[3]": 10.0,
+    "M.u[1]": 1.5,
+    "M.u[2]": 3.0,
+    "M.u[3]": 11.5,
+    "M.aw[1,1]": 0.9,
+    "M.aw[1,2]": 0.9,
+    "M.aw[1,3]": 0.9,
+    "M.aw[2,1]": 0.8,
+    "M.aw[2,2]": 0.8,
+    "M.aw[2,3]": 0.8
+   },
+   "note": "a supplied element of the explicit field v; u reads it"
+  },
+  {
+   "id": "migration_steady_state_refused",
+   "fixture": "fixtures/migration_steady_state.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [],
+   "error_code": "unsupported_construct",
+   "solved": {
+    "M.x": 4.0
+   },
+   "note": "ic(D(x)) ~ 0 is not explicit in ic(x)"
+  },
+  {
+   "id": "migration_steady_state_stripped",
+   "fixture": "fixtures/migration_steady_state.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [
+    "initialization"
+   ],
+   "expected": {
+    "M.x": 1.0
+   },
+   "stripped": {
+    "initialization": {
+     "residuals": [
+      {
+       "id": "M.initialization[1]",
+       "origin": {
+        "component": "M"
+       },
+       "shape": [],
+       "expr": {
+        "op": "-",
+        "args": [
+         {
+          "op": "ic",
+          "args": [
+           {
+            "op": "D",
+            "args": [
+             "M.x"
+            ],
+            "wrt": "t"
+           }
+          ]
+         },
+         0.0
+        ]
+       }
+      }
+     ],
+     "unknowns": [
+      "M.x"
+     ],
+     "x0": [
+      1.0
+     ]
+    }
+   },
+   "not_solvable": true,
+   "note": "x starts from its default for the caller to solve from"
+  },
+  {
+   "id": "dae_full_u0",
+   "fixture": "fixtures/dae_u0.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {
+    "W.x": 2.0,
+    "W.y": 0.5
+   },
+   "strip": [
+    "algebraic"
+   ],
+   "expected": {
+    "W.x": 2.0
+   },
+   "stripped": {
+    "algebraic_z0": [
+     0.5
+    ],
+    "initialization": {
+     "residuals": [],
+     "unknowns": [],
+     "x0": []
+    }
+   },
+   "note": "a full u0 is not refused for naming the algebraic y; it is y's warm start"
+  },
+  {
+   "id": "dae_guess",
+   "fixture": "fixtures/dae_u0.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "p": {},
+   "u0": {},
+   "strip": [
+    "algebraic"
+   ],
+   "expected": {
+    "W.x": 1.0
+   },
+   "stripped": {
+    "algebraic_z0": [
+     1.25
+    ]
+   },
+   "note": "with no supplied value, y's warm start is its guesses entry"
+  }
+ ],
+ "loads": [
+  {
+   "id": "migration_ode",
+   "fixture": "fixtures/migration_ode.esm",
+   "warnings": [
+    "deprecated_field"
+   ],
+   "model": "M",
+   "equations_tail": [
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "x"
+      ]
+     },
+     "rhs": "x0"
+    },
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "v"
+      ]
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "ranges": {
+       "i": {
+        "from": "n"
+       }
+      },
+      "expr": "i",
+      "output_idx": [
+       "i"
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "u"
+      ]
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "ranges": {
+       "i": {
+        "from": "n"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          "A",
+          "i"
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          {
+           "op": "ic",
+           "args": [
+            "v"
+           ]
+          },
+          "i"
+         ]
+        }
+       ]
+      },
+      "output_idx": [
+       "i"
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "aw"
+      ]
+     },
+     "rhs": "aw0"
+    }
+   ],
+   "no_field": "initialization_equations",
+   "note": "every unknown w becomes ic(w), index(v, i) becomes index(ic(v), i); parameters, index names and t are kept; appended in order after the model's equations"
+  },
+  {
+   "id": "migration_steady_state",
+   "fixture": "fixtures/migration_steady_state.esm",
+   "warnings": [
+    "deprecated_field"
+   ],
+   "model": "M",
+   "equations_tail": [
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       {
+        "op": "D",
+        "args": [
+         "x"
+        ],
+        "wrt": "t"
+       }
+      ]
+     },
+     "rhs": 0.0
+    }
+   ],
+   "no_field": "initialization_equations",
+   "note": "D(x) becomes ic(D(x)), not D(ic(x))"
+  },
+  {
+   "id": "migration_nonlinear",
+   "fixture": "fixtures/migration_nonlinear.esm",
+   "warnings": [
+    "deprecated_field"
+   ],
+   "model": "N",
+   "equations_count": 2,
+   "guesses": {
+    "H": 0.002,
+    "SO4": "T_SO4"
+   },
+   "no_field": "initialization_equations",
+   "note": "no time derivative: v ~ e becomes guesses[v] = e; an existing guess is kept"
+  },
+  {
+   "id": "migration_nonlinear_refused",
+   "fixture": "fixtures/migration_nonlinear_refused.esm",
+   "load_error": "deprecated_field",
+   "note": "no time derivative and a left-hand side that is not a bare unknown"
+  },
+  {
+   "id": "element_spelling",
+   "fixture": "fixtures/element_spelling.esm",
+   "load_error": "ic",
+   "note": "ic(index(u, 1)) is malformed (esm-spec 4.2). The spec names no code; the error text mentions ic"
+  },
+  {
+   "id": "over_determined_validate",
+   "fixture": "fixtures/over_determined.esm",
+   "validate_errors": [
+    "ic_system_unbalanced"
+   ],
+   "note": "document-level over-determination: one non-explicit equation, no starting value left that an explicit initial condition does not set"
+  },
+  {
+   "id": "under_determined_validate",
+   "fixture": "fixtures/under_determined.esm",
+   "validate_errors": [],
+   "note": "under-determination needs the build's supplied values and classification"
+  },
+  {
+   "id": "triangular_validate",
+   "fixture": "fixtures/triangular.esm",
+   "validate_errors": [],
+   "warnings": [],
+   "note": "a valid 2.5.0 document: ic anywhere is not an error"
+  }
+ ]
+}

@@ -1,0 +1,75 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "ic_migration_steady_state",
+    "description": "esm-spec 11.4.4: the steady-state initialization equation D(x) ~ 0 migrates to ic(D(x)) ~ 0, x's tendency at the starting values (not D(ic(x)), the derivative of a constant). It is not explicit in ic(x), so it is a truly implicit system.",
+    "authors": [
+      "EarthSciAST conformance"
+    ],
+    "tags": [
+      "conformance",
+      "esm-spec-11.4.3",
+      "ic"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5,
+          "description": "relaxation rate"
+        },
+        "xe": {
+          "type": "parameter",
+          "units": "1",
+          "default": 4.0,
+          "description": "equilibrium"
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "starts at steady state: x = xe"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "k",
+              {
+                "op": "-",
+                "args": [
+                  "xe",
+                  "x"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "initialization_equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ]
+    }
+  }
+}
