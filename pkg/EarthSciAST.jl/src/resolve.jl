@@ -904,8 +904,8 @@ function _rewrite_old_spellings!(doc)::Vector{String}
         isempty(isites) || push!(
             parts, string(
                 "a model's `initialization_equations` is read as `ic` equations in its ",
-                "`equations`, or as `guesses` for a model with no time derivative ",
-                "(esm 2.5.0, esm-spec §11.4.4)"
+                "`equations`, or as `guesses` for a model with no time derivative, and an ",
+                "initial condition of a parameter as its `default` (esm 2.5.0, esm-spec §11.4.4)"
             )
         )
         @warn string(
@@ -943,8 +943,10 @@ function _has_old_spellings(x)::Bool
         _is_object(n) || return true
         for (k, _) in pairs(n)
             ks = string(k)
-            (ks == "expression_templates" || ks == "expression_template_imports" ||
-                ks == "initialization_equations") && return _JSON_STOP
+            (
+                ks == "expression_templates" || ks == "expression_template_imports" ||
+                    ks == "initialization_equations"
+            ) && return _JSON_STOP
         end
         op = _raw_get(n, "op")
         if op isa AbstractString

@@ -657,14 +657,27 @@ canonicalize_document(doc::AbstractDict) =
 
 # esm 2.4.0 (esm-spec §9.6.12, §4.2): the canonical form spells only the new
 # names, so an earlier document's spellings are read as the wire boundary reads
-# them (`_rewrite_old_spellings!`), on a copy and without the warnings.
+# them (`_rewrite_old_spellings!`), on a copy and without the warnings. esm
+# 2.5.0 (§9.6.6 `deprecated_field`, §11.4.4): a model's
+# `initialization_equations` (and a pre-2.5.0 initial condition of a
+# parameter) is migrated by the loader's own rewrite, so a printed document
+# never carries the field, unless the migration refuses the document: then the
+# field is printed as written, with the other rewrites applied.
 function _respell_old_quietly(doc)
-    _has_old_spellings(doc) || return doc
+    _has_old_spellings(doc) || _needs_ic_migration(doc) || return doc
     d = _to_ordered(doc)
     task_local_storage(:esm_doc_independent_variable, _document_iv_rename(d)) do
         _old_spellings_walk!(d, "", false, nothing, String[], String[], IdDict{Any, Nothing}())
     end
-    return d
+    # A document the migration refuses is printed with the field as written.
+    try
+        m = _to_ordered(d)
+        _migrate_initialization_equations!(m)
+        return m
+    catch err
+        err isa ParseError || rethrow()
+        return d
+    end
 end
 
 # The deprecated ops (esm-spec §4.2): spelling => (replacement, operand count),

@@ -99,7 +99,6 @@ struct _EquationPartition
     geom_setup_arrays::Dict{String, AbstractArray{Float64}}
     derived_extents::Dict{String, Int}
     equations::Vector{Equation}
-    init_equations::Vector{Equation}
     discrete_defs::Dict{String, ASTExpr}
     eq_ics::Dict{String, Float64}
     field_ics::Vector{Tuple{String, ASTExpr}}
@@ -134,7 +133,7 @@ _n_total(L::_StatePlan) = length(L.var_map_ext)
 _with_equations(parts::_EquationPartition, equations::Vector{Equation}) =
     _EquationPartition(
     parts.param_names, parts.observed_names, parts.state_var_names, parts.param_scope,
-    parts.geom_setup_arrays, parts.derived_extents, equations, parts.init_equations,
+    parts.geom_setup_arrays, parts.derived_extents, equations,
     parts.discrete_defs, parts.eq_ics, parts.field_ics, parts.ic_start, parts.ic_plan,
     parts.ic_system
 )
