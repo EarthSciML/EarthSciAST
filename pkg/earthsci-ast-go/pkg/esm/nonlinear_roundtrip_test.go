@@ -37,10 +37,10 @@ func TestNonlinearIsorropiaShapeRoundTrip(t *testing.T) {
 	// esm 2.5.0 (esm-spec §11.4.4): a model with no time derivative reads its
 	// deprecated initialization equations as `guesses`; both unknowns already
 	// have one, which is kept.
-	assert.Empty(t, model.InitializationEquations)
 	assert.Len(t, model.Guesses, 2)
 
 	data, err := json.Marshal(parsed)
+
 	require.NoError(t, err)
 	var reparsed ESMFile
 	require.NoError(t, json.Unmarshal(data, &reparsed))
@@ -59,10 +59,10 @@ func TestNonlinearMogiShapeRoundTrip(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, model.SystemKind)
 	assert.Equal(t, "nonlinear", *model.SystemKind)
-	assert.Empty(t, model.InitializationEquations)
 	assert.Empty(t, model.Guesses)
 
 	data, err := json.Marshal(parsed)
+
 	require.NoError(t, err)
 	var reparsed ESMFile
 	require.NoError(t, json.Unmarshal(data, &reparsed))

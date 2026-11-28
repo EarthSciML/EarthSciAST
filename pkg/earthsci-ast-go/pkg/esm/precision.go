@@ -66,7 +66,6 @@ func unspecifiedKeys(file *ESMFile) []keySite {
 			unspecified[scope+"."+name] = m.Variables[name].ElementType == nil
 		}
 		equations(scope, pointer, "equations", m.Equations)
-		equations(scope, pointer, "initialization_equations", m.InitializationEquations)
 		for _, key := range sortedKeys(m.Subsystems) {
 			raw, ok := subsystemAsMap(m.Subsystems[key])
 			if !ok || isReactionSystemMap(raw) {

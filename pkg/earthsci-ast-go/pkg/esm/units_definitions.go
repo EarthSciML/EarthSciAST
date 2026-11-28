@@ -470,7 +470,6 @@ func liveUnitSites(file *ESMFile) []liveUnitSite {
 	var system func(rs *ReactionSystem, ptr string)
 	model = func(m *Model, ptr string) {
 		add(ptr+"/equations", m.Equations)
-		add(ptr+"/initialization_equations", m.InitializationEquations)
 		for _, k := range sortedKeys(m.Subsystems) {
 			if sub, ok := decodeSubsystemAs[Model](m.Subsystems[k]); ok {
 				model(&sub, ptr+"/subsystems/"+escapeJSONPointerSegment(k))

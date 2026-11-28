@@ -379,10 +379,9 @@ type Model struct {
 	Tests []Test `json:"tests,omitempty"`
 	// Analyses are inline illustrative runs + plot specs (esm-spec §6.7).
 	Analyses []Analysis `json:"analyses,omitempty"`
-	// InitializationEquations hold only at t=0 (not dynamically time-stepped).
-	// Used by models that must solve an auxiliary system before the main
-	// time-stepping begins (e.g. aerosol equilibrium, plume rise). See gt-ebuq.
-	InitializationEquations []Equation `json:"initialization_equations,omitempty"`
+	// The deprecated `initialization_equations` block (esm 2.5.0) has no field:
+	// the loader rewrites it into `ic` equations or `guesses` before the model
+	// is decoded (esm-spec §11.4.4), so a loaded or emitted model never has it.
 	// Guesses provides initial-guess seeds for nonlinear solvers during
 	// initialization, keyed by variable name. Values may be numeric literals
 	// or Expression graphs (serialized as interface{}).

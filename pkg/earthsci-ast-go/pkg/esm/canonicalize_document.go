@@ -51,7 +51,10 @@ var documentFreeKeys = map[string]bool{
 // token in Int64 is that int64 exactly, past 2^53 too; any other token is read
 // as the nearest float64 (one below the smallest subnormal is 0); a token
 // beyond the binary64 range (`1e400`) has no nearest float64 and is kept as
-// written. The input is not mutated and nothing else changes.
+// written. A deprecated `initialization_equations` block, and a pre-2.5.0
+// initial condition of a parameter, are migrated as the loader migrates them
+// (esm-spec §11.4.4), so the canonical form, and every printed document, never
+// carries the field. The input is not mutated and nothing else changes.
 // These are the rules of Lean `Adapter.Doc.spellRules` and `Adapter.Doc.conv`.
 func CanonicalizeDocument(doc any) any {
 	return canonicalDocumentNumbers(canonicalizeDocumentValue(newSpellingValue(doc), false))
@@ -70,7 +73,9 @@ func newSpellingValue(doc any) any {
 	if err != nil {
 		return doc
 	}
-	out := newSpellingText(string(raw))
+	// A deprecated `initialization_equations` block is read as the load reads
+	// it (esm-spec §11.4.4), so the canonical form never carries the field.
+	out := initializationEquationsMigratedText(newSpellingText(string(raw)))
 	if out == string(raw) {
 		return doc
 	}

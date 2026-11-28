@@ -475,7 +475,7 @@ type FlattenedSystem struct {
 	DiscreteParameters []FlattenedVariable
 	// Equations are the governing equations — dynamics and constraints — with
 	// coupling applied and variables dot-namespaced. Entries classified out into
-	// FieldICs are REMOVED from this list.
+	// FieldICs or InitializationEquations are REMOVED from this list.
 	Equations []FlattenedEquation
 	// ContinuousEvents / DiscreteEvents are the components' events,
 	// dot-namespaced. They were one untyped `Events []any` bucket, which no
@@ -495,9 +495,15 @@ type FlattenedSystem struct {
 	// TemplateRegistry is the merged expression-template registry (esm-spec
 	// §9.6.4 rule 7, §10.7).
 	TemplateRegistry []FlattenedTemplate
-	// FieldICs are the deferred scoped-reference / array `ic` equations
-	// (esm-spec §11.4.1), removed from Equations.
+	// FieldICs are the explicit initial conditions (esm-spec §11.4.1,
+	// §11.4.3): ic(u) ~ e or e ~ ic(u), e mentioning no `ic`, as (state, e); at
+	// most one per state. Removed from Equations.
 	FieldICs []FieldIC
+	// InitializationEquations are every other initialization equation (esm
+	// 2.5.0, esm-spec §11.4.3: one that mentions `ic`), in document order,
+	// namespaced and rewritten as Equations are (esm-libraries-spec §4.7.5 step
+	// 4): the equations of the initialization system. Removed from Equations.
+	InitializationEquations []FlattenedEquation
 	// LoaderFields are the provider-served loaded fields the system consumes.
 	LoaderFields []LoaderField
 	// LiftedShapes are the post-lift grid shapes for arrayed states.
@@ -2998,6 +3004,9 @@ func normalizeFlattenedAngleArguments(flat *FlattenedSystem) {
 	for i := range flat.FieldICs {
 		flat.FieldICs[i].Expr = rewrite(flat.FieldICs[i].Expr)
 	}
+	for i, eq := range flat.InitializationEquations {
+		flat.InitializationEquations[i] = mapContributions(eq, rewrite, rewrite(eq.LHS))
+	}
 	// Events are rewritten too, although this binding runs no evaluator: the
 	// Julia binding exports the flattened form to ModelingToolkit, which does
 	// run events, so leaving a `sin(theta [deg])` in an event condition
@@ -3456,27 +3465,32 @@ func classifyFlattened(flat *FlattenedSystem) {
 	flat.DiscreteParameters = selectOrdered(set(DiscreteParameters(&view)), flat.Parameters)
 }
 
-// collectFieldICs records the deferred `ic` equations (esm-spec §11.4.1) as
-// ordered (state, expression) pairs and CLASSIFIES THEM OUT of flat.Equations.
+// collectFieldICs classifies the initialization equations (esm-spec §11.4.3:
+// every equation that mentions `ic`) OUT of flat.Equations: each explicit
+// initial condition into FieldICs as an ordered (state, expression) pair, every
+// other one into InitializationEquations.
 //
-// An initial condition is a datum, not an equation of motion: leaving it in
+// An explicit initial condition is a datum, not an equation of motion, and the
+// others are the equations of the initialization system: leaving either in
 // `equations` makes that list unusable for building a right-hand side without
 // filtering it first, and makes equation counts incomparable across bindings.
 // Runs LAST, after the lift and the independent-variable derivation, so every
 // intermediate pass still sees the same equation list it always did. Returns a
-// ConflictingDerivativeError when two `ic(x)` entries name the same state.
+// ConflictingDerivativeError when two explicit initial conditions name the same
+// state.
 func collectFieldICs(flat *FlattenedSystem) error {
 	var ics []FieldIC
-	var remaining []FlattenedEquation
+	var system, remaining []FlattenedEquation
 	for _, eq := range flat.Equations {
-		node, ok := asExprNode(eq.LHS)
-		if ok && node.Op == "ic" && len(node.Args) == 1 {
-			if target, ok := node.Args[0].(string); ok {
-				ics = append(ics, FieldIC{State: target, Expr: eq.RHS})
-				continue
-			}
+		if !isInitializationEquation(eq.LHS, eq.RHS) {
+			remaining = append(remaining, eq)
+			continue
 		}
-		remaining = append(remaining, eq)
+		if target, value, ok := explicitInitialCondition(eq.LHS, eq.RHS); ok {
+			ics = append(ics, FieldIC{State: target, Expr: value})
+		} else {
+			system = append(system, eq)
+		}
 	}
 	// One initial condition per state (esm-libraries-spec §4.7.5 step 4
 	// `field_ics`). Two -- an authored `ic(x)` and an operator's `ic(_var)`
@@ -3498,6 +3512,7 @@ func collectFieldICs(flat *FlattenedSystem) error {
 			strings.Join(duplicated, ", ")}
 	}
 	flat.FieldICs = ics
+	flat.InitializationEquations = system
 	flat.Equations = remaining
 	return nil
 }
