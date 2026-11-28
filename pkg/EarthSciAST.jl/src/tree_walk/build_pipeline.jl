@@ -548,8 +548,8 @@ function _build_state_layout(
                 continue
             end
             v = model.variables[name]
-            dims = _materialized_obs_dims(
-                mat_defs_raw[name], v.shape,
+            dims = _range_observed_dims(
+                _range_spec_now(), name, mat_defs_raw[name], v.shape,
                 index_sets, parts.derived_extents
             )
             if dims === nothing || isempty(dims) || any(d -> d <= 0, dims)
@@ -1417,7 +1417,7 @@ function _build_evaluator_impl_inner(
     # (build_ic_system.jl), before any pass reads the equations as dynamics.
     model = _split_initialization_system(model)
     # A lane build (src/range/lanes.jl) computes 0-d observeds of `t` per lane.
-    model = _range_promote_model(_range_spec_now(), model)
+    model = _range_promote_model(_range_spec_now(), model, index_sets)
     # ---- Structural interning (hash-consing) of the expression AST (perf
     # plan A1; src/intern.jl). Every build pass below is identity-memoized;
     # interning makes textually identical subtrees (which template inlining
