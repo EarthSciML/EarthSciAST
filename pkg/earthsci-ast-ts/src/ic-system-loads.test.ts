@@ -54,6 +54,14 @@ describe('ic_system loads (esm-spec §11.4.4)', () => {
       return
     }
     const file = loadPath(fp) as unknown as Record<string, unknown>
+    if (l.validate_errors !== undefined) {
+      const result = validate(file as never)
+      const codes = result.structural_errors.map((e) => e.code)
+      expect(codes.filter((c) => c === 'ic_system_unbalanced')).toEqual(
+        l.validate_errors.filter((c) => c === 'ic_system_unbalanced'),
+      )
+      for (const c of l.validate_errors) expect(codes).toContain(c)
+    }
     const messages: string[] = warn.mock.calls.map((c: unknown[]) => String(c[0]))
     for (const w of l.warnings ?? []) {
       expect(messages.some((m) => m.startsWith(w))).toBe(true)

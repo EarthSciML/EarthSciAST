@@ -27,7 +27,7 @@ import { fixturePath, readFixture } from './test-helpers.js'
  *
  * The suite reads the current major from `SCHEMA_VERSION` rather than spelling
  * it, so it states the same rules whichever major the embedded schema declares;
- * only the literal pin at the end names 2.4.0.
+ * only the literal pin at the end names 2.5.0.
  *
  * Most cases apply the version under test to a base document IN MEMORY rather
  * than reading a per-version fixture: the gate is a function of the version
@@ -277,12 +277,14 @@ describe('Version Compatibility', () => {
       // (esm-spec §10.5), then 2.2.0 -> 2.3.0 with the deprecated `neg` / `pow`
       // (esm-spec §4.2), the canonical unit spelling (§4.8.2) and the document
       // source formats (§1.2), then 2.3.0 -> 2.4.0 with the removal of `grad`,
-      // `div` and `laplacian` (esm-spec §4.2 "Removed ops").
+      // `div` and `laplacian` (esm-spec §4.2 "Removed ops"), then 2.4.0 -> 2.5.0
+      // with generalized `ic` equations and the initialization system
+      // (esm-spec §11.4.3, §11.4.4).
       // The literal is the point of the test: SCHEMA_VERSION is DERIVED from the
       // embedded schema `$id`, so this pins that the derivation still reads the
       // schema rather than a stale copy, and it is expected to be updated by
       // hand on each format bump.
-      expect(SCHEMA_VERSION).toBe('2.4.0')
+      expect(SCHEMA_VERSION).toBe('2.5.0')
     })
 
     it('exposes the package version separately, under its own name', () => {

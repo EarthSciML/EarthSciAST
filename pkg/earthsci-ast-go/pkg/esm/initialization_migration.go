@@ -278,9 +278,9 @@ func checkIcArguments(n any, at string) error {
 				}
 			}
 			if !ok {
-				return fmt.Errorf("%s: the argument of `ic` must be a variable reference or `D` of "+
+				return fmt.Errorf("%s: %s: the argument of `ic` must be a variable reference or `D` of "+
 					"one (esm-spec §4.2); an element of an array unknown is written "+
-					"`index(ic(u), i)`, not `ic(index(u, i))`", pointerOrRoot(at))
+					"`index(ic(u), i)`, not `ic(index(u, i))`", codeIcInvalidArgument, pointerOrRoot(at))
 			}
 		}
 		for _, k := range sortedKeys(v) {
@@ -290,4 +290,127 @@ func checkIcArguments(n any, at string) error {
 		}
 	}
 	return nil
+}
+
+// icNodesOf collects the `ic` nodes of a generic expression, in walk order.
+func icNodesOf(e any, out []map[string]any) []map[string]any {
+	switch v := e.(type) {
+	case []any:
+		for _, x := range v {
+			out = icNodesOf(x, out)
+		}
+	case map[string]any:
+		if v["op"] == "ic" {
+			out = append(out, v)
+		}
+		for _, k := range []string{"args", "expr", "filter", "values"} {
+			out = icNodesOf(v[k], out)
+		}
+	}
+	return out
+}
+
+// icTargetOf is u when side is exactly ic(u), u a name.
+func icTargetOf(side any) (string, bool) {
+	m, ok := side.(map[string]any)
+	if !ok || m["op"] != "ic" {
+		return "", false
+	}
+	args, _ := m["args"].([]any)
+	if len(args) != 1 {
+		return "", false
+	}
+	n, ok := args[0].(string)
+	return n, ok
+}
+
+// validateInitializationOverdetermination is the one balance finding a
+// document shows by itself (esm 2.5.0, esm-spec §11.4.3 "What validate
+// reports"): the model's initialization equations that are not explicit
+// initial conditions, at least one scalar equation each, against the distinct
+// starting values they mention that no explicit initial condition sets, each
+// counted by its declared element count. Mirrors the other four bindings.
+func (s *structuralScan) validateInitializationOverdetermination(model *Model, basePath string) {
+	raw, err := json.Marshal(model.Equations)
+	if err != nil {
+		return
+	}
+	var eqs []any
+	if json.Unmarshal(raw, &eqs) != nil {
+		return
+	}
+	explicit := map[string]bool{}
+	var system []map[string]any
+	for _, x := range eqs {
+		eq, _ := x.(map[string]any)
+		lhsIc, rhsIc := icNodesOf(eq["lhs"], nil), icNodesOf(eq["rhs"], nil)
+		if len(lhsIc) == 0 && len(rhsIc) == 0 {
+			continue
+		}
+		if t, ok := icTargetOf(eq["lhs"]); ok && len(rhsIc) == 0 {
+			explicit[t] = true
+		} else if t, ok := icTargetOf(eq["rhs"]); ok && len(lhsIc) == 0 {
+			explicit[t] = true
+		} else {
+			system = append(system, eq)
+		}
+	}
+	if len(system) == 0 {
+		return
+	}
+	mentioned := map[string]bool{}
+	for _, eq := range system {
+		for _, node := range append(icNodesOf(eq["lhs"], nil), icNodesOf(eq["rhs"], nil)...) {
+			args, _ := node["args"].([]any)
+			name, ok := "", false
+			if len(args) == 1 {
+				name, ok = args[0].(string)
+			}
+			if !ok {
+				return // ic(D(x)) reads whatever x's tendency reads: unbounded here
+			}
+			if !explicit[name] {
+				mentioned[name] = true
+			}
+		}
+	}
+	starting := 0
+	for name := range mentioned {
+		v, ok := model.Variables[name]
+		if !ok {
+			return // a scoped or undeclared name: its size is not known here
+		}
+		n := 1
+		var shape []string
+		if v.Shape != nil {
+			shape = *v.Shape
+		}
+		for _, set := range shape {
+			is, ok := s.file.IndexSets[set]
+			switch {
+			case ok && is.Size != nil:
+				n *= *is.Size
+			case ok && is.Members != nil:
+				n *= len(is.Members)
+			default:
+				return
+			}
+		}
+		starting += n
+	}
+	if len(system) <= starting {
+		return
+	}
+	s.addErr(StructuralError{
+		Path: basePath + "/equations",
+		Code: codeIcSystemUnbalanced,
+		Message: fmt.Sprintf("the initialization system is over-determined: %d initialization "+
+			"equation(s) that are not explicit initial conditions mention %d starting value(s) "+
+			"that no explicit initial condition sets (esm-spec §11.4.3)", len(system), starting),
+		Details: map[string]any{
+			"direction": "over-determined",
+			"equations": len(system),
+			"unknowns":  sortedKeys(mentioned),
+		},
+	})
 }

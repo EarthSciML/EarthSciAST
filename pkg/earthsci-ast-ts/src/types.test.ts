@@ -17,7 +17,7 @@ describe('ESM Format Types', () => {
     // embedded schema `$id` (and
     // therefore SCHEMA_VERSION) tracks it. The npm package version is a
     // different number and lives in LIBRARY_VERSION.
-    expect(SCHEMA_VERSION).toBe('2.4.0')
+    expect(SCHEMA_VERSION).toBe('2.5.0')
   })
 
   it('should handle Expr type correctly', () => {
