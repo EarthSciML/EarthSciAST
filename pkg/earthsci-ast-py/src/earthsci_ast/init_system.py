@@ -1,25 +1,29 @@
 """The initialization system (esm 2.5.0; esm-spec §11.4.2–§11.4.3).
 
-An *initialization equation* mentions ``ic`` anywhere. Flatten splits them:
-an EXPLICIT initial condition ``ic(u) ~ e`` (``e`` mentions no ``ic``) goes to
-``FlattenedSystem.field_ics`` and is folded by the builders as before; every
-other one goes to ``FlattenedSystem.initialization_equations``, the equations
-of the initialization system, which this module plans:
+An *initialization equation* mentions ``ic`` anywhere. Flatten splits them
+(:mod:`.classification` answers which is which): an EXPLICIT initial condition
+``ic(u) ~ e`` (``e`` mentions no ``ic``, ``u`` not an observed) goes to
+``FlattenedSystem.field_ics`` and is folded by the builders; every other one
+goes to ``FlattenedSystem.initialization_equations``, the equations of the
+initialization system, which this module plans:
 
 1. a trajectory read (a state, bare or under ``D``, outside ``ic``) is refused
    with ``ic_reads_state`` (:func:`refuse_trajectory_reads`);
 2. ``ic(y)`` of an observed and ``ic(D(x))`` are expanded into the starting
    values they read (§11.4.2 item 8, :func:`expand_start_values`);
-3. the system is balanced per element — supplied values of ODE states and the
-   cells explicit initial conditions set are its knowns, every other starting
-   value an equation mentions is an unknown, and a ``default`` is never a
-   value of the system — or refused with ``ic_system_unbalanced``;
-4. the triangular part (each equation ``ic(u) ~ e`` explicit in one unknown,
-   acyclic) becomes ordered :attr:`InitPlan.steps` the builder evaluates by
-   substitution; the rest (equations not explicit in their unknown, cycles,
-   and the equations downstream of their unknowns) is refused with
-   ``unsupported_construct``, or, under ``strip`` class ``initialization``,
-   handed to the caller (:func:`initialization_member`).
+3. the knowns are the cells the explicit initial conditions set, the supplied
+   values of ODE states, and the declared defaults of ODE states that no
+   equation in solved form determines ("Declared defaults"); an equation in
+   solved form whose target is already set (not by a default) is not
+   explicit in an undetermined unknown. Every other starting value an
+   equation mentions is an unknown, and the system is balanced per variable
+   or refused with ``ic_system_unbalanced``;
+4. the triangular part (each equation in solved form whose reads are all
+   determined) becomes ordered :attr:`InitPlan.steps` the builder evaluates
+   by substitution; the rest is refused with ``unsupported_construct``, or,
+   under ``strip`` class ``initialization``, handed to the caller
+   (:func:`initialization_member`) with the values substitution gave as its
+   knowns.
 
 Python has no nonlinear initialization solve, so ``ic_system_unsolved`` is never
 raised here.
@@ -34,10 +38,18 @@ from typing import Any
 
 import numpy as np
 
+from .classification import (
+    cells_set,
+    equation_shape,
+    ic_as_values,
+    ic_target,
+    solved_form,
+    start_value_reads,
+)
 from .error_handling import IC_SYSTEM_UNBALANCED
 from .errors import IcReadsStateError, SimulationError
 from .esm_types import Expr, ExprNode
-from .expr_walk import map_children, walk
+from .expr_walk import map_children
 
 __all__ = [
     "IcSystemUnbalancedError",
@@ -45,9 +57,8 @@ __all__ = [
     "expand_start_values",
     "initialization_member",
     "plan_initialization",
+    "outside_ic",
     "refuse_trajectory_reads",
-    "start_value_reads",
-    "starting_values_as_states",
 ]
 
 
@@ -64,39 +75,13 @@ class IcSystemUnbalancedError(SimulationError):
 # ---------------------------------------------------------------------------
 
 
-def _is_ic(e: Any) -> bool:
-    return isinstance(e, ExprNode) and e.op == "ic" and len(e.args) == 1
-
-
-def start_value_reads(expr: Expr) -> set[str]:
-    """The unknowns whose starting value ``expr`` reads: the ``w`` of every
-    ``ic(w)``."""
-    out: set[str] = set()
-    for n in walk(expr):
-        if _is_ic(n) and isinstance(n.args[0], str):
-            out.add(n.args[0])
-    return out
-
-
-def _outside_ic(expr: Expr) -> Expr:
+def outside_ic(expr: Expr) -> Expr:
     """``expr`` with every ``ic(·)`` subtree replaced by ``0``: what remains is
-    what it reads of the trajectory."""
-    if _is_ic(expr):
+    what it reads of the trajectory, and the names it reads outside ``ic``."""
+    if isinstance(expr, ExprNode) and expr.op == "ic":
         return 0.0
     if isinstance(expr, ExprNode):
-        return map_children(expr, _outside_ic)
-    return expr
-
-
-def starting_values_as_states(expr: Expr) -> Expr:
-    """``expr`` with every ``ic(w)`` read as the bare ``w``. The builders
-    evaluate a step against a scope that binds each state's name to its
-    starting value, which is what ``ic(w)`` denotes there; a bare state read
-    outside ``ic`` was refused before (:func:`refuse_trajectory_reads`)."""
-    if _is_ic(expr) and isinstance(expr.args[0], str):
-        return expr.args[0]
-    if isinstance(expr, ExprNode):
-        return map_children(expr, starting_values_as_states)
+        return map_children(expr, outside_ic)
     return expr
 
 
@@ -126,14 +111,14 @@ def expand_start_values(
             if e in unknowns:
                 return ExprNode(op="ic", args=[e])
             return e
-        if _is_ic(e):
+        if isinstance(e, ExprNode) and e.op == "ic":
             return expand(e, seen)
         if isinstance(e, ExprNode):
             return map_children(e, lambda c: at_start(c, seen))
         return e
 
     def expand(e: Expr, seen: frozenset[str] = frozenset()) -> Expr:
-        if _is_ic(e):
+        if isinstance(e, ExprNode) and e.op == "ic" and len(e.args) == 1:
             a = e.args[0]
             if isinstance(a, str):
                 if a in observed_defs:
@@ -172,7 +157,7 @@ def refuse_trajectory_reads(
     for eq in equations:
         label = _equation_label(eq)
         for side in (eq.lhs, eq.rhs):
-            hit = _ic_state_read(_outside_ic(side), definitions, states, bound)
+            hit = _ic_state_read(outside_ic(side), definitions, states, bound)
             if hit is not None:
                 chain, state = hit
                 raise IcReadsStateError(label, state, chain)
@@ -192,8 +177,9 @@ def _equation_label(eq: Any) -> str:
     """The name an ``ic_reads_state`` diagnostic gives an equation: its
     ``ic`` target when it has one, else the equation."""
     for side in (eq.lhs, eq.rhs):
-        if _is_ic(side) and isinstance(side.args[0], str):
-            return side.args[0]
+        target = ic_target(side)
+        if target is not None:
+            return target
     reads = sorted(start_value_reads(eq.lhs) | start_value_reads(eq.rhs))
     return reads[0] if reads else _describe(eq)
 
@@ -206,8 +192,8 @@ def _equation_label(eq: Any) -> str:
 @dataclass
 class _SysEq:
     eq: Any
-    target: str | None  # the unknown a solved equation is explicit in
-    rhs: Expr  # the right-hand side with item-8 expansions
+    target: str | None  # the unknown an equation in solved form determines
+    rhs: Expr  # its value side (solved), with item-8 expansions
     cells: list[int]  # the target's cells it sets (solved), as state positions
     reads: set[str]  # the unknowns whose starting values it reads
     size: int  # scalar equations
@@ -217,57 +203,34 @@ class _SysEq:
 class InitPlan:
     """What the builder does with the initialization system."""
 
-    #: The triangular part, in dependency order: ``(target, rhs, cells)``;
-    #: ``rhs`` reads starting values as ``ic(w)``, ``cells`` the state positions
-    #: of ``target`` it sets.
+    #: The triangular part, in dependency order: ``(target, value, cells)``;
+    #: ``value`` reads starting values as ``ic(w)``, ``cells`` are the state
+    #: positions of ``target`` it sets, in the row-major order of its value.
     steps: list[tuple[str, Expr, list[int]]] = field(default_factory=list)
     #: The truly implicit part handed to the caller (``strip`` class
     #: ``initialization``), in flattened order.
     removed: list[Any] = field(default_factory=list)
-    #: The state positions of the removed part's unknowns.
+    #: The state positions of the removed part's unknowns: the starting values
+    #: its equations leave undetermined.
     removed_cells: list[int] = field(default_factory=list)
 
 
-def _faq_cells(target: str, rhs: Expr, shape: tuple[int, ...], start: int, index_sets) -> list[int]:
-    from .simulation_array import _faq_output_ranges, _linear_pos
-
-    if not shape:
-        return [start]
-    if isinstance(rhs, ExprNode) and rhs.op == "faq" and rhs.output_idx:
-        ranges = _faq_output_ranges(rhs, index_sets or {})
-        if len(ranges) != len(shape):
-            raise SimulationError(
-                f"ic({target}): {len(ranges)} output indices for a {len(shape)}-D state"
-            )
-        extents = tuple(max(hi - lo + 1, 0) for lo, hi in ranges)
-        return [
-            start + _linear_pos(shape, [lo + int(k) for k, (lo, _) in zip(multi, ranges)])
-            for multi in np.ndindex(*extents)
-        ]
-    return list(range(start, start + int(np.prod(shape))))
-
-
-def _equation_size(
-    eq: Any, var_axes: dict[str, tuple[str, ...]], sizes: dict[str, int], index_sets
-) -> int:
-    """Scalar equations in an implicit equation: its ``faq`` output box, else
-    the union of its named array operands' index sets (esm-spec §4.3.4), else
-    one."""
-    from .simulation_array import _faq_output_ranges
-
-    for side in (eq.lhs, eq.rhs):
-        if isinstance(side, ExprNode) and side.op == "faq" and side.output_idx:
-            return int(
-                np.prod([max(hi - lo + 1, 0) for lo, hi in _faq_output_ranges(side, index_sets)])
-            )
-    axes: list[str] = []
-    for side in (eq.lhs, eq.rhs):
-        for n in walk(side):
-            if isinstance(n, str):
-                for a in var_axes.get(n, ()):
-                    if a not in axes:
-                        axes.append(a)
-    return int(np.prod([sizes.get(a, 1) for a in axes])) if axes else 1
+def target_cells(
+    target: str,
+    value: Expr,
+    shapes: dict[str, tuple[int, ...]],
+    state_layout: dict[str, slice],
+    index_sets: Any,
+) -> list[int]:
+    """The state positions an initial condition ``ic(target) ~ value`` sets, in
+    the row-major order of its value: a ``faq`` with output indices sets its
+    box, anything else every cell (esm-spec §11.4.3)."""
+    start = state_layout[target].start
+    try:
+        offsets = cells_set(value, tuple(shapes.get(target, ())), index_sets)
+    except ValueError as err:
+        raise SimulationError(f"ic({target}): {err}") from err
+    return [start + k for k in offsets]
 
 
 def _max_flow(
@@ -341,27 +304,28 @@ def plan_initialization(
     *,
     shapes: dict[str, tuple[int, ...]],
     state_layout: dict[str, slice],
-    known: set[int],
+    explicit: set[int],
     supplied: dict[str, list[int]],
+    defaulted: set[int],
+    caller: set[str],
     observed_defs: dict[str, Expr],
     var_axes: dict[str, tuple[str, ...]],
     strip: bool,
 ) -> InitPlan:
     """Plan the initialization system of ``flat`` (esm-spec §11.4.3).
 
-    ``known`` holds the state positions the explicit initial conditions set
-    and the supplied values of ODE states set (precedence item 1); ``supplied``
-    names, per ODE state, the positions a supplied value set (for the
-    diagnostic). ``observed_defs`` maps each observed to its definition.
-    Raises ``ic_system_unbalanced`` or, without ``strip``, ``unsupported_construct``
+    ``explicit`` holds the state positions the explicit initial conditions
+    set; ``supplied`` names, per ODE state, the positions a supplied value set
+    (precedence item 1); ``defaulted`` the positions of ODE states that hold a
+    declared default; ``caller`` the unknowns whose starting value is the
+    caller's to find (the algebraic unknowns ``strip`` class ``algebraic``
+    took); ``observed_defs`` maps each observed to its definition. Raises
+    ``ic_system_unbalanced`` or, without ``strip``, ``unsupported_construct``
     for a truly implicit part."""
-    from .index_alignment import axis_sizes
-
     system = list(getattr(flat, "initialization_equations", None) or [])
     if not system:
         return InitPlan()
     index_sets = flat.index_sets
-    sizes = axis_sizes(index_sets or {})
     unknown_names = set(state_layout) | set(observed_defs)
     tendencies: dict[str, Expr] = {}
     for eq in flat.equations:
@@ -377,30 +341,32 @@ def plan_initialization(
     def expand(e: Expr) -> Expr:
         return expand_start_values(e, observed_defs, tendencies, unknown_names)
 
+    def cells_of(v: str) -> set[int]:
+        sl = state_layout[v]
+        return set(range(sl.start, sl.stop))
+
+    def can_target(u: str) -> bool:
+        return u in state_layout and u not in observed_defs
+
+    # Set before the system: by an explicit initial condition, or by a
+    # supplied value of an ODE state. A default is not among these.
+    hard_known = set(explicit).union(*supplied.values())
+
     eqs: list[_SysEq] = []
     for eq in system:
-        # Solved form (esm-spec §11.4.3): `ic(u) ~ e`, or `e ~ ic(u)`, with
-        # `e` reading no `ic(u)`; the left-hand spelling is tried first.
-        target = None
-        rhs = expand(eq.rhs)
-        lhs = eq.lhs
-        for side, other in ((eq.lhs, eq.rhs), (eq.rhs, eq.lhs)):
-            if not (_is_ic(side) and isinstance(side.args[0], str)):
+        lhs, rhs = expand(eq.lhs), expand(eq.rhs)
+        found = solved_form(lhs, rhs, can_target)
+        if found is not None:
+            target, value = found
+            cells = target_cells(target, value, shapes, state_layout, index_sets)
+            # Its target already set: not explicit in an undetermined unknown
+            # (esm-spec §11.4.3), so an equation of the implicit part.
+            if not set(cells) & hard_known:
+                eqs.append(_SysEq(eq, target, value, cells, start_value_reads(value), len(cells)))
                 continue
-            body = expand(other)
-            if side.args[0] in state_layout and side.args[0] not in start_value_reads(body):
-                target, rhs, lhs = side.args[0], body, side
-                break
-        if target is not None:
-            sl = state_layout[target]
-            cells = _faq_cells(target, rhs, tuple(shapes.get(target, ())), sl.start, index_sets)
-            reads = start_value_reads(rhs)
-            eqs.append(_SysEq(eq, target, rhs, cells, reads, len(cells)))
-        else:
-            reads = start_value_reads(expand(eq.lhs)) | start_value_reads(rhs)
-            eqs.append(
-                _SysEq(eq, None, rhs, [], reads, _equation_size(eq, var_axes, sizes, index_sets))
-            )
+        size = math.prod(equation_shape(lhs, rhs, lambda n: var_axes.get(n, ()), index_sets))
+        reads = start_value_reads(lhs) | start_value_reads(rhs)
+        eqs.append(_SysEq(eq, None, rhs, [], reads, size))
 
     # A starting value an equation reads must be an unknown's.
     for e in eqs:
@@ -411,27 +377,25 @@ def plan_initialization(
                     "flattened system that has a starting value (esm-spec §11.4.2)"
                 )
 
-    # The unknowns of the system, per cell (esm-spec §11.4.3): what a solved
-    # equation sets, and every starting value an equation reads, that neither
-    # an explicit initial condition nor a supplied ODE-state value gives.
-    def free(v: str) -> set[int]:
-        sl = state_layout[v]
-        return set(range(sl.start, sl.stop)) - known
+    # The knowns (esm-spec §11.4.3): what was set before the system, the
+    # default of an ODE state no equation in solved form determines
+    # ("Declared defaults"), and a starting value that is the caller's.
+    solved_cells = {c for e in eqs for c in e.cells}
+    caller_cells = set().union(*(cells_of(v) for v in caller if v in state_layout))
+    caller_cells -= hard_known | solved_cells
+    known = hard_known | (defaulted - solved_cells) | caller_cells
 
     unknown_cells: dict[str, set[int]] = {}
     edges: list[set[str]] = []
     for e in eqs:
         mine: set[str] = set()
-        if e.target is not None:
-            c = set(e.cells) - known
-            if c:
-                unknown_cells.setdefault(e.target, set()).update(c)
-                mine.add(e.target)
-        for w in e.reads:
-            c = free(w)
-            if c:
-                unknown_cells.setdefault(w, set()).update(c)
-                mine.add(w)
+        for v, c in ([(e.target, set(e.cells))] if e.target else []) + [
+            (w, cells_of(w)) for w in e.reads
+        ]:
+            free = c - known
+            if free:
+                unknown_cells.setdefault(v, set()).update(free)
+                mine.add(v)
         edges.append(mine)
     caps = {v: len(c) for v, c in unknown_cells.items()}
     n_eq = sum(e.size for e in eqs)
@@ -461,49 +425,33 @@ def plan_initialization(
                 f"{by_supply} is a known of the system, not an unknown."
             )
         msg += (
-            " A `default` is never an equation of the system (esm-spec §11.4.3); give each "
-            "unknown exactly one initialization equation."
+            " The declared default of an ODE state is a known of the system unless an "
+            "equation in solved form determines it (esm-spec §11.4.3); give each unknown "
+            "exactly one initialization equation."
         )
         raise IcSystemUnbalancedError(msg)
 
-    # The triangular part, in dependency order; everything an implicit
-    # equation or a cycle determines, and everything downstream of it, is the
-    # implicit part.
-    solved = [i for i, e in enumerate(eqs) if e.target is not None]
-    bad = {i for i, e in enumerate(eqs) if e.target is None}
-    bad_vars: set[str] = set()
-    for i in bad:
-        bad_vars |= edges[i]
-    target_eqs: dict[str, list[int]] = {}
-    for i in solved:
-        target_eqs.setdefault(eqs[i].target, []).append(i)
+    # The triangular part, by substitution in dependency order: an equation
+    # in solved form whose reads are all determined. A caller's value never
+    # is, so an equation that reads one stays in the implicit part.
+    determined = known - caller_cells
     done: set[int] = set()
     order: list[int] = []
     changed = True
     while changed:
         changed = False
-        for i in solved:
-            if i in done or i in bad:
+        for i, e in enumerate(eqs):
+            if i in done or e.target is None:
                 continue
-            e = eqs[i]
-            if e.reads & bad_vars:
-                bad.add(i)
-                bad_vars.add(e.target)
-                changed = True
-                continue
-            deps = [j for w in e.reads for j in target_eqs.get(w, ()) if j != i]
-            if all(j in done for j in deps):
+            if all(cells_of(w) <= determined for w in e.reads):
                 done.add(i)
                 order.append(i)
+                determined |= set(e.cells)
                 changed = True
-    for i in solved:
-        if i not in done and i not in bad:
-            bad.add(i)
-            bad_vars.add(eqs[i].target)
     plan = InitPlan(steps=[(eqs[i].target, eqs[i].rhs, eqs[i].cells) for i in order])
-    if not bad:
+    if len(done) == len(eqs):
         return plan
-    removed = [eqs[i].eq for i in sorted(bad)]
+    removed = [e.eq for i, e in enumerate(eqs) if i not in done]
     if not strip:
         shown = "; ".join(_describe(eq) for eq in removed)
         raise _unsupported(
@@ -512,8 +460,9 @@ def plan_initialization(
             "that are not explicit in their unknown; this binding has no nonlinear "
             "initialization solve). Solve it yourself under `strip=['initialization']`",
         )
+    # The implicit part determines only what substitution left undetermined.
     plan.removed = removed
-    plan.removed_cells = sorted(c for v in bad_vars for c in unknown_cells.get(v, ()))
+    plan.removed_cells = sorted(set().union(*unknown_cells.values()) - determined)
     return plan
 
 
@@ -560,8 +509,10 @@ def initialization_member(
     state_layout: dict[str, slice],
     y0: np.ndarray,
 ) -> dict[str, list]:
-    """The stripped object's ``initialization`` member (API_SPEC §5.8, the shape
-    PR #820 drafted): ``unknowns`` as element names in state-layout order,
+    """The stripped object's ``initialization`` member (API_SPEC §5.8):
+    ``unknowns`` as element names in the order of the state layout (0-d by
+    sorted name, then arrays by sorted name, each column-major, the order
+    ``z`` follows),
     ``x0`` their starting points as the Problem's initial state holds them
     (:func:`starting_points`), and one residual ``lhs - rhs`` per removed
     equation, ``ic`` kept, in flattened order."""
@@ -598,26 +549,9 @@ def _residual_shape(eq: Any, flat: Any) -> list[int]:
 
     expr = {"op": "-", "args": [_serialize_expression(eq.lhs), _serialize_expression(eq.rhs)]}
     try:
-        return _set_sizes(_expr_sets(_strip_ic(expr), flat), flat)
+        return _set_sizes(_expr_sets(ic_as_values(expr), flat), flat)
     except ValueError:
         return []
-
-
-def _strip_ic(e: Any) -> Any:
-    """A serialized expression with ``ic(w)`` read as ``w``, for its index sets."""
-    if isinstance(e, dict):
-        if e.get("op") == "ic" and isinstance(e.get("args"), list) and e["args"]:
-            a = e["args"][0]
-            return a if isinstance(a, str) else 0
-        out = dict(e)
-        for k in ("args", "values"):
-            if isinstance(out.get(k), list):
-                out[k] = [_strip_ic(x) for x in out[k]]
-        for k in ("expr", "filter", "lower", "upper", "key"):
-            if k in out:
-                out[k] = _strip_ic(out[k])
-        return out
-    return e
 
 
 def _finite_or_none(x: float) -> float | None:
@@ -634,8 +568,8 @@ def starting_points(
     supplied_algebraic: set[int],
     evaluate: Callable[[Expr], Any],
 ) -> None:
-    """Write each removed unknown's starting point into ``y0`` (PR #820's draft
-    order): the supplied value of an algebraic unknown (already in ``y0`` at a
+    """Write each removed unknown's starting point into ``y0`` (API_SPEC §5.8
+    ``x0``): the supplied value of an algebraic unknown (already in ``y0`` at a
     position of ``supplied_algebraic``), else its ``guesses`` entry, else its
     declared default (already in ``y0``), else ``0``."""
     guesses = getattr(flat, "guesses", None) or {}

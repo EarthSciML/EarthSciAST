@@ -1248,10 +1248,12 @@ def _ic_start_samples(
     those samples already are the start's. A provider no ``ic`` reads is not
     sampled again, and neither is one in ``skip`` (the discrete and gated ones,
     which the construction sample does not hold)."""
-    if not flat.field_ics or start == sample_time or not providers:
+    if start == sample_time or not providers:
         return None
     once = {str(k): v for k, v in providers.items() if str(k) not in skip}
     read = ic_start_reads(flat)
+    if not read:
+        return None
     return {
         k: np.asarray(_provider_sample_field(prov, start), dtype=float)
         for k, prov in _canonicalize_provider_keys(flat, once).items()

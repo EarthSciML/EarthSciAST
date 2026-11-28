@@ -546,6 +546,11 @@ STRIPPED_PROBLEM_NOT_SOLVABLE = "stripped_problem_not_solvable"
 #: supplied value that made an unknown a known.
 IC_SYSTEM_UNBALANCED = "ic_system_unbalanced"
 
+#: Two systems define non-additive equations for one dependent variable, or
+#: two explicit initial conditions set the same cell of one unknown (esm-spec
+#: §11.4.3; ``ConflictingDerivativeError``, esm-libraries-spec §4.7.5).
+CONFLICTING_DERIVATIVE = "conflicting_derivative"
+
 #: An ``ic`` whose argument is neither a variable reference (bare or scoped)
 #: nor ``D`` of one — ``ic(index(u, i))``, ``ic(a + b)`` — refused at load
 #: (esm-spec §4.2 ``ic``). An element's starting value is ``index(ic(u), i)``.
