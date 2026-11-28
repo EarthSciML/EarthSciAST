@@ -66,7 +66,7 @@ bundled schema's `\$id`, which the `SCHEMA_VERSION tracks the bundled schema`
 test enforces. NOT the version of this PACKAGE — that is
 [`LIBRARY_VERSION`](@ref).
 """
-const SCHEMA_VERSION = "2.4.0"
+const SCHEMA_VERSION = "2.5.0"
 
 """
     LIBRARY_VERSION

@@ -230,7 +230,7 @@ function _validate_ic_overdetermination(
     sys = Equation[eq for eq in model.equations if _is_initialization_equation(eq) && !_is_explicit_ic(eq)]
     isempty(sys) && return errors
     explicit = Set{String}(
-        _ic_lhs_variable(eq.lhs) for eq in model.equations if _is_explicit_ic(eq)
+        _ic_lhs_variable(_oriented_ic(eq).lhs) for eq in model.equations if _is_explicit_ic(eq)
     )
     obs = keys(observed_definitions(model))
     names = String[]

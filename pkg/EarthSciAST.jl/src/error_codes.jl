@@ -117,6 +117,9 @@ const ERROR_CODES = (
     # equations than unknowns, or fewer, or no assignment of one equation to
     # each unknown; and a solve of it that did not converge.
     IC_SYSTEM_UNBALANCED = "ic_system_unbalanced",
+    # esm-spec §4.2 (`ic`, esm 2.5.0): the argument of `ic` is not a variable
+    # reference or `D` of one (`ic(index(u, i))`, `ic(a + b)`). Raised at load.
+    IC_INVALID_ARGUMENT = "ic_invalid_argument",
     IC_SYSTEM_UNSOLVED = "ic_system_unsolved",
     EVENT_VAR_UNDECLARED = "event_var_undeclared",
     INVALID_BROADCAST_FN = "invalid_broadcast_fn",

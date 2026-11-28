@@ -185,7 +185,7 @@ end
 
 # esm-spec §4.2 (`ic`, esm 2.5.0): the argument of `ic` is a variable reference,
 # bare or scoped, or `D` of one. `ic(index(u, i))` and `ic(a + b)` are malformed
-# and refused at load. The spec names no diagnostic code for it.
+# and refused at load with `ic_invalid_argument`.
 function _check_ic_arguments(doc)
     _visit_json(doc) do _, n
         _is_object(n) || return true
@@ -201,9 +201,10 @@ function _check_ic_arguments(doc)
         )
         ok || throw(
             ParseError(
-                "[ic] `ic` with argument $(first(string(_raw_get(n, "args")), 120)): the argument of `ic` must be one variable reference or `D` of one " *
+                "[ic_invalid_argument] `ic` with argument $(first(string(_raw_get(n, "args")), 120)): the argument of `ic` must be one variable reference or `D` of one " *
                     "(esm-spec §4.2); an element of an array's starting value is written " *
-                    "`index(ic(u), i)`, not `ic(index(u, i))`."
+                    "`index(ic(u), i)`, not `ic(index(u, i))`.";
+                code = ERROR_CODES.IC_INVALID_ARGUMENT
             )
         )
         return true

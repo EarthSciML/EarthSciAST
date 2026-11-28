@@ -65,8 +65,10 @@ the loader reads it (§11.4.4). The same object when there is nothing to move.
 function _split_initialization_system(model::Model)
     migrated, guesses = _migrate_typed_initialization(model)
     any(
-        eq -> _is_initialization_equation(eq) &&
-            (!_is_explicit_ic(eq) || _ic_needs_alignment(eq, model) !== nothing),
+        eq -> _is_initialization_equation(eq) && (
+            !_is_explicit_ic(eq) || _ic_lhs_variable(eq.lhs) === nothing ||
+                _ic_needs_alignment(eq, model) !== nothing
+        ),
         model.equations
     ) || !isempty(model.initialization_equations) || return model
     kept = Equation[]
@@ -75,6 +77,8 @@ function _split_initialization_system(model::Model)
         if _is_initialization_equation(eq) && !_is_explicit_ic(eq)
             push!(sys, eq)
         else
+            # An explicit `e ~ ic(u)` is filed as `ic(u) ~ e`.
+            eq = _is_explicit_ic(eq) ? _oriented_ic(eq) : eq
             lifted = _is_explicit_ic(eq) ? _ic_needs_alignment(eq, model) : nothing
             push!(kept, lifted === nothing ? eq : lifted)
         end
@@ -240,8 +244,11 @@ function _ic_system_structure(model::Model, sys::Vector{Equation})
     eqs = _IcSysEq[]
     _refuse_ic_trajectory_reads(sys, states, obs)
     for eq in sys
-        lhs = _ic_expand(eq.lhs, obs, tend, isunk)
-        rhs = _ic_expand(eq.rhs, obs, tend, isunk)
+        # `e ~ ic(u)` is classified as `ic(u) ~ e`; the authored equation is
+        # what a diagnostic or a stripped residual shows.
+        o = _oriented_ic(eq)
+        lhs = _ic_expand(o.lhs, obs, tend, isunk)
+        rhs = _ic_expand(o.rhs, obs, tend, isunk)
         t = _ic_lhs_variable(lhs)
         rnames = _ic_names(rhs)
         mentions = unique!(vcat(_ic_names(lhs), rnames))
