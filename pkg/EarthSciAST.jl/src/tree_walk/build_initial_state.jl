@@ -657,8 +657,10 @@ function _seed_faq_init_u0!(
     for eq in init_equations
         eq.lhs isa VarExpr || continue
         var_name = (eq.lhs::VarExpr).name
-        if !(eq.rhs isa OpExpr && _is_faq_op((eq.rhs::OpExpr).op) &&
-                !isempty(_output_idx_strings(eq.rhs::OpExpr)))
+        if !(
+                eq.rhs isa OpExpr && _is_faq_op((eq.rhs::OpExpr).op) &&
+                    !isempty(_output_idx_strings(eq.rhs::OpExpr))
+            )
             # A scalar target (a seed of the initialization system,
             # build_ic_system.jl): its right-hand side compiled once and
             # evaluated once, at the start of the run.
