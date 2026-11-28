@@ -98,17 +98,24 @@ end
 function _ic_needs_alignment(eq::Equation, model::Model)
     t = _ic_lhs_variable(eq.lhs)
     t === nothing && return nothing
-    v = get(model.variables, t, nothing)
+    rhs = _ic_aligned_rhs(t, eq.rhs, model.variables)
+    return rhs === nothing ? nothing : Equation(eq.lhs, rhs; _comment = eq._comment)
+end
+
+# The right-hand side of `ic(t) ~ rhs` written as the `faq` over `t`'s shape,
+# aligned by index-set name, or `nothing` when it needs no alignment
+# (`_ic_needs_alignment`). `variables` maps each name to its declaration.
+function _ic_aligned_rhs(t::String, rhs::ASTExpr, variables::AbstractDict)
+    v = get(variables, t, nothing)
     (v === nothing || !_is_array_shape(v.shape)) && return nothing
-    rhs = eq.rhs
     rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) && return nothing
     shape = String[String(s) for s in v.shape]
     var_shapes = Dict{String, Vector{String}}(
-        n => String[String(s) for s in w.shape] for (n, w) in model.variables if w.shape !== nothing
+        n => String[String(s) for s in w.shape] for (n, w) in variables if w.shape !== nothing
     )
-    arrayvars = Set{String}(n for (n, w) in model.variables if _is_array_shape(w.shape))
+    arrayvars = Set{String}(n for (n, w) in variables if _is_array_shape(w.shape))
     any(n -> n in arrayvars && var_shapes[n] != shape, _referenced_var_names(rhs)) || return nothing
-    return Equation(eq.lhs, _lift_to_faq(rhs, shape, arrayvars, var_shapes); _comment = eq._comment)
+    return _lift_to_faq(rhs, shape, arrayvars, var_shapes)
 end
 
 # esm-spec §11.4.2: an equation that mentions `ic` holds at t0 only, so one

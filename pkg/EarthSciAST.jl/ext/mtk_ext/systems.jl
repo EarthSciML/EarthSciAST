@@ -27,6 +27,7 @@ function _split_ic_equations(flat::FlattenedSystem, L::_Lowering)
     # `field_ics` are classified OUT of `flat.equations` (esm-libraries-spec
     # §4.7.5 step 4), so they have to be read from their own field or the states
     # they seed silently fall back to their bare `default`.
+    allvars = merge(flat.state_variables, flat.observed_variables, flat.parameters)
     for (vn, rhs) in flat.field_ics
         haskey(L.vars, vn) || throw(
             SimulateError(
@@ -34,7 +35,10 @@ function _split_ic_equations(flat::FlattenedSystem, L::_Lowering)
                 ERROR_CODES.UNDEFINED_VARIABLE
             )
         )
-        push!(ic_values, (vn, _esm_to_symbolic(rhs, L)))
+        # A lower-rank right-hand side aligns by index-set name and repeats
+        # along the axes it does not carry (esm-spec §11.4.3 "Arrays").
+        aligned = EarthSciAST._ic_aligned_rhs(vn, rhs, allvars)
+        push!(ic_values, (vn, _esm_to_symbolic(aligned === nothing ? rhs : aligned, L)))
     end
     for eq in flat.equations
         if eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "ic"
