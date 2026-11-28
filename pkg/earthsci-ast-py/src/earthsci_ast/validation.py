@@ -733,13 +733,15 @@ def _validate_ic_system_overdetermination(
             if not is_initial_condition(eq):
                 continue
             lhs, rhs = eq.lhs, eq.rhs
-            if (
-                getattr(lhs, "op", None) == "ic"
-                and lhs.args
-                and isinstance(lhs.args[0], str)
-                and not mentions_ic(rhs)
-            ):
-                explicit.add(lhs.args[0])
+            for side, other in ((lhs, rhs), (rhs, lhs)):
+                if (
+                    getattr(side, "op", None) == "ic"
+                    and side.args
+                    and isinstance(side.args[0], str)
+                    and not mentions_ic(other)
+                ):
+                    explicit.add(side.args[0])
+                    break
             else:
                 others.append(eq)
         if others:

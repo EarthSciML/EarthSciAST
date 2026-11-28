@@ -546,6 +546,11 @@ STRIPPED_PROBLEM_NOT_SOLVABLE = "stripped_problem_not_solvable"
 #: supplied value that made an unknown a known.
 IC_SYSTEM_UNBALANCED = "ic_system_unbalanced"
 
+#: An ``ic`` whose argument is neither a variable reference (bare or scoped)
+#: nor ``D`` of one — ``ic(index(u, i))``, ``ic(a + b)`` — refused at load
+#: (esm-spec §4.2 ``ic``). An element's starting value is ``index(ic(u), i)``.
+IC_INVALID_ARGUMENT = "ic_invalid_argument"
+
 #: The solve of the initialization system did not converge (esm-spec §11.4.3).
 #: This binding has no nonlinear initialization solve (it refuses a truly
 #: implicit system with ``unsupported_construct``); registered for the uniform

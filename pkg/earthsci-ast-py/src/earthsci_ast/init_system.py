@@ -191,10 +191,10 @@ def _describe(eq: Any) -> str:
 def _equation_label(eq: Any) -> str:
     """The name an ``ic_reads_state`` diagnostic gives an equation: its
     ``ic`` target when it has one, else the equation."""
-    lhs = eq.lhs
-    if _is_ic(lhs) and isinstance(lhs.args[0], str):
-        return lhs.args[0]
-    reads = sorted(start_value_reads(lhs) | start_value_reads(eq.rhs))
+    for side in (eq.lhs, eq.rhs):
+        if _is_ic(side) and isinstance(side.args[0], str):
+            return side.args[0]
+    reads = sorted(start_value_reads(eq.lhs) | start_value_reads(eq.rhs))
     return reads[0] if reads else _describe(eq)
 
 
@@ -379,23 +379,25 @@ def plan_initialization(
 
     eqs: list[_SysEq] = []
     for eq in system:
-        lhs = eq.lhs
-        rhs = expand(eq.rhs)
+        # Solved form (esm-spec §11.4.3): `ic(u) ~ e`, or `e ~ ic(u)`, with
+        # `e` reading no `ic(u)`; the left-hand spelling is tried first.
         target = None
-        if (
-            _is_ic(lhs)
-            and isinstance(lhs.args[0], str)
-            and lhs.args[0] in state_layout
-            and lhs.args[0] not in start_value_reads(rhs)
-        ):
-            target = lhs.args[0]
+        rhs = expand(eq.rhs)
+        lhs = eq.lhs
+        for side, other in ((eq.lhs, eq.rhs), (eq.rhs, eq.lhs)):
+            if not (_is_ic(side) and isinstance(side.args[0], str)):
+                continue
+            body = expand(other)
+            if side.args[0] in state_layout and side.args[0] not in start_value_reads(body):
+                target, rhs, lhs = side.args[0], body, side
+                break
         if target is not None:
             sl = state_layout[target]
             cells = _faq_cells(target, rhs, tuple(shapes.get(target, ())), sl.start, index_sets)
             reads = start_value_reads(rhs)
             eqs.append(_SysEq(eq, target, rhs, cells, reads, len(cells)))
         else:
-            reads = start_value_reads(expand(lhs)) | start_value_reads(rhs)
+            reads = start_value_reads(expand(eq.lhs)) | start_value_reads(rhs)
             eqs.append(
                 _SysEq(eq, None, rhs, [], reads, _equation_size(eq, var_axes, sizes, index_sets))
             )

@@ -3274,16 +3274,12 @@ def _collect_field_ics(flat: FlattenedSystem) -> None:
         if not (_mentions_ic(lhs) or _mentions_ic(eq.rhs)):
             remaining.append(eq)
             continue
-        target = (
-            lhs.args[0]
-            if isinstance(lhs, ExprNode) and lhs.op == "ic" and len(lhs.args) == 1
-            else None
-        )
-        # An EXPLICIT initial condition (esm-spec §11.4.3): `ic(u) ~ e`, `e`
-        # mentioning no `ic`. Every other initialization equation is an
-        # equation of the initialization system.
-        if isinstance(target, str) and not _mentions_ic(eq.rhs):
-            ics.append((target, eq.rhs))
+        # An EXPLICIT initial condition (esm-spec §11.4.3): `ic(u) ~ e`, or
+        # `e ~ ic(u)`, `e` mentioning no `ic`. Every other initialization
+        # equation is an equation of the initialization system.
+        explicit = _explicit_initial_condition(lhs, eq.rhs)
+        if explicit is not None:
+            ics.append(explicit)
         else:
             system.append(eq)
     # One initial condition per state (esm-libraries-spec §4.7.5 step 4
@@ -3305,6 +3301,27 @@ def _collect_field_ics(flat: FlattenedSystem) -> None:
     flat.field_ics = ics
     flat.initialization_equations = system
     flat.equations = remaining
+
+
+def _ic_target(e: Expr) -> str | None:
+    """``u`` when ``e`` is ``ic(u)`` of a variable, else ``None``."""
+    if isinstance(e, ExprNode) and e.op == "ic" and len(e.args) == 1:
+        a = e.args[0]
+        return a if isinstance(a, str) else None
+    return None
+
+
+def _explicit_initial_condition(lhs: Expr, rhs: Expr) -> tuple[str, Expr] | None:
+    """``(u, e)`` for an explicit initial condition ``ic(u) ~ e`` or
+    ``e ~ ic(u)`` whose ``e`` mentions no ``ic`` (esm-spec §11.4.3), else
+    ``None``."""
+    target = _ic_target(lhs)
+    if target is not None and not _mentions_ic(rhs):
+        return target, rhs
+    target = _ic_target(rhs)
+    if target is not None and not _mentions_ic(lhs):
+        return target, lhs
+    return None
 
 
 def _mentions_ic(expr: Expr) -> bool:
