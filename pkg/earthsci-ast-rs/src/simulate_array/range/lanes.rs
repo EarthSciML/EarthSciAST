@@ -2754,9 +2754,8 @@ mod tests {
             .position(|s| s.name.ends_with("F"))
             .expect("a slot for F");
         let fa = prog.default_forcing();
-        let buf = |s: f64| -> Arc<[f64]> {
-            (0..nlon * nlat).map(|i| s + 0.125 * i as f64).collect()
-        };
+        let buf =
+            |s: f64| -> Arc<[f64]> { (0..nlon * nlat).map(|i| s + 0.125 * i as f64).collect() };
         let fb = fa.replace(k, buf(1.0)).expect("replace");
         let p = prog
             .parameter_vector(&std::collections::HashMap::new())
@@ -2771,7 +2770,17 @@ mod tests {
             )
             .expect("lanes");
         assert!(lanes.n_lane_inputs() > 0);
-        let kept = || lanes.inner.shared.state.lock().unwrap().ctx.kept_segments().len();
+        let kept = || {
+            lanes
+                .inner
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .ctx
+                .kept_segments()
+                .len()
+        };
         let u: Vec<f64> = (0..nlon * nlat).map(|i| 0.5 + 0.01 * i as f64).collect();
         // The whole-domain value of lane cell (i, j) at time t with set fs.
         let whole = |t: f64, fs: &ForcingSet| -> Vec<f64> {
@@ -2796,7 +2805,9 @@ mod tests {
                 cells.extend([1 + i as i32, 1 + j as i32]);
                 lu[l] = u[c];
             }
-            let ts: Vec<f64> = (0..cap).map(|l| 0.1 * call as f64 + 0.03 * l as f64).collect();
+            let ts: Vec<f64> = (0..cap)
+                .map(|l| 0.1 * call as f64 + 0.03 * l as f64)
+                .collect();
             if call % 4 < 2 {
                 lanes
                     .eval_times_into(&lu, &la, &p, &ts, fs, &cells, cap, &mut ld, &mut ws)
@@ -2806,7 +2817,9 @@ mod tests {
                     .gather_lane_inputs(&mut inputs, &p, ts[0], fs, &cells, cap)
                     .expect("gather");
                 lanes
-                    .eval_gathered_times_into(&lu, &la, &inputs, &p, &ts, &cells, cap, &mut ld, &mut ws)
+                    .eval_gathered_times_into(
+                        &lu, &la, &inputs, &p, &ts, &cells, cap, &mut ld, &mut ws,
+                    )
                     .expect("gathered");
             }
             for l in 0..cap {
@@ -2845,19 +2858,13 @@ mod tests {
         let w = whole(0.0, &fc);
         lu[0] = u[0];
         lanes
-            .eval_gathered_times_into(
-                &lu,
-                &la,
-                &inputs,
-                &p,
-                &[0.0],
-                &[1, 1],
-                1,
-                &mut ld,
-                &mut ws,
-            )
+            .eval_gathered_times_into(&lu, &la, &inputs, &p, &[0.0], &[1, 1], 1, &mut ld, &mut ws)
             .expect("gathered");
-        assert_eq!(ld[0].to_bits(), w[0].to_bits(), "the reused context's value");
+        assert_eq!(
+            ld[0].to_bits(),
+            w[0].to_bits(),
+            "the reused context's value"
+        );
     }
 }
 
