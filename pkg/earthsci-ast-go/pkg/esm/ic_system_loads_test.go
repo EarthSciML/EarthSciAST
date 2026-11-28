@@ -51,6 +51,28 @@ func TestIcSystemLoads(t *testing.T) {
 			if err != nil {
 				t.Fatalf("load: %v", err)
 			}
+			if l.ValidateErrors != nil {
+				var unbalanced []string
+				codes := map[string]bool{}
+				for _, e := range Validate(file).StructuralErrors {
+					codes[e.Code] = true
+					if e.Code == "ic_system_unbalanced" {
+						unbalanced = append(unbalanced, e.Code)
+					}
+				}
+				want := 0
+				for _, c := range l.ValidateErrors {
+					if !codes[c] {
+						t.Errorf("validate does not report %s", c)
+					}
+					if c == "ic_system_unbalanced" {
+						want++
+					}
+				}
+				if len(unbalanced) != want {
+					t.Errorf("validate reports %d ic_system_unbalanced, want %d", len(unbalanced), want)
+				}
+			}
 			if l.Model == "" {
 				return
 			}

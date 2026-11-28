@@ -198,8 +198,8 @@ export function checkIcArguments(doc: unknown): void {
           typeof a.args[0] === 'string')
       if (!ok) {
         throw new InitializationMigrationError(
-          ERROR_CODES.PARSE_ERROR,
-          `${at}: the argument of \`ic\` must be a variable reference or \`D\` of one ` +
+          ERROR_CODES.IC_INVALID_ARGUMENT,
+          `${ERROR_CODES.IC_INVALID_ARGUMENT}: ${at}: the argument of \`ic\` must be a variable reference or \`D\` of one ` +
             '(esm-spec §4.2); an element of an array unknown is written `index(ic(u), i)`, ' +
             'not `ic(index(u, i))`.',
         )

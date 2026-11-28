@@ -931,6 +931,9 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	if !isCoupled {
 		s.validateEquationUnknownBalance(modelName, model, basePath)
 	}
+	// esm 2.5.0 (esm-spec §11.4.3): document-level over-determination of the
+	// initialization system.
+	s.validateInitializationOverdetermination(model, basePath)
 
 	// The §6.4 operator placeholder. In an operator-composed / coupled model
 	// `_var` stands for each matching state variable of the system this one is
